@@ -19,6 +19,21 @@ class GraphTests(unittest.TestCase):
         binding={'proposal':'p','action':'a','head':'h','scope':'s','result_ref':'r','kind':'draft'}
         with self.assertRaises(GraphError): self.db.finish('e','open_draft',snapshot,'passed','v',self.tokens['e'],pr_reconcile=binding)
         self.assertIsNone(self.db.get('e','open_draft'))
+    def test_pr_reconciliation_uses_graph_clock_for_action_timestamp(self):
+        from runner.actions import ActionLedger
+        ledger=ActionLedger(self.tmp.name+'/db')
+        try:
+            self.db.clock=lambda:1234
+            self.db.db.execute('UPDATE graph_claims SET expires=2000 WHERE run=?',('e',))
+            for stage in ('intake','plan','implement','test','qa'): self.put('e',stage)
+            self.db.db.execute('CREATE TABLE pr_bridge_operations(proposal TEXT PRIMARY KEY,run TEXT,kind TEXT,state TEXT,result TEXT)')
+            self.db.db.execute("INSERT INTO pr_bridge_operations VALUES('p','e','draft','uncertain',NULL)")
+            ledger.db.execute("INSERT INTO external_actions VALUES('e','a','h','actor','uncertain',0)")
+            ledger.db.execute("INSERT INTO action_scopes VALUES('s','e','a','h')")
+            binding={'proposal':'p','action':'a','head':'h','scope':'s','result_ref':'r','kind':'draft'}
+            self.db.finish('e','open_draft',self.db.prepare('e','open_draft',self.tokens['e']),'passed','v',self.tokens['e'],pr_reconcile=binding)
+            self.assertEqual(ledger.db.execute("SELECT updated FROM external_actions WHERE run='e'").fetchone(),(1234,))
+        finally: ledger.db.close()
     def test_parallel_fanout_assembly_and_scoped_invalidation(self):
         for stage in ('intake','brief','canonical_draft','canonical_review','freeze'): self.put('m',stage)
         for channel in ('linkedin','x','facebook','instagram','reddit'):

@@ -242,7 +242,7 @@ class GraphStore:
                 item=pr_reconcile
                 scoped=self.db.execute('SELECT run,action,version FROM action_scopes WHERE scope=?',(item['scope'],)).fetchone()
                 if scoped!=(run,item['action'],item['head']): raise GraphError('PR action scope changed')
-                if self.db.execute("UPDATE external_actions SET status='desired_state_observed',updated=? WHERE run=? AND action=? AND version=? AND status='uncertain'",(time.time(),run,item['action'],item['head'])).rowcount!=1: raise GraphError('PR action unavailable')
+                if self.db.execute("UPDATE external_actions SET status='desired_state_observed',updated=? WHERE run=? AND action=? AND version=? AND status='uncertain'",(self.clock(),run,item['action'],item['head'])).rowcount!=1: raise GraphError('PR action unavailable')
                 if self.db.execute("UPDATE pr_bridge_operations SET state='desired_state_observed',result=? WHERE proposal=? AND run=? AND kind=? AND state='uncertain'",(item['result_ref'],item['proposal'],run,item['kind'])).rowcount!=1: raise GraphError('PR proposal unavailable')
                 if item['kind']=='ready': self.db.execute('INSERT OR IGNORE INTO action_followups(run,action,version,kind,target) VALUES(?,?,?,?,?)',(run,item['action'],item['head'],'post_ready_review',item['scope']))
                 self.db.execute('DELETE FROM action_scopes WHERE scope IN (?,?)',(item['scope'],'run:'+run))
