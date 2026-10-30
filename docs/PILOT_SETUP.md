@@ -50,6 +50,11 @@ A host review must establish how the launcher receives that token without
 exposing it to untrusted job processes; shell environment filtering alone is not
 proof. No legacy personal Codex home should be copied.
 
+An interrupted session backup stays fenced. `SessionStore.recover_backup`
+requires trusted checks that the exact backup operation is quiescent and fenced
+and that the home is safe, then rechecks its private files before making it idle.
+No production verifier or control endpoint for that recovery is configured.
+
 Marketing also needs an explicitly configured trusted source-tool authority
 that independently authenticates exact reviewer-session tool receipts against
 the source register and the current draft. The repository currently supplies

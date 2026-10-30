@@ -9,6 +9,16 @@ class GraphTests(unittest.TestCase):
     def put(self, run, stage, status='passed', version='v1'):
         snapshot=self.db.prepare(run,stage,self.tokens[run])
         self.db.finish(run,stage,snapshot,status,version,self.tokens[run])
+    def test_standalone_graph_can_complete_its_attempt(self):
+        self.db.begin_attempt('e','intake','input',self.tokens['e'],2)
+        self.db.finish('e','intake',self.db.prepare('e','intake',self.tokens['e']),'passed','output',self.tokens['e'],completion_input='input')
+        self.assertEqual(self.db.db.execute("SELECT output_hash FROM graph_results WHERE run='e' AND stage='intake' AND input_hash='input'").fetchone(),('output',))
+    def test_standalone_pr_reconciliation_fails_closed_when_integrations_absent(self):
+        for stage in ('intake','plan','implement','test','qa'): self.put('e',stage)
+        snapshot=self.db.prepare('e','open_draft',self.tokens['e'])
+        binding={'proposal':'p','action':'a','head':'h','scope':'s','result_ref':'r','kind':'draft'}
+        with self.assertRaises(GraphError): self.db.finish('e','open_draft',snapshot,'passed','v',self.tokens['e'],pr_reconcile=binding)
+        self.assertIsNone(self.db.get('e','open_draft'))
     def test_parallel_fanout_assembly_and_scoped_invalidation(self):
         for stage in ('intake','brief','canonical_draft','canonical_review','freeze'): self.put('m',stage)
         for channel in ('linkedin','x','facebook','instagram','reddit'):

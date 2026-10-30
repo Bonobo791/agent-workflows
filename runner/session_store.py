@@ -128,6 +128,21 @@ class SessionStore:
             self.db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup'",(home,))
             return result
         except Exception: raise SessionError('backup outcome unresolved') from None
+    def recover_backup(self,job,verify_quiescent,verify_safe):
+        if not _name(job) or not callable(verify_quiescent) or not callable(verify_safe): raise SessionError('trusted backup verification required')
+        row=self.db.execute("SELECT h.id FROM homes h JOIN home_claims c ON c.home=h.id WHERE c.job=? AND c.state='released' AND h.state='backup'",(job,)).fetchone()
+        if not row: raise SessionError('backup recovery unavailable')
+        home=row[0]; path=str(self.homes/home)
+        try:
+            if verify_quiescent(job,path) is not True or verify_safe(path) is not True: raise SessionError('backup recovery unverified')
+        except Exception: raise SessionError('backup recovery unverified') from None
+        db=self.db; db.execute('BEGIN IMMEDIATE')
+        try:
+            self._check_home(home)
+            changed=db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM home_claims WHERE job=? AND home=? AND state='released')",(home,job,home)).rowcount
+            if changed!=1: raise SessionError('backup recovery stale')
+            db.execute('COMMIT'); return True
+        except Exception: db.execute('ROLLBACK'); raise
     def delete(self,job,deleter):
         if not callable(deleter): raise SessionError('trusted deletion required')
         home=self._reserve_idle(job,'deleting'); path=self.homes/home

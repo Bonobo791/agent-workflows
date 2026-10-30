@@ -4,6 +4,14 @@ import unittest
 from runner.credentials import CredentialStore, CredentialError
 
 class CredentialTests(unittest.TestCase):
+    def test_locked_preserves_caller_oserror_and_releases_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=CredentialStore(directory)
+            failure=OSError('caller failure')
+            with self.assertRaises(OSError) as caught:
+                with store.locked(): raise failure
+            self.assertIs(caught.exception,failure)
+            with store.locked() as record: record.save({'value':'synthetic'})
     def test_atomic_private_round_trip_and_symlink_rejection(self):
         with tempfile.TemporaryDirectory() as directory:
             store=CredentialStore(directory)
