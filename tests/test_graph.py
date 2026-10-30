@@ -3,18 +3,57 @@ import unittest
 from runner.graph import GraphStore, GraphError, marketing_definition, engineering_definition
 
 class GraphTests(unittest.TestCase):
-    def test_standalone_completion_records_result(self):
-        token=self.tokens['m']
-        snapshot=self.db.prepare('m','intake',token)
-        self.db.begin_attempt('m','intake','input',token,2)
-        self.db.finish('m','intake',snapshot,'passed','output',token,completion_input='input')
-        self.assertEqual(self.db.db.execute('SELECT output_hash FROM graph_results WHERE run=? AND stage=? AND input_hash=?',('m','intake','input')).fetchone(),('output',))
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.db=GraphStore(self.tmp.name+'/db'); self.db.register(marketing_definition()); self.db.register(engineering_definition()); self.db.create('m','marketing'); self.db.create('e','engineering'); self.tokens={'m':self.db.claim('m',60),'e':self.db.claim('e',60)}
     def tearDown(self): self.db.close(); self.tmp.cleanup()
     def put(self, run, stage, status='passed', version='v1'):
         snapshot=self.db.prepare(run,stage,self.tokens[run])
         self.db.finish(run,stage,snapshot,status,version,self.tokens[run])
+    def test_standalone_graph_can_complete_its_attempt(self):
+        self.db.begin_attempt('e','intake','input',self.tokens['e'],2)
+        self.db.finish('e','intake',self.db.prepare('e','intake',self.tokens['e']),'passed','output',self.tokens['e'],completion_input='input')
+        self.assertEqual(self.db.db.execute("SELECT output_hash FROM graph_results WHERE run='e' AND stage='intake' AND input_hash='input'").fetchone(),('output',))
+    def test_standalone_pr_reconciliation_fails_closed_when_integrations_absent(self):
+        for stage in ('intake','plan','implement','test','qa'): self.put('e',stage)
+        snapshot=self.db.prepare('e','open_draft',self.tokens['e'])
+        binding={'proposal':'p','action':'a','head':'h','scope':'s','result_ref':'r','kind':'draft'}
+        with self.assertRaises(GraphError): self.db.finish('e','open_draft',snapshot,'passed','v',self.tokens['e'],pr_reconcile=binding)
+        self.assertIsNone(self.db.get('e','open_draft'))
+    def test_pr_reconciliation_uses_graph_clock_for_action_timestamp(self):
+        from runner.actions import ActionLedger
+        ledger=ActionLedger(self.tmp.name+'/db')
+        try:
+            self.db.clock=lambda:1234
+            self.db.db.execute('UPDATE graph_claims SET expires=2000 WHERE run=?',('e',))
+            for stage in ('intake','plan','implement','test','qa'): self.put('e',stage)
+            self.db.db.execute('CREATE TABLE pr_bridge_operations(proposal TEXT PRIMARY KEY,run TEXT,kind TEXT,state TEXT,result TEXT)')
+            self.db.db.execute("INSERT INTO pr_bridge_operations VALUES('p','e','draft','uncertain',NULL)")
+            ledger.db.execute("INSERT INTO external_actions VALUES('e','a','h','actor','uncertain',0)")
+            ledger.db.execute("INSERT INTO action_scopes VALUES('s','e','a','h')")
+            binding={'proposal':'p','action':'a','head':'h','scope':'s','result_ref':'r','kind':'draft'}
+            self.db.finish('e','open_draft',self.db.prepare('e','open_draft',self.tokens['e']),'passed','v',self.tokens['e'],pr_reconcile=binding)
+            self.assertEqual(ledger.db.execute("SELECT updated FROM external_actions WHERE run='e'").fetchone(),(1234,))
+        finally: ledger.db.close()
+    def test_draft_reconciles_without_followups_but_ready_requires_them(self):
+        for stage in ('intake','plan','implement','test','qa'): self.put('e',stage)
+        db=self.db.db
+        db.execute('CREATE TABLE external_actions(run TEXT,action TEXT,version TEXT,status TEXT,updated REAL)')
+        db.execute('CREATE TABLE action_scopes(scope TEXT,run TEXT,action TEXT,version TEXT)')
+        db.execute('CREATE TABLE pr_bridge_operations(proposal TEXT,run TEXT,kind TEXT,state TEXT,result TEXT)')
+        db.execute("INSERT INTO external_actions VALUES('e','draft-action','head','uncertain',0)")
+        db.execute("INSERT INTO action_scopes VALUES('draft-scope','e','draft-action','head')")
+        db.execute("INSERT INTO pr_bridge_operations VALUES('draft-proposal','e','draft','uncertain',NULL)")
+        draft={'proposal':'draft-proposal','action':'draft-action','head':'head','scope':'draft-scope','result_ref':'receipt','kind':'draft'}
+        self.db.finish('e','open_draft',self.db.prepare('e','open_draft',self.tokens['e']),'passed','v',self.tokens['e'],pr_reconcile=draft)
+        self.assertEqual(self.db.get('e','open_draft')['status'],'passed')
+        self.put('e','triage')
+        db.execute("INSERT INTO external_actions VALUES('e','ready-action','head','uncertain',0)")
+        db.execute("INSERT INTO action_scopes VALUES('ready-scope','e','ready-action','head')")
+        db.execute("INSERT INTO pr_bridge_operations VALUES('ready-proposal','e','ready','uncertain',NULL)")
+        ready={'proposal':'ready-proposal','action':'ready-action','head':'head','scope':'ready-scope','result_ref':'receipt','kind':'ready'}
+        with self.assertRaisesRegex(GraphError,'PR reconciliation unavailable'): self.db.finish('e','ready',self.db.prepare('e','ready',self.tokens['e']),'passed','v',self.tokens['e'],pr_reconcile=ready)
+        self.assertIsNone(self.db.get('e','ready'))
+        self.assertEqual(db.execute("SELECT status FROM external_actions WHERE action='ready-action'").fetchone(),('uncertain',))
     def test_parallel_fanout_assembly_and_scoped_invalidation(self):
         for stage in ('intake','brief','canonical_draft','canonical_review','freeze'): self.put('m',stage)
         for channel in ('linkedin','x','facebook','instagram','reddit'):

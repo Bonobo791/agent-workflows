@@ -52,12 +52,12 @@ class GraphStore:
         CREATE TABLE IF NOT EXISTS graph_runs(id TEXT PRIMARY KEY, workflow TEXT NOT NULL, definition_hash TEXT NOT NULL, task_id TEXT NOT NULL, status TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_claims(task_id TEXT PRIMARY KEY, run TEXT NOT NULL, token TEXT NOT NULL, expires REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_stages(run TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, version TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(run,stage));
+        CREATE TABLE IF NOT EXISTS graph_results(run TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL, output_hash TEXT NOT NULL, PRIMARY KEY(run,stage,input_hash));
         CREATE TABLE IF NOT EXISTS graph_revisions(id INTEGER PRIMARY KEY AUTOINCREMENT);
         CREATE TABLE IF NOT EXISTS quota_pauses(scope TEXT PRIMARY KEY, run TEXT NOT NULL, stage TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_sessions(run TEXT NOT NULL, role TEXT NOT NULL, session TEXT NOT NULL, PRIMARY KEY(run,role));
         CREATE TABLE IF NOT EXISTS graph_skill_state(run TEXT NOT NULL, stage TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(run,stage));
         CREATE TABLE IF NOT EXISTS graph_attempts(run TEXT NOT NULL, stage TEXT NOT NULL, version TEXT NOT NULL, count INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(run,stage,version));
-        CREATE TABLE IF NOT EXISTS graph_results(run TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL, output_hash TEXT NOT NULL, PRIMARY KEY(run,stage,input_hash));
         ''')
         self.definitions={}
     def close(self): self.db.close()
@@ -236,10 +236,13 @@ class GraphStore:
                 if status!='passed' or self.db.execute("UPDATE correction_attempts SET state='completed',result_version=? WHERE id=? AND run=? AND writer_stage=? AND input_hash=? AND state='running'",(version,correction_id,run,stage,completion_input)).rowcount!=1: raise GraphError('correction completion mismatch')
             if pr_reconcile is not None:
                 if stage not in ('open_draft','ready') or status!='passed' or not isinstance(pr_reconcile,dict) or set(pr_reconcile)!={'proposal','action','head','scope','result_ref','kind'} or pr_reconcile['kind']!=('draft' if stage=='open_draft' else 'ready'): raise GraphError('invalid PR reconciliation')
+                tables={row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('action_scopes','external_actions','pr_bridge_operations','action_followups')")}
+                needed={'action_scopes','external_actions','pr_bridge_operations'} | ({'action_followups'} if stage=='ready' else set())
+                if not needed<=tables: raise GraphError('PR reconciliation unavailable')
                 item=pr_reconcile
                 scoped=self.db.execute('SELECT run,action,version FROM action_scopes WHERE scope=?',(item['scope'],)).fetchone()
                 if scoped!=(run,item['action'],item['head']): raise GraphError('PR action scope changed')
-                if self.db.execute("UPDATE external_actions SET status='desired_state_observed',updated=? WHERE run=? AND action=? AND version=? AND status='uncertain'",(time.time(),run,item['action'],item['head'])).rowcount!=1: raise GraphError('PR action unavailable')
+                if self.db.execute("UPDATE external_actions SET status='desired_state_observed',updated=? WHERE run=? AND action=? AND version=? AND status='uncertain'",(self.clock(),run,item['action'],item['head'])).rowcount!=1: raise GraphError('PR action unavailable')
                 if self.db.execute("UPDATE pr_bridge_operations SET state='desired_state_observed',result=? WHERE proposal=? AND run=? AND kind=? AND state='uncertain'",(item['result_ref'],item['proposal'],run,item['kind'])).rowcount!=1: raise GraphError('PR proposal unavailable')
                 if item['kind']=='ready': self.db.execute('INSERT OR IGNORE INTO action_followups(run,action,version,kind,target) VALUES(?,?,?,?,?)',(run,item['action'],item['head'],'post_ready_review',item['scope']))
                 self.db.execute('DELETE FROM action_scopes WHERE scope IN (?,?)',(item['scope'],'run:'+run))
