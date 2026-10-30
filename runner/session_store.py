@@ -113,23 +113,27 @@ class SessionStore:
             if not row: raise SessionError('idle state unavailable')
             self._check_home(row[0])
             db.execute("UPDATE homes SET state=? WHERE id=? AND state='idle'",(state,row[0]))
-            if state=='backup': db.execute('INSERT OR REPLACE INTO backup_generations VALUES(?,?)',(row[0],secrets.token_hex(24)))
-            db.execute('COMMIT'); return row[0]
+            generation=secrets.token_hex(24) if state=='backup' else None
+            if generation is not None: db.execute('INSERT OR REPLACE INTO backup_generations VALUES(?,?)',(row[0],generation))
+            db.execute('COMMIT'); return (row[0],generation) if generation is not None else row[0]
         except Exception: db.execute('ROLLBACK'); raise
     def backup(self,job,exporter,verify_safe=None):
         if not callable(exporter) or not callable(verify_safe): raise SessionError('trusted export and credential verification required')
-        home=self._reserve_idle(job,'backup')
+        home,generation=self._reserve_idle(job,'backup')
         path=str(self.homes/home)
         try: verified=verify_safe(path) is True
         except Exception: verified=False
         if not verified:
-            self.db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup'",(home,))
+            self._finish_backup(home,generation)
             raise SessionError('credential boundary unverified')
         try:
             result=exporter(path)
-            self.db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup'",(home,))
+            self._finish_backup(home,generation)
             return result
         except Exception: raise SessionError('backup outcome unresolved') from None
+    def _finish_backup(self,home,generation):
+        changed=self.db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM backup_generations WHERE home=? AND generation=?)",(home,home,generation)).rowcount
+        if changed!=1: raise SessionError('backup generation changed')
     def recover_backup(self,job,verify_quiescent,verify_safe):
         if not _name(job) or not callable(verify_quiescent) or not callable(verify_safe): raise SessionError('trusted backup verification required')
         row=self.db.execute("SELECT h.id,g.generation FROM homes h JOIN home_claims c ON c.home=h.id JOIN backup_generations g ON g.home=h.id WHERE c.job=? AND c.state='released' AND h.state='backup'",(job,)).fetchone()
