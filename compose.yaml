@@ -1,0 +1,19 @@
+# Private control service only; live integrations remain disabled.
+services:
+  workflow:
+    build: .
+    read_only: true
+    user: "10001:10001"
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      CONTROL_SECRET_FILE: /run/private/control-secret
+      WORKFLOW_DATA_DIR: /data
+    volumes:
+      - workflow-data:/data
+      - ${CONTROL_SECRET_PATH:?Set a private owner-only secret file}:/run/private/control-secret:ro
+    restart: unless-stopped
+volumes:
+  workflow-data:

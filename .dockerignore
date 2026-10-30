@@ -1,0 +1,14 @@
+.git
+.codex
+.agents
+.env*
+*.db
+*.db-*
+__pycache__
+*.py[cod]
+credentials.json
+data/
+secrets/
+control-secret
+*.sqlite
+*.sqlite-*
