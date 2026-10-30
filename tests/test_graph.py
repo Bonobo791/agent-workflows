@@ -34,6 +34,26 @@ class GraphTests(unittest.TestCase):
             self.db.finish('e','open_draft',self.db.prepare('e','open_draft',self.tokens['e']),'passed','v',self.tokens['e'],pr_reconcile=binding)
             self.assertEqual(ledger.db.execute("SELECT updated FROM external_actions WHERE run='e'").fetchone(),(1234,))
         finally: ledger.db.close()
+    def test_draft_reconciles_without_followups_but_ready_requires_them(self):
+        for stage in ('intake','plan','implement','test','qa'): self.put('e',stage)
+        db=self.db.db
+        db.execute('CREATE TABLE external_actions(run TEXT,action TEXT,version TEXT,status TEXT,updated REAL)')
+        db.execute('CREATE TABLE action_scopes(scope TEXT,run TEXT,action TEXT,version TEXT)')
+        db.execute('CREATE TABLE pr_bridge_operations(proposal TEXT,run TEXT,kind TEXT,state TEXT,result TEXT)')
+        db.execute("INSERT INTO external_actions VALUES('e','draft-action','head','uncertain',0)")
+        db.execute("INSERT INTO action_scopes VALUES('draft-scope','e','draft-action','head')")
+        db.execute("INSERT INTO pr_bridge_operations VALUES('draft-proposal','e','draft','uncertain',NULL)")
+        draft={'proposal':'draft-proposal','action':'draft-action','head':'head','scope':'draft-scope','result_ref':'receipt','kind':'draft'}
+        self.db.finish('e','open_draft',self.db.prepare('e','open_draft',self.tokens['e']),'passed','v',self.tokens['e'],pr_reconcile=draft)
+        self.assertEqual(self.db.get('e','open_draft')['status'],'passed')
+        self.put('e','triage')
+        db.execute("INSERT INTO external_actions VALUES('e','ready-action','head','uncertain',0)")
+        db.execute("INSERT INTO action_scopes VALUES('ready-scope','e','ready-action','head')")
+        db.execute("INSERT INTO pr_bridge_operations VALUES('ready-proposal','e','ready','uncertain',NULL)")
+        ready={'proposal':'ready-proposal','action':'ready-action','head':'head','scope':'ready-scope','result_ref':'receipt','kind':'ready'}
+        with self.assertRaisesRegex(GraphError,'PR reconciliation unavailable'): self.db.finish('e','ready',self.db.prepare('e','ready',self.tokens['e']),'passed','v',self.tokens['e'],pr_reconcile=ready)
+        self.assertIsNone(self.db.get('e','ready'))
+        self.assertEqual(db.execute("SELECT status FROM external_actions WHERE action='ready-action'").fetchone(),('uncertain',))
     def test_parallel_fanout_assembly_and_scoped_invalidation(self):
         for stage in ('intake','brief','canonical_draft','canonical_review','freeze'): self.put('m',stage)
         for channel in ('linkedin','x','facebook','instagram','reddit'):

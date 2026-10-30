@@ -52,13 +52,15 @@ class SessionStoreTests(unittest.TestCase):
             store.close()
     def test_interrupted_backup_remains_fenced_until_verified_recovery(self):
         with tempfile.TemporaryDirectory() as root:
-            store=SessionStore(root); store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
+            store=SessionStore(root); entry=store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
             store.bind('job-1','thread-1'); store.release('job-1',lambda _:True)
             with self.assertRaises(SessionError): store.backup('job-1',lambda _:(_ for _ in ()).throw(OSError('interrupted')),lambda _:True)
             with self.assertRaises(SessionError): store.recover_backup('job-1',lambda *_:False,lambda _:True)
             self.assertFalse(store.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
             store.close(); store=SessionStore(root)
-            self.assertTrue(store.recover_backup('job-1',lambda *_:True,lambda _:True))
+            calls=[]
+            self.assertTrue(store.recover_backup('job-1',lambda job,path:calls.append((job,path)) or True,lambda path:calls.append(path) or True))
+            self.assertEqual(calls,[('job-1',entry['home']),entry['home']])
             self.assertTrue(store.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
             with self.assertRaises(SessionError): store.recover_backup('job-1',lambda *_:True,lambda _:True)
             store.close()
