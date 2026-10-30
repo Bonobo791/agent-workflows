@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.db
+*.db-*
+.env
+.env.*
+!.env.example
+.codex/
+.agents/
+/data/
+/secrets/
+/control-secret
+credentials.json
+*.sqlite
+*.sqlite-*

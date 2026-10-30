@@ -1,0 +1,11 @@
+# Credential delivery boundary
+
+No production OAuth delivery implementation is configured. The default `CredentialDelivery` rejects execution, and live worker startup reports the missing delivery, isolation and dispatch prerequisites. The fake tests use synthetic values and do not demonstrate token delivery. No API-key billing fallback is configured.
+
+OpenAI's [ChatGPT-plan app-server guidance](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) supplies a short-lived OAuth access token to the app-server child process through `ACCESS_TOKEN` and configures the Responses provider with `requires_openai_auth=false`. The current container specification intentionally contains no token or refresh credential. Putting `ACCESS_TOKEN` in Docker `Env` would expose it through daemon/container metadata and is not an acceptable delivery mechanism for this project.
+
+A possible implementation is a narrowly scoped, separately protected broker and a fixed worker launcher. After authenticating the exact assignment and container, the broker would deliver a short-lived access token over an approved private IPC channel; the launcher would pass it to the app-server child environment without writing it to job files or Docker configuration. Refresh credentials stay in the separate service. This needs a concrete protocol, authorization and replay fencing, failure handling, and host verification. The current image command starts app-server directly and does not implement that launcher or channel.
+
+Another possibility is to run app-server in a separately isolated trusted service and broker only approved filesystem/command operations into the disposable job. That changes the process and workspace boundary and requires its own reviewed authorization and termination design. Either option must prevent credentials entering role prompts, logs, artifacts, public source, images and broad workspace mounts. `shell_environment_policy.inherit="none"` reduces inheritance into child shells; it does not prove isolation against a hostile process or `/proc` access.
+
+No option is enabled by this repository. Real OAuth registration, credential provisioning, host permissions, network policy and deployment remain separately gated.
