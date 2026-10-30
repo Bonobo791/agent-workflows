@@ -42,6 +42,7 @@ class SessionStore:
         self.db=sqlite3.connect(str(self.root/'session-state.db'),timeout=10,isolation_level=None)
         self.db.execute('''CREATE TABLE IF NOT EXISTS homes(id TEXT PRIMARY KEY,run TEXT NOT NULL,role TEXT NOT NULL,config TEXT NOT NULL,skills TEXT NOT NULL,session TEXT UNIQUE,state TEXT NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS home_claims(job TEXT PRIMARY KEY,home TEXT NOT NULL,state TEXT NOT NULL)''')
+        self.db.execute('CREATE TABLE IF NOT EXISTS backup_generations(home TEXT PRIMARY KEY,generation TEXT NOT NULL)')
     def close(self): self.db.close()
     def acquire(self,run,role,job,config,skills,session=None,verify_safe=None):
         if not all(_name(x) for x in (run,role,job)) or not _digest(config) or not _digest(skills) or (session is not None and not _name(session)): raise SessionError('invalid session identity')
@@ -112,6 +113,7 @@ class SessionStore:
             if not row: raise SessionError('idle state unavailable')
             self._check_home(row[0])
             db.execute("UPDATE homes SET state=? WHERE id=? AND state='idle'",(state,row[0]))
+            if state=='backup': db.execute('INSERT OR REPLACE INTO backup_generations VALUES(?,?)',(row[0],secrets.token_hex(24)))
             db.execute('COMMIT'); return row[0]
         except Exception: db.execute('ROLLBACK'); raise
     def backup(self,job,exporter,verify_safe=None):
@@ -130,16 +132,16 @@ class SessionStore:
         except Exception: raise SessionError('backup outcome unresolved') from None
     def recover_backup(self,job,verify_quiescent,verify_safe):
         if not _name(job) or not callable(verify_quiescent) or not callable(verify_safe): raise SessionError('trusted backup verification required')
-        row=self.db.execute("SELECT h.id FROM homes h JOIN home_claims c ON c.home=h.id WHERE c.job=? AND c.state='released' AND h.state='backup'",(job,)).fetchone()
+        row=self.db.execute("SELECT h.id,g.generation FROM homes h JOIN home_claims c ON c.home=h.id JOIN backup_generations g ON g.home=h.id WHERE c.job=? AND c.state='released' AND h.state='backup'",(job,)).fetchone()
         if not row: raise SessionError('backup recovery unavailable')
-        home=row[0]; path=str(self.homes/home)
+        home,generation=row; path=str(self.homes/home)
         try:
             if verify_quiescent(job,path) is not True or verify_safe(path) is not True: raise SessionError('backup recovery unverified')
         except Exception: raise SessionError('backup recovery unverified') from None
         db=self.db; db.execute('BEGIN IMMEDIATE')
         try:
             self._check_home(home)
-            changed=db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM home_claims WHERE job=? AND home=? AND state='released')",(home,job,home)).rowcount
+            changed=db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM home_claims WHERE job=? AND home=? AND state='released') AND EXISTS(SELECT 1 FROM backup_generations WHERE home=? AND generation=?)",(home,job,home,home,generation)).rowcount
             if changed!=1: raise SessionError('backup recovery stale')
             db.execute('COMMIT'); return True
         except Exception: db.execute('ROLLBACK'); raise

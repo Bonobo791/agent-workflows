@@ -62,6 +62,21 @@ class SessionStoreTests(unittest.TestCase):
             self.assertTrue(store.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
             with self.assertRaises(SessionError): store.recover_backup('job-1',lambda *_:True,lambda _:True)
             store.close()
+    def test_stale_backup_recovery_cannot_release_a_new_backup(self):
+        with tempfile.TemporaryDirectory() as root:
+            first=SessionStore(root); first.acquire('run-1','implement','job-1',CONFIG,SKILLS)
+            first.bind('job-1','thread-1'); first.release('job-1',lambda _:True)
+            def fail(_): raise OSError('backup interrupted')
+            with self.assertRaises(SessionError): first.backup('job-1',fail,lambda _:True)
+            second=SessionStore(root)
+            try:
+                def race(*_):
+                    second.recover_backup('job-1',lambda *_:True,lambda _:True)
+                    with self.assertRaises(SessionError): second.backup('job-1',fail,lambda _:True)
+                    return True
+                with self.assertRaises(SessionError): first.recover_backup('job-1',race,lambda _:True)
+                self.assertFalse(second.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
+            finally: second.close(); first.close()
     def test_deletion_fences_uncertain_outcome_and_prevents_resume(self):
         with tempfile.TemporaryDirectory() as root:
             store=SessionStore(root); store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
