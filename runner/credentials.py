@@ -28,13 +28,14 @@ class CredentialStore:
         directory=self._directory()
         lock=None
         try:
-            lock=os.open('.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-            info=os.fstat(lock)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077: raise CredentialError('unsafe lock')
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                lock=os.open('.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+                info=os.fstat(lock)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077: raise CredentialError('unsafe lock')
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            except OSError:
+                raise CredentialError('credential storage unavailable') from None
             yield _Record(directory)
-        except OSError:
-            raise CredentialError('credential storage unavailable') from None
         finally:
             if lock is not None:
                 fcntl.flock(lock, fcntl.LOCK_UN); os.close(lock)

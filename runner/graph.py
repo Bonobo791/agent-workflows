@@ -57,6 +57,7 @@ class GraphStore:
         CREATE TABLE IF NOT EXISTS graph_sessions(run TEXT NOT NULL, role TEXT NOT NULL, session TEXT NOT NULL, PRIMARY KEY(run,role));
         CREATE TABLE IF NOT EXISTS graph_skill_state(run TEXT NOT NULL, stage TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(run,stage));
         CREATE TABLE IF NOT EXISTS graph_attempts(run TEXT NOT NULL, stage TEXT NOT NULL, version TEXT NOT NULL, count INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(run,stage,version));
+        CREATE TABLE IF NOT EXISTS graph_results(run TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL, output_hash TEXT NOT NULL, PRIMARY KEY(run,stage,input_hash));
         ''')
         self.definitions={}
     def close(self): self.db.close()

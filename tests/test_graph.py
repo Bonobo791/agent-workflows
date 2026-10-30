@@ -3,6 +3,12 @@ import unittest
 from runner.graph import GraphStore, GraphError, marketing_definition, engineering_definition
 
 class GraphTests(unittest.TestCase):
+    def test_standalone_completion_records_result(self):
+        token=self.tokens['m']
+        snapshot=self.db.prepare('m','intake',token)
+        self.db.begin_attempt('m','intake','input',token,2)
+        self.db.finish('m','intake',snapshot,'passed','output',token,completion_input='input')
+        self.assertEqual(self.db.db.execute('SELECT output_hash FROM graph_results WHERE run=? AND stage=? AND input_hash=?',('m','intake','input')).fetchone(),('output',))
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.db=GraphStore(self.tmp.name+'/db'); self.db.register(marketing_definition()); self.db.register(engineering_definition()); self.db.create('m','marketing'); self.db.create('e','engineering'); self.tokens={'m':self.db.claim('m',60),'e':self.db.claim('e',60)}
     def tearDown(self): self.db.close(); self.tmp.cleanup()
