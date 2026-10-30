@@ -18,9 +18,6 @@ class GraphRunner:
         self.quota_scope=quota_scope
         self.skill_resolver=skill_resolver
         self.required_skills=required_skills or {}
-        graph.db.execute('''CREATE TABLE IF NOT EXISTS graph_results(
-            run TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL, output_hash TEXT NOT NULL,
-            PRIMARY KEY(run,stage,input_hash))''')
     def _validate_artifact_graph(self,ref):
         value=json.loads(self.artifacts.get(ref))
         if not isinstance(value,dict): raise ExecutionError('invalid stage artifact')
