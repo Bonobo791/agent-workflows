@@ -120,16 +120,23 @@ def fixture_control(root, secret, **kwargs):
                 unit=scopes.reserve('r')
                 launcher=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                 deadline=time.monotonic()+10
-                while True:
-                    if launcher.poll() is not None: raise RuntimeError('scope launcher exited before activation')
+                try:
+                    while True:
+                        if launcher.poll() is not None: raise RuntimeError('scope launcher exited before activation')
+                        try:
+                            if os.environ.get('WORKFLOW_TEST_UNBOUND')=='1':
+                                if scopes.backend.inspect(unit)['active']!='active': raise ScopeError('not active')
+                            else: scopes.bind('r',unit)
+                            break
+                        except ScopeError:
+                            if time.monotonic()>=deadline: raise
+                            time.sleep(.05)
+                except BaseException:
                     try:
-                        if os.environ.get('WORKFLOW_TEST_UNBOUND')=='1':
-                            if scopes.backend.inspect(unit)['active']!='active': raise ScopeError('not active')
-                        else: scopes.bind('r',unit)
-                        break
-                    except ScopeError:
-                        if time.monotonic()>=deadline: raise
-                        time.sleep(.05)
+                        if launcher.poll() is None: launcher.kill()
+                    except ProcessLookupError: pass
+                    launcher.wait(timeout=5)
+                    raise
                 scopes.close()
             else:
                 service.graph.db.execute('CREATE TABLE local_scopes(run TEXT,state TEXT)')
