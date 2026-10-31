@@ -54,7 +54,7 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
             self.assertIn(b'OpenFilm render or verification failed',result.stderr)
             self.assertFalse(list(output.iterdir()))
 
-    def _render_backend(self,fixture,engine):
+    def _render_backend(self,fixture,engine,*,slow=False):
         from runner.docker_config import DockerConfig
         from runner.docker_controller import DockerAssignments
         from runner.docker_supervisor import DockerSupervisor
@@ -63,7 +63,13 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
         config=DockerConfig({'socket':engine.path,'image':os.environ['OPENFILM_PODMAN_IMAGE'],'network':'none','job_root':str(jobs),'engine':'podman-rootless'},fixture.root/'state')
         archive=io.BytesIO(); source=Path(__file__).parent/'fixtures'/'openfilm'
         with zipfile.ZipFile(archive,'w') as z:
-            for file in source.iterdir(): z.write(file,file.name)
+            for file in source.iterdir():
+                if slow and file.name=='scene.html':
+                    scene=file.read_text()
+                    self.assertIn('frame(t){}',scene)
+                    scene=scene.replace('frame(t){}','frame(t){const end=performance.now()+30000; while(performance.now()<end){}}')
+                    z.writestr(file.name,scene)
+                else: z.write(file,file.name)
         project=fixture.service.artifacts.put(archive.getvalue()); proof=fixture.terminal
         class Builder:
             def ready(self): return True
@@ -99,7 +105,7 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
                     if path.endswith('/wait?condition=not-running') and timeout is not None: started.set()
                     return raw.request(method,path,body,timeout=timeout)
             engine=Engine()
-            assignments,supervisor,backend=self._render_backend(fixture,engine)
+            assignments,supervisor,backend=self._render_backend(fixture,engine,slow=True)
             count=fixture.service.graph.begin_attempt('run','asset_production','cancel-probe',fixture.claim,2)
             attempt=hashlib.sha256(json.dumps(['run','asset_production','cancel-probe',count],separators=(',',':')).encode()).hexdigest()
             pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
