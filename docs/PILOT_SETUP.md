@@ -38,8 +38,18 @@ must not contain private skills, credentials, user data or session histories.
 - `WORKFLOW_TASK_CONFIG_FILE`: an owner-only JSON object with `run`, `workflow`,
   `project`, `number`, `ready_columns`, `completed_columns`,
   `blocker_direction`, `plan_endpoint`, `github_owner`, `github_repo` and
-  `github_branch`; marketing also requires `task_format`. The Plan and GitHub
-  credential belongs in an owner-only file referenced by `PLAN_TOKEN_FILE`.
+  `github_branch`; marketing also requires `task_format`. Set `plan_endpoint`
+  to `codex-apps` in local mode to use the existing signed-in Codex app gateway
+  for read-only It's a Plan tools. This starts an ephemeral app-server thread
+  without a model turn and uses the pinned local executable. Alternatively, an
+  HTTPS MCP endpoint requires an owner-only credential file referenced by
+  `PLAN_TOKEN_FILE`. Do not configure both gateway mode and a Plan token.
+  To verify this access without admitting a task, run
+  `WORKFLOW_PLAN_LIVE_PROJECT=team.PROJECT WORKFLOW_PLAN_LIVE_NUMBER=1 python -m unittest tests.test_plan_codex.CodexPlanTests.test_signed_in_gateway_reads_issue_attachments_and_activity`
+  with an accessible project and issue number. This reads the issue, attachments
+  and activity through the existing sign-in.
+  The app-server tool-call interface is experimental; revalidate it when the
+  pinned Codex executable or connected account changes.
   `project` accepts either a project key such as `MC` or a team-qualified
   reference such as `moderaty.MC`; the exact configured reference is sent to
   It's a Plan without rewriting it.

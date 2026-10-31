@@ -20,7 +20,9 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
     if execution_mode=='local' and (not callable(local_supervisor_factory) or lifecycle_factory is None or docker_socket or docker_image or (docker_config is not None and (not isinstance(docker_config,dict) or docker_config.get('engine')!='podman-rootless'))): raise ConfigurationError('local execution requires a trusted supervisor and manual lifecycle')
     if execution_mode!='local' and local_supervisor_factory is not None: raise ConfigurationError('local supervisor requires local execution mode')
     if github_http is not None and (execution_mode!='local' or github_token is not None or not callable(getattr(github_http,'request',None))): raise ConfigurationError('invalid local GitHub read client')
-    if task_config is not None and (intake_factory is not None or not plan_token or (not github_token and github_http is None)): raise ConfigurationError('configured task requires private Plan credentials and GitHub read access')
+    plan_gateway=isinstance(task_config,dict) and task_config.get('plan_endpoint')=='codex-apps'
+    if plan_gateway and (execution_mode!='local' or plan_token is not None): raise ConfigurationError('Codex tracker gateway requires local execution without a token')
+    if task_config is not None and (intake_factory is not None or (not plan_gateway and not plan_token) or (not github_token and github_http is None)): raise ConfigurationError('configured task requires Plan and GitHub read access')
     if docker_config is not None and (docker_socket or docker_image): raise ConfigurationError('choose one Docker configuration')
     if bool(docker_socket) != bool(docker_image): raise ConfigurationError('Docker socket and immutable image required together')
     if source_config is not None and (execution_mode!='local' or not isinstance(source_config,dict) or set(source_config)!={'urls'}): raise ConfigurationError('local source URL policy required')
@@ -111,7 +113,12 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
             from runner.configured_task import ConfiguredTask
             from runner.plan_mcp import HTTPSMCP, PlanMCP
             from workflows.engineering.github import HTTPSGitHub
-            service.task_intake=ConfiguredTask(service,task_config,PlanMCP(HTTPSMCP(task_config.get('plan_endpoint',''),plan_token)),github_http if github_http is not None else HTTPSGitHub(github_token))
+            if plan_gateway:
+                from runner.plan_codex import CodexAppsPlan
+                supervisor=service.model_supervisor
+                plan=CodexAppsPlan(supervisor.executable,supervisor.environment,supervisor.verify_policy,str(Path(root).resolve()))
+            else: plan=PlanMCP(HTTPSMCP(task_config.get('plan_endpoint',''),plan_token))
+            service.task_intake=ConfiguredTask(service,task_config,plan,github_http if github_http is not None else HTTPSGitHub(github_token))
         if intake_factory is not None:
             service.task_intake=intake_factory(service)
             if service.task_intake is None: raise ConfigurationError('task intake unavailable')
@@ -252,6 +259,7 @@ def run_worker(root,secret):
         if not local_path: raise ConfigurationError('LOCAL_RUNTIME_CONFIG_FILE required')
         from runner.local_config import local_supervisor_factory
         local_factory=local_supervisor_factory(read_runtime_config(local_path),os.environ,root)
+    if isinstance(task_config,dict) and task_config.get('plan_endpoint')=='codex-apps' and os.environ.get('PLAN_TOKEN_FILE'): raise ConfigurationError('Codex tracker gateway must not use a Plan token')
     plan_token=read_secret(os.environ['PLAN_TOKEN_FILE']) if task_config is not None and os.environ.get('PLAN_TOKEN_FILE') else None
     github_token=read_secret(os.environ['GITHUB_TOKEN_FILE']) if task_config is not None and os.environ.get('GITHUB_TOKEN_FILE') else None
     github_http=None
