@@ -1,8 +1,19 @@
 import tempfile
 import unittest
+from types import SimpleNamespace
 from runner.service import Service, ServiceError
 
 class ServiceTests(unittest.TestCase):
+    def test_openfilm_builder_approval_requires_current_exact_policy(self):
+        with tempfile.TemporaryDirectory() as root:
+            s=Service(root)
+            builder=SimpleNamespace(policy_hash='approved',_policy=lambda:'approved')
+            s.openfilm_backend=SimpleNamespace(builder=builder)
+            with self.assertRaises(ServiceError): s.approve('controller','openfilm_builder_policy','wrong','operator')
+            s.approve('controller','openfilm_builder_policy','approved','operator')
+            builder._policy=lambda:'changed'
+            with self.assertRaises(ServiceError): s.approve('controller','openfilm_builder_policy','approved','operator')
+            s.close()
     def test_marketing_restart_approval_and_blocked_asset(self):
         with tempfile.TemporaryDirectory() as root:
             s=Service(root); s.create('r','marketing','task'); token=s.claim('r')
@@ -17,14 +28,14 @@ class ServiceTests(unittest.TestCase):
             s.complete('r','freeze',token,{})
             s.release('r',token); s.close()
             s=Service(root); token=s.claim('r')
+            s.complete('r','asset_brief',token,{'output':'synthetic'})
+            self.assertEqual(s.complete('r','asset_production',token,{}),'blocked')
             for channel in ('linkedin','x','facebook','instagram','reddit'):
                 s.complete('r',channel+'_draft',token,{'output':'synthetic','session_id':'writer-'+channel})
                 evidence={'output':'synthetic','session_id':'reviewer-'+channel}
                 if channel=='instagram': evidence['asset']={'status':'verified','ref':'asset'}
                 if channel=='reddit': evidence.update({'community':'example','rules_ref':'ref','rules_current':True,'relevant':True,'product_mentioned':False})
                 s.complete('r',channel+'_review',token,evidence)
-            s.complete('r','asset_brief',token,{'output':'synthetic'})
-            self.assertEqual(s.complete('r','asset_production',token,{}),'blocked')
             self.assertEqual(s.complete('r','assembly',token,{}),'awaiting_review')
             self.assertTrue(s.verify_terminal('r'))
             s.close()
@@ -105,13 +116,13 @@ class ServiceTests(unittest.TestCase):
             reviews={role:{'status':'passed','session_id':role,'findings':[]} for role in ('editorial','factual','seo_geo')}
             s.complete('r','canonical_review',token,{'reviews':reviews,'writer_sessions':['writer'],'current_writer_session':'writer','missing_skills':[]})
             s.approve('r','freeze',s.graph.get('r','canonical_review')['version'],'reviewer'); s.complete('r','freeze',token,{})
+            s.complete('r','asset_brief',token,{'output':'brief'}); s.complete('r','asset_production',token,{})
             for channel in ('linkedin','x','facebook','instagram','reddit'):
                 s.complete('r',channel+'_draft',token,{'output':'draft '+channel,'session_id':'writer-'+channel})
                 evidence={'output':'review '+channel,'session_id':'reviewer-'+channel}
                 if channel=='reddit': evidence.update({'community':'example','rules_ref':'ref','rules_current':True,'relevant':True,'product_mentioned':False})
                 result=s.complete('r',channel+'_review',token,evidence)
                 if channel=='instagram': self.assertEqual(result,'blocked')
-            s.complete('r','asset_brief',token,{'output':'brief'}); s.complete('r','asset_production',token,{})
             self.assertEqual(s.complete('r','assembly',token,{}),'awaiting_review')
             package=json.loads(s.artifacts.get(s.graph.get('r','assembly')['version']))
             self.assertEqual(package['stages']['linkedin_review']['artifact']['output'],'review linkedin')
@@ -191,12 +202,12 @@ class ServiceTests(unittest.TestCase):
             reviews={role:{'status':'passed','session_id':role,'findings':[]} for role in ('editorial','factual','seo_geo')}
             s.complete('r','canonical_review',token,{'reviews':reviews,'writer_sessions':['writer'],'current_writer_session':'writer','missing_skills':[]})
             s.approve('r','freeze',s.graph.get('r','canonical_review')['version'],'reviewer'); s.complete('r','freeze',token,{})
+            s.complete('r','asset_brief',token,{'output':'brief'}); self.assertEqual(s.complete('r','asset_production',token,{}),'blocked')
             for channel in ('linkedin','x','facebook','instagram','reddit'):
                 s.complete('r',channel+'_draft',token,{'output':'draft','session_id':'w-'+channel})
                 evidence={'output':'review','session_id':'review-'+channel}
                 if channel=='reddit': evidence.update({'community':'example','rules_ref':'ref','rules_current':True,'relevant':True,'product_mentioned':False})
                 s.complete('r',channel+'_review',token,evidence)
-            s.complete('r','asset_brief',token,{'output':'brief'}); self.assertEqual(s.complete('r','asset_production',token,{}),'blocked')
             self.assertEqual(s.complete('r','assembly',token,{}),'awaiting_review')
             s.close()
 
@@ -237,11 +248,12 @@ class ServiceTests(unittest.TestCase):
             reviews={role:{'status':'passed','session_id':role,'findings':[]} for role in ('editorial','factual','seo_geo')}
             s.complete('r','canonical_review',token,{'reviews':reviews,'writer_sessions':['writer'],'current_writer_session':'writer','missing_skills':[]})
             s.approve('r','freeze',s.graph.get('r','canonical_review')['version'],'reviewer'); s.complete('r','freeze',token,{})
+            s.complete('r','asset_brief',token,{'output':'brief'}); s.complete('r','asset_production',token,{})
             for channel in ('linkedin','x','facebook','instagram','reddit'):
                 s.complete('r',channel+'_draft',token,{'output':'draft','session_id':'w-'+channel})
                 evidence={'output':'review','session_id':'review-'+channel}
                 if channel=='reddit': evidence.update({'community':'example','rules_ref':'ref','rules_current':True,'relevant':True,'product_mentioned':False})
                 s.complete('r',channel+'_review',token,evidence)
-            s.complete('r','asset_brief',token,{'output':'brief'}); s.complete('r','asset_production',token,{}); s.complete('r','assembly',token,{})
+            s.complete('r','assembly',token,{})
             self.assertTrue(s.verify_terminal('r')); file.write_text('changed')
             self.assertFalse(s.verify_terminal('r')); s.close()

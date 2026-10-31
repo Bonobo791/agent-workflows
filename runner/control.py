@@ -44,6 +44,7 @@ class ControlPlane:
                 from runner.manual_lifecycle import ManualLifecycle
                 if not isinstance(self.service.lifecycle,ManualLifecycle): raise ControlError('manual provider unavailable')
                 return self.service.lifecycle.confirm_operator_stop(request['run'],request['incarnation'],request['attestation'])
+            if action=='stop_local_scope': return self.service.stop_local_scope(request['run'],request['unit'])
             if action=='manual_register_replacement':
                 from runner.manual_lifecycle import ManualLifecycle
                 if not isinstance(self.service.lifecycle,ManualLifecycle): raise ControlError('manual provider unavailable')
@@ -70,6 +71,18 @@ class ControlPlane:
                 supervisor=self.service.command_supervisor
                 if supervisor is None or supervisor.spec is None: raise ControlError('command policy unavailable')
                 return {'policy':supervisor.spec,'policy_hash':supervisor.policy_hash}
+            if action=='openfilm_policy':
+                backend=self.service.openfilm_backend
+                if backend is None: raise ControlError('OpenFilm policy unavailable')
+                return {'policy_hash':backend.policy_hash,'image':backend.supervisor.config.image,'network':'none','version':'0.2.6'}
+            if action=='openfilm_builder_policy':
+                builder=getattr(self.service.openfilm_backend,'builder',None)
+                if builder is None or not hasattr(builder,'policy_hash'): raise ControlError('OpenFilm builder policy unavailable')
+                return {'policy_hash':builder.policy_hash}
+            if action=='audio_policy':
+                transcriber=self.service.audio_transcriber
+                if transcriber is None: raise ControlError('audio policy unavailable')
+                return {'policy_hash':transcriber.policy_hash,'languages':dict(transcriber.languages)}
             if action=='docker_escalate': return {'terminated':self.service.docker_escalate(request['run'])}
             if action in ('engineering_workspace_binding','bind_engineering_workspace'):
                 import os
@@ -77,13 +90,17 @@ class ControlPlane:
                 service=self.service; run=request['run']; graph_claim=request['graph_claim']
                 service.graph._lease(run,graph_claim)
                 if not service.queue.may_start(run,request['queue_claim']): raise ControlError('queue claim unavailable')
-                intake=service.task_intake; supervisor=service.docker_supervisor
-                if intake is None or supervisor is None or supervisor.config is None or service.graph._definition(run).name!='engineering': raise ControlError('configured engineering runtime required')
+                intake=service.task_intake; local=service.model_supervisor; supervisor=service.docker_supervisor
+                if intake is None or (local is None and (supervisor is None or supervisor.config is None)) or service.graph._definition(run).name!='engineering': raise ControlError('configured engineering runtime required')
                 config=intake.config
                 if config['run']!=run or config['workflow']!='engineering': raise ControlError('configured task mismatch')
-                policy=supervisor.config.policy_hash
-                if not service.actions.db.execute("SELECT 1 FROM external_actions WHERE run='controller' AND action='docker_config' AND version=? AND status='approved'",(policy,)).fetchone(): raise ControlError('approved Docker policy required')
-                registry=EngineeringWorkspace(supervisor.config.job_root.parent)
+                if local is not None:
+                    policy=local.policy_hash; workspace_root=local.engineering_root
+                    if not policy or not workspace_root: raise ControlError('local engineering policy unavailable')
+                else:
+                    policy=supervisor.config.policy_hash; workspace_root=supervisor.config.job_root.parent
+                    if not service.actions.db.execute("SELECT 1 FROM external_actions WHERE run='controller' AND action='docker_config' AND version=? AND status='approved'",(policy,)).fetchone(): raise ControlError('approved Docker policy required')
+                registry=EngineeringWorkspace(workspace_root)
                 try:
                     repository=config['github_owner']+'/'+config['github_repo']
                     version=registry.binding_hash(run,repository,request['base'],config['github_branch'],os.geteuid(),policy)
@@ -118,6 +135,11 @@ class ControlPlane:
                 if self.service.stage_dispatcher is None: raise ControlError('stage dispatcher unavailable')
                 return self.service.stage_dispatcher.step(request['run'],request['queue_claim'],request['graph_claim'])
             if action=='enqueue': self.service.enqueue(request['run']); return {'queued':True}
+            if action=='metrics':
+                from runner.metrics import snapshot, prometheus_text
+                metrics=prometheus_text(snapshot(self.service.graph.db))
+                if len(json.dumps({'ok':True,'result':{'metrics':metrics}},separators=(',',':')).encode())+1>65536: raise ControlError('metric snapshot too large')
+                return {'metrics':metrics}
             if action=='job_status': return {'job':self.service.queue.get(request['run'])}
             if action=='cancel_job': self.service.cancel_job(request['run']); return {'cancel_requested':True}
             if action=='claim': return {'claim':self.service.claim(request['run'])}

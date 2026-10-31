@@ -20,6 +20,12 @@ for line in sys.stdin:
         tid=message['params']['threadId']; turn=os.environ.get('FAKE_TURN','turn-one')
         send({'id':ident,'result':{'turn':{'id':turn}}})
         if mode=='approval': send({'id':99,'method':'item/commandExecution/requestApproval','params':{}}); continue
+        if mode in ('tool','tool_exit'):
+            send({'method':'item/completed','params':{'threadId':tid,'turnId':turn,'item':{'type':'mcpToolCall','status':'completed','arguments':{'input':'synthetic-private'},'result':{'output':'synthetic-private'}}}})
+            if mode=='tool_exit': sys.exit(7)
+        if mode=='command_exit':
+            send({'method':'item/completed','params':{'threadId':tid,'turnId':turn,'item':{'type':'commandExecution','status':'completed','command':'synthetic-private-command','aggregatedOutput':'synthetic-private-output','exitCode':7}}})
+            sys.exit(7)
         send({'method':'item/agentMessage/delta','params':{'threadId':tid,'turnId':'other','delta':'wrong'}})
         Path(os.environ['FAKE_OUTPUT'],'draft.txt').write_text('synthetic output')
         delta='correct'

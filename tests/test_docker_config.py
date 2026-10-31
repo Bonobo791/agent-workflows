@@ -19,6 +19,29 @@ class ConfigTests(unittest.TestCase):
             config={'socket':'/private/engine.sock','image':IMAGE,'network':'none','job_root':str(job_root)}
             for change in ({'job_root':'/tmp'}, {'network':'host'}, {'network':'bridge'}, {'privileged':True}, {'cap_add':['SYS_ADMIN']}, {'socket':str(job_root/'engine.sock')}, {'image':'latest'}):
                 with self.subTest(change=change), self.assertRaises(ConfigError): DockerConfig({**config,**change},root)
+    def test_local_image_id_is_immutable_and_bound_to_policy(self):
+        from runner.docker_controller import DockerAssignments
+        with tempfile.TemporaryDirectory() as root:
+            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
+            image='sha256:'+'a'*64
+            config={'socket':'/private/engine.sock','image':image,'network':'none','job_root':str(jobs)}
+            first=DockerConfig(config,root)
+            self.assertNotEqual(first.policy_hash,DockerConfig({**config,'image':'sha256:'+'b'*64},root).policy_hash)
+            assignment=DockerAssignments(str(Path(root)/'state.db'),object(),image)
+            self.assertEqual(assignment.image,image); assignment.close()
+            with self.assertRaises(ConfigError): DockerConfig({**config,'image':'sha256:'+'a'*12},root)
+    def test_rootless_podman_is_explicit_and_policy_bound(self):
+        with tempfile.TemporaryDirectory() as root:
+            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
+            config={'socket':'/private/engine.sock','image':IMAGE,'network':'none','job_root':str(jobs)}
+            standard=DockerConfig(config,root)
+            local_image='sha256:'+'1'*64
+            podman=DockerConfig({**config,'image':local_image,'engine':'podman-rootless'},root)
+            self.assertEqual(podman.engine,'podman-rootless')
+            self.assertNotEqual(standard.policy_hash,podman.policy_hash)
+            with self.assertRaises(ConfigError): DockerConfig({**config,'engine':'podman-rootless'},root)
+            for change in ({'engine':'podman'}, {'engine':True}, {'engine':'podman-rootless','network':'aw-test'}):
+                with self.subTest(change=change), self.assertRaises(ConfigError): DockerConfig({**config,**change},root)
     def test_rejects_symlinked_job_root(self):
         with tempfile.TemporaryDirectory() as root:
             real=Path(root)/'real'; real.mkdir(mode=0o700); link=Path(root)/'jobs'; link.symlink_to(real)

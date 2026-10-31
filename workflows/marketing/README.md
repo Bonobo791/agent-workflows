@@ -1,13 +1,45 @@
 # Marketing workflow integration
 
-This isolated module provides pure gate functions and a proposed dependency graph. It does not perform model calls, fetch tasks, run media software, or persist state. The shared runner must register workflow-specific graphs, enforce their gates and artifact references, and supply verified task, skill, review and asset data. An It's a Plan adapter and runtime skill resolver are required; missing capabilities must block their stages. Follow `PROMPTS.md` and `stage-result.schema.json` for structured handoffs. These files contain no private skills or user content.
+This module provides marketing gates and prompts. The shared runner registers the
+marketing graph, persists claims and stage state, fetches a configured It's a
+Plan task, resolves role skills and dispatches isolated model sessions through
+trusted interfaces. The local entrypoint fixture exercises these paths with
+synthetic services. Follow `PROMPTS.md` and `stage-result.schema.json` for
+structured handoffs. No private skills or user content belong in this repository.
 
-The graph fans out after the approved canonical version. Assembly depends on all channel reviews and asset production reaching a **terminal** state, not necessarily passing: blocked or unsuitable channels must still appear in a review package. The runner needs per-edge or per-stage terminal-state dependencies, explicit `blocked`, `failed`, `awaiting_review`, `unsuitable`, and passed states, plus scoped artifact invalidation, revision limits, and separate fresh reviewer sessions. It must not label an incomplete package complete or allow automatic publication. Draft and review sessions must actually load the applicable skills, with missing skills blocking work; gate inputs must come from that resolver rather than model assertions. Each review finding needs evidence and adjudication. Page-type structural validation and claim checking still require implemented reviewer/validator adapters.
+The graph fans out after the approved canonical version. Assembly depends on all
+channel reviews and asset production reaching a **terminal** state, not
+necessarily passing: blocked or unsuitable channels still appear in the review
+package. The runner records stage outcomes, scoped invalidations, bounded
+attempts and fresh reviewer sessions; it does not automatically publish. Missing
+configured role skills block model work. Supplied skill hashes identify the
+instructions passed to a session, but do not independently prove model
+compliance. Markdown page headings are checked against explicitly configured,
+version-bound format rules; semantic claim checking still requires independent
+review.
+
+Reddit review can pass only with fresh, draft-bound community context and rule
+artifacts authenticated by an independent trusted authority. Missing evidence
+blocks the channel, an irrelevant community is unsuitable, and product mentions
+require affiliation disclosure. The evidence is rechecked before assembly.
+No real Reddit authority is configured by default; fixture callbacks do not
+establish current community rules or user permission to post.
 
 ## OpenFilm boundary
 
-No commands, provider configuration, or capability claims are assumed. A future supported adapter accepts a versioned asset brief and returns project and rendered-output references, a verification record, and a review-ready asset reference. The verifier must check that the output exists, is accessible and matches the brief, including dimensions, duration, content and rights as applicable. Evidence must be recorded independently of the model. `openfilm_status` blocks absent references or verification; it is a handoff guard, not file verification. Until a real adapter and verifier exist, media stays blocked, while text and other channel work can proceed. Do not run paid generation or publish automatically.
+The opt-in OpenFilm stage accepts a versioned brief, stores an editable project,
+validates rendered files and requires a separate subject-bound media review.
+`openfilm_status` remains a handoff guard, not file verification. The default
+worker does not configure the trusted builder, platform authority, isolated
+render supervisor or independent media reviewer, so media remains blocked until
+those boundaries are supplied. See [OPENFILM.md](OPENFILM.md) for tested and
+untested behavior. Paid generation and publication are not automatic.
 
 ## Remaining integration
 
-The current `runner.store.Store` hard-codes engineering stages and sequential advancement. It cannot yet execute this graph, represent blocked outcomes, parallel fan-out, terminal assembly, or stage-specific input-hash reuse. The parent/engineering owner must implement those capabilities and connect this module; no changes to shared infrastructure were made here. An integration test should drive a synthetic task through passed canonical review, fan-out, blocked media and review assembly, and verify a changed channel does not invalidate unaffected channels.
+The default setup still requires private role skills and format rules, trusted
+source and Reddit authorities, and an approved runtime and credential-delivery
+boundary. Tests use synthetic authorities; they do not verify real source
+accuracy, current community rules, container isolation or subscription access.
+See [implementation status](../../IMPLEMENTATION_STATUS.md) and
+[pilot setup](../../docs/PILOT_SETUP.md) before using real tasks or media.

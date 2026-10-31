@@ -1,8 +1,9 @@
 # Private pilot setup checklist (not yet deployable)
 
 This is a configuration plan, not evidence that credentials, host permissions,
-network policy or isolation have been provisioned or tested. Obtain the owner's
-specific approval before registration, sign-in, secret installation, host
+network policy or isolation have been provisioned or tested. The owner has
+authorized the existing local Codex sign-in. Obtain the owner's specific
+approval before new registration, secret installation, host
 changes, deployment, external writes or publication. The public source checkout
 must not contain private skills, credentials, user data or session histories.
 
@@ -12,13 +13,30 @@ must not contain private skills, credentials, user data or session histories.
   `CONTROL_SECRET_FILE` and `WORKFLOW_DATA_DIR`; choose a manual worker target
   and distinct incarnation using `WORKFLOW_LIFECYCLE_MODE=manual`,
   `MANUAL_WORKER_TARGET` and `MANUAL_WORKER_INCARNATION`.
+- For the local marketing runtime, set `WORKFLOW_EXECUTION_MODE=local` and
+  `LOCAL_RUNTIME_CONFIG_FILE` to an owner-only JSON file containing exactly
+  `codex_executable` (the absolute native Codex binary path), `codex_sha256`
+  (its SHA-256), and `disabled_integrations` (an object with `mcp_servers` and
+  `plugins` arrays naming every integration in the effective Codex config).
+  The worker checks the executable hash and runs synthetic sandbox and scope
+  preflights. It checks the effective configuration before each thread and
+  fails closed if any integration is still enabled. Workspaces are created
+  under the private state directory. Local engineering uses the separately
+  provisioned and explicitly bound checkout described below. Never put
+  credentials in this JSON file.
 - `WORKFLOW_TASK_CONFIG_FILE`: an owner-only JSON object with `run`, `workflow`,
   `project`, `number`, `ready_columns`, `completed_columns`,
   `blocker_direction`, `plan_endpoint`, `github_owner`, `github_repo` and
   `github_branch`; marketing also requires `task_format`. The Plan and GitHub
-  credentials belong in separate owner-only files referenced by `PLAN_TOKEN_FILE`
-  and `GITHUB_TOKEN_FILE`, not in the task JSON, model input or images.
-- `DOCKER_RUNTIME_CONFIG_FILE`: owner-only JSON with `socket`, digest-pinned
+  credential belongs in an owner-only file referenced by `PLAN_TOKEN_FILE`.
+  In local mode, omit `GITHUB_TOKEN_FILE` to use the existing `gh` sign-in for
+  read-only GitHub access; an explicit token file remains supported. Do not put
+  credentials in the task JSON, model input or images. When the local worker uses
+  the existing `gh` sign-in, it constructs an authority for push, draft and
+  readiness; each action still requires an exact, current approval. These local
+  mutation paths have only been tested against synthetic services and a local
+  Git remote, not a real GitHub write.
+- For the Docker runtime, `DOCKER_RUNTIME_CONFIG_FILE` is owner-only JSON with `socket`, digest-pinned
   `image`, restricted `network` and `job_root` equal to the private state
   directory's `jobs` child. The controller must be separate from jobs, and the
   Engine must enforce target-scoped authorization. Never mount its socket into
@@ -26,6 +44,39 @@ must not contain private skills, credentials, user data or session histories.
 - `WORKFLOW_ROLE_CONFIG_FILE`: owner-only JSON with absolute private `skill_roots`
   and `required_skills` for each stage, including `source_review` for marketing.
   Skill content is loaded at runtime and must not enter the public repository.
+- Optional `WORKFLOW_SOURCE_CONFIG_FILE`: owner-only JSON with exactly `urls`,
+  a list of individually approved HTTPS source URLs. The local source reviewer
+  fetches only those exact URLs, rejects private addresses and redirects, and
+  records private, time-limited snapshots bound to the reviewer turn. Fetching
+  establishes what was retrieved, not that a source is primary or a claim true;
+  the independent reviewer makes those judgments. Requests with invented paths
+  or queries are rejected even on an approved host.
+- Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
+  `sources`, a mapping from each supported channel to an object with its
+  exact official documentation `url` and the intended posting `surface`.
+  Configure a `platform_review` role skill as well. A fresh local reviewer
+  evaluates the requested asset against the fetched source; missing, ambiguous
+  or unsupported requirements block production. These judgments are not a
+  guarantee that a platform will accept the final media.
+- Experimental `WORKFLOW_AUDIO_CONFIG_FILE`: owner-only JSON with exactly
+  `runtime_root`, `python_root`, `model_root`, `fingerprint`, and `languages`.
+  The first three are separate canonical owner-controlled directories; the
+  runtime contains `faster-whisper` and `bin/python-sandbox`, a symlink directly
+  into the Python directory. The model directory contains a local compatible
+  model. Compute `fingerprint` with `python -m runner.audio_runtime` followed by
+  the three paths in that order. Map each supported channel to its explicit
+  two-letter speech language; automatic language detection is not used. Inspect
+  and approve the exact `audio_policy` from the private control socket. Changing
+  runtime files invalidates the policy. This experimental path runs offline and
+  supports only one audio stream. It supplies a transcript and signal levels,
+  not an audible quality or rights assessment; human listening is required.
+- Marketing page structure uses an owner-only `WORKFLOW_PAGE_RULE_CONFIG_FILE`
+  mapping each explicitly supported task format to ordered Markdown headings,
+  for example `{"guide":{"headings":[{"level":1,"text":"Title"}]}}`.
+  Supply the task's real requirements rather than this illustrative rule. The
+  optional `requirements-marketing.txt` dependency must be present in the
+  worker image. Missing rules or parser block canonical approval; the structural
+  check does not judge factual accuracy, visual presentation or completeness.
 - Engineering additionally needs an owner-provisioned checkout at
   `<state>/workspaces/<run>/repo`, a verified repository identity, full base
   commit, dedicated branch and matching owner; approve the exact workspace
@@ -34,11 +85,48 @@ must not contain private skills, credentials, user data or session histories.
   must approve its exact command policy hash. Commands run without a shell unless
   the approved argv explicitly invokes one, and command jobs use network mode
   `none`. The chosen image must contain the approved executable and a working
-  Docker log driver. Real host behavior and permissions remain unverified.
+  Docker log driver. The local runtime uses its scoped command backend and the
+  same explicit command-policy approval. A synthetic signed-in local run has
+  reached the human merge-review gate using a temporary Git remote and fake
+  GitHub; real GitHub mutation and production acceptance remain unverified.
 
 ## Missing trusted boundaries
 
-The worker cannot yet receive real Codex OAuth credentials. The intended broker
+For a local OpenFilm image, build the base with `podman build -f
+containers/openfilm/Dockerfile -t localhost/agent-workflows-openfilm-base:0.2.6 .`.
+Pass its full `sha256:` image ID as `OPENFILM_BASE_IMAGE` when building
+`Dockerfile.openfilm`, then configure the resulting full image ID. The base
+pins Playwright and npm package integrity, but Ubuntu package repositories can
+change; approve and test the resulting image ID rather than assuming rebuilds
+are byte-identical. The local image smoke test does not establish Engine API,
+workspace provenance, visual review or production policy verification.
+On an SELinux-enforcing rootless Podman host, select `engine` as
+`podman-rootless` in the render runtime configuration. This policy uses
+`keep-id` and private relabeling for the two job mounts; its terminal check
+requires the recorded image ID, namespace annotation and matching SELinux
+labels. An opt-in synthetic test exercised the actual adapter on this host.
+The standard local worker constructs the renderer when the Podman runtime
+configuration is present. Its policy check verifies the socket owner and
+access, rootless Podman, seccomp, SELinux, the pinned image ID and the renderer
+helper copied from a stopped container; it removes that exact probe container.
+The exact runtime, builder and render policies still require separate local
+approvals. A synthetic local Codex-to-PNG run passed using the installed
+OpenFilm manual and this verifier. A configured platform reviewer has passed a
+synthetic test against a live official source. With an `asset_review` role
+skill, the local worker can independently review PNG assets and their previews
+as attached images, bound to the completed reviewer turn and scope. Synthetic
+reviews passed a matching still and blocked one with missing approved text.
+For silent MP4s it extracts 12 timestamp-verified frames from the exact video
+in a bounded sandbox and reviews the resulting sheet. The package must state
+that this is sampled coverage and require full human playback. Experimental
+single-stream audio review can use an explicitly configured, fingerprinted
+offline transcription runtime and language per channel. Its machine transcript
+may be wrong and does not establish audio quality: the package must require full
+human playback and listening. Audio without that policy remains awaiting review;
+the full marketing workflow is not yet production-ready.
+
+The local managed-sign-in supervisor uses the existing Codex sign-in without copying its
+credentials. The separately deferred container OAuth broker
 must authenticate an exact run, container ID and assignment, fence replay and
 revocation, and deliver only a short-lived access token over protected IPC to a
 fixed launcher. Refresh credentials stay outside jobs; tokens must never appear
@@ -57,21 +145,26 @@ Recovery is bound to the exact backup generation; legacy interrupted backups
 without a generation remain fenced for inspection.
 No production verifier or control endpoint for that recovery is configured.
 
-Marketing also needs an explicitly configured trusted source-tool authority
-that independently authenticates exact reviewer-session tool receipts against
-the source register and the current draft. The repository currently supplies
-only the adapter interface and synthetic authority; it cannot make real source
-requests. It must reject missing, stale, untrusted or unavailable receipts.
-Source judgments are review evidence, not guarantees of completeness or truth.
+For local scope recovery, first request `manual_stop` for the run. The returned
+scope list identifies unresolved units. The owner can call `stop_local_scope`
+with that run and unit: it binds an observed active scope and verifies termination.
+An unobserved launch or interrupted stop remains fenced, as does any unresolved
+engineering workspace claim. Operator stop confirmation still requires the exact
+incarnation and termination attestation.
 
-The engineering PR bridge can construct a claim-scoped authority using the exact-container Git push adapter and a read-only GitHub observer, but no real authority is configured by the shipped worker. A deployment needs separately approved Git credential delivery to the isolated push process, a restricted GitHub network, and independently verified host policy. A matching remote state after the exact client exits establishes current state, not which request caused it or whether an upstream request is still in flight. Negative and conflicting outcomes remain fenced. Draft and readiness use a fixed non-model container without workspace or session mounts. Its controller-owned Docker attach stdin carries a short-lived scoped credential in memory; a separately configured trusted issuer must bind it to the exact run, action, assignment and container. No real issuer is supplied. The Docker daemon and transport must be trusted and independently secured; no host behavior has been validated. Review host and daemon authorization before enabling any of these operations. Never automatically merge,
+Marketing source review requires either the configured local snapshot authority
+or an independently authenticated source-tool authority. Missing, stale or
+unavailable evidence blocks approval. The local snapshot path has focused tests
+and a real public fetch; full marketing-task validation remains outstanding.
+
+The engineering PR bridge can construct a claim-scoped local authority from the existing `gh` sign-in or a separate exact-container authority. Local push, draft and readiness require individual exact approvals and have only synthetic write tests. A matching remote state after the exact client exits establishes current state, not which request caused it or whether an upstream request is still in flight. Negative and conflicting outcomes remain fenced. The deferred Docker path requires a separately configured scoped credential issuer, restricted GitHub network, and verified daemon policy. Never automatically merge,
 deploy or publish social content.
 
 ## Before a real one-task smoke run
 
-After the missing implementations and independent review, the owner separately
-approves OAuth registration/sign-in, secure credential and private volume
-installation, the precise host/network/isolation policy, and deployment. Then
+After the missing implementations and independent review, establish the precise
+local host/network/isolation policy. New OAuth registration, credential or volume
+installation, and deployment need their own authorization. Then
 verify the pinned app-server version and requested Terra-medium model with a
 real authorized turn, confirm session resume and container stop/fencing, and run
 one expressly approved task. Model catalog discovery is not an entitlement

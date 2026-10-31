@@ -8,6 +8,7 @@ STAGE_DEPENDENCIES = {
     **{f'{channel}_draft': ('freeze',) for channel in CHANNELS},
     **{f'{channel}_review': (f'{channel}_draft',) for channel in CHANNELS},
     'asset_brief': ('freeze',), 'asset_production': ('asset_brief',),
+    'instagram_review': ('instagram_draft', 'asset_production'),
     'assembly': tuple(f'{channel}_review' for channel in CHANNELS) + ('asset_production',),
 }
 

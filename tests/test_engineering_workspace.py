@@ -37,6 +37,55 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         db=self.registry.db
         db.execute('INSERT INTO docker_assignments VALUES(?,?,?,?)',(a,'id','terminated','fixture')); db.execute('INSERT INTO docker_terminal_evidence VALUES(?,?,?,?)',(a,'id','exited',1))
         self.registry.release('run-1',a); self.assertEqual(self.registry.claim('run-1',b,self.policy),path)
+    def test_local_claim_requires_exact_terminal_scope(self):
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args)); assignment='job-'+'a'*48
+        self.registry.claim('run-1',assignment,self.policy)
+        backend=Backend();scopes=LocalScopes(str(self.root/'state.db'),backend)
+        try:
+            unit=scopes.reserve('run-1');backend.unit=unit;scopes.bind('run-1',unit)
+            self.registry.bind_local_scope('run-1',assignment,unit)
+            with self.assertRaises(WorkspaceError): self.registry.release_local('run-1',assignment,unit)
+            self.assertTrue(scopes.stop('run-1',unit))
+            with self.assertRaises(WorkspaceError): self.registry.release_local('run-1',assignment,'wrong.scope')
+            self.registry.release_local('run-1',assignment,unit)
+            self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(None,))
+        finally:scopes.close()
+    def test_local_engineering_binding_claims_exact_checkout_until_scope_stops(self):
+        import hashlib
+        from unittest.mock import patch
+        from runner.local_config import local_supervisor_factory
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        binary=self.root/'codex';binary.write_bytes(b'synthetic');binary.chmod(0o700)
+        config={'codex_executable':str(binary),'codex_sha256':hashlib.sha256(b'synthetic').hexdigest(),'disabled_integrations':{'mcp_servers':[],'plugins':[]}}
+        service=self.service;supervisor=local_supervisor_factory(config,{'HOME':str(self.root)},str(self.root))(service)
+        service.model_supervisor=supervisor;supervisor.fence=lambda _:True;backend=Backend();supervisor.backend=backend
+        service.create('run-1','engineering','task');service.enqueue('run-1')
+        queue=self.control.handle('x'*40,{'action':'manual_claim'})['claim'];claim=self.control.handle('x'*40,{'action':'claim','run':'run-1'})['claim']
+        request={'action':'engineering_workspace_binding','run':'run-1','queue_claim':queue['token'],'graph_claim':claim,'base':self.base}
+        proposal=self.control.handle('x'*40,request);request.update(action='bind_engineering_workspace',binding_hash=proposal['binding_hash'])
+        self.assertEqual(self.control.handle('x'*40,request)['path'],str(self.repo))
+        class Handle:
+            output_dir=str(self.repo);output_path_prefix=str(self.repo)
+            def __init__(handle,unit):handle.unit=unit
+            def finish(handle):
+                scopes=LocalScopes(str(self.root/'state.db'),backend)
+                try:return scopes.stop('run-1',handle.unit)
+                finally:scopes.close()
+            def cancel(handle):return handle.finish()
+        def start(db,run,workspace,executable,environment,backend_arg,fence,integrations,**kwargs):
+            self.assertEqual(workspace,str(self.repo));self.assertEqual(kwargs,{'allow_git':True})
+            scopes=LocalScopes(db,backend)
+            try:unit=scopes.reserve(run);backend.unit=unit;scopes.bind(run,unit)
+            finally:scopes.close()
+            return Handle(unit)
+        with patch('runner.local_supervisor.sandbox_preflight',return_value=True),patch('runner.local_supervisor.scope_preflight',return_value=True),patch('runner.local_supervisor.start_local_process',side_effect=start):
+            handle=supervisor.start_execution('run-1','implement',None,{},'model')
+            self.assertIsNotNone(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone()[0])
+            handle.bind_session('thread-1');self.assertTrue(handle.finish())
+            self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(None,))
     def test_control_binding_and_fake_engine_replacement_mount(self):
         class Engine:
             def __init__(self): self.items={}; self.mounts=[]

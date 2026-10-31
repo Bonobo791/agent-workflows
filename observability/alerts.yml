@@ -1,0 +1,51 @@
+groups:
+  - name: agent-workflows
+    rules:
+      - alert: WorkflowUncertainExecution
+        expr: sum(workflow_jobs{status="uncertain"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow execution requires inspection
+          description: Inspect private worker state and verify termination before retrying.
+      - alert: WorkflowExpiredLease
+        expr: workflow_expired_leases > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow lease has expired
+          description: Inspect the worker and reconcile its state before resuming work.
+      - alert: WorkflowQuotaPaused
+        expr: sum(workflow_quota_pauses) > 0
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: A workflow is paused for quota
+          description: Check the private quota record and resume only when the provider permits it.
+      - alert: WorkflowAwaitingApproval
+        expr: sum(workflow_stages{status="awaiting_approval"}) > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: Workflow approval is waiting
+          description: Review the exact pending action in the private control plane.
+      - alert: WorkflowMetricsStale
+        expr: time() - workflow_snapshot_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow metrics snapshot is stale
+          description: Inspect the private collector and its last successful snapshot.
+      - alert: WorkflowMetricsMissing
+        expr: absent(workflow_snapshot_timestamp_seconds)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow metrics are unavailable
+          description: Check collector and scrape configuration; absence is not zero activity.

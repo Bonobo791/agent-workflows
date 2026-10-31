@@ -1,0 +1,111 @@
+"""Run an approved command in a managed local sandbox and scoped process tree."""
+import base64
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+import subprocess
+import time
+from runner.adapter import managed_app_server_spec
+from runner.local_scope import LocalScopes
+from runner.process_transport import ProcessTransport
+
+class LocalCommandError(RuntimeError): pass
+
+def run_scoped_sandbox(supervisor,run,workspace,argv,deadline,output_limit,on_reserved,*,output_dir=None,on_started=None,read_dirs=None):
+    s=supervisor
+    if read_dirs is not None:
+        try:
+            work=Path(workspace)
+            if not isinstance(read_dirs,list) or not work.is_absolute() or any(work.is_relative_to(Path(root)) or Path(root).is_relative_to(work) for root in read_dirs): raise ValueError()
+        except (TypeError,ValueError): raise LocalCommandError('read roots must be separate from workspace') from None
+    app,child_env=managed_app_server_spec(s.executable,s.environment,disabled_integrations=s.disabled_integrations,output_dir=output_dir,read_dirs=read_dirs)
+    sandbox=[app[0],'sandbox','-C',workspace,'-P','workflow_local',*app[4:],'--',*argv]
+    return _run_scoped(s,run,workspace,sandbox,child_env,deadline,output_limit,on_reserved,on_started)
+
+def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved,on_started=None,*,input_data=None):
+    manager={k:s.environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in s.environment};manager['PATH']='/usr/bin:/bin'
+    scopes=LocalScopes(s.db,s.backend)
+    try: unit=scopes.reserve(run)
+    finally:scopes.close()
+    on_reserved(unit)
+    relay=str(Path(__file__).with_name('local_command_child.py').resolve(strict=True))
+    command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']+[k+'='+v for k,v in child_env.items()]+['/usr/bin/python3','-I',relay]
+    process=None; stopped=False
+    try:
+        process=subprocess.Popen(command,cwd=workspace,env=manager,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
+        transport=ProcessTransport(process,deadline,lambda:s.fence(run) is not True)
+        if transport.receive()!={'ready':True}: raise LocalCommandError('scope relay unavailable')
+        scopes=LocalScopes(s.db,s.backend)
+        try:scopes.bind(run,unit)
+        finally:scopes.close()
+        if on_started is not None:on_started(unit)
+        if s.fence(run) is not True: raise LocalCommandError('run fence unavailable')
+        remaining=int(deadline-time.monotonic())-1
+        if remaining<1: raise LocalCommandError('command deadline unavailable')
+        request={'argv':argv,'cwd':workspace,'environment':child_env,'timeout':remaining,'output_limit':output_limit}
+        if input_data is not None:
+            if not isinstance(input_data,bytes) or len(input_data)>32768:raise LocalCommandError('command input invalid')
+            request['stdin_b64']=base64.b64encode(input_data).decode('ascii')
+        transport.send(request)
+        out=transport.receive()
+        if set(out)!={'stdout'}: raise LocalCommandError('command result unavailable')
+        err=transport.receive()
+        if set(err)!={'stderr'}: raise LocalCommandError('command result unavailable')
+        result=transport.receive()
+        if set(result)!={'exit_code'} or type(result['exit_code']) is not int: raise LocalCommandError('command result unavailable')
+        stdout=base64.b64decode(out['stdout'],validate=True);stderr=base64.b64decode(err['stderr'],validate=True)
+        if len(stdout)>output_limit or len(stderr)>output_limit or s.fence(run) is not True: raise LocalCommandError('command evidence unavailable')
+        scopes=LocalScopes(s.db,s.backend)
+        try: stopped=scopes.stop(run,unit) is True
+        finally:scopes.close()
+        if not stopped: raise LocalCommandError('scope termination unavailable')
+        process.wait(timeout=max(.01,deadline-time.monotonic()))
+        return {'outcome':'exited','exit_code':result['exit_code'],'stdout':stdout,'stderr':stderr,'unit':unit}
+    except Exception: raise LocalCommandError('local command outcome uncertain') from None
+    finally:
+        if process is not None:
+            if not stopped:
+                try:
+                    scopes=LocalScopes(s.db,s.backend)
+                    try:scopes.stop(run,unit)
+                    finally:scopes.close()
+                except Exception:pass
+            for stream in (process.stdin,process.stdout):
+                if stream is not None:stream.close()
+
+class LocalCommandBackend:
+    def __init__(self,supervisor):
+        self.supervisor=supervisor
+        db=self._db()
+        try: db.execute('CREATE TABLE IF NOT EXISTS local_command_scopes(assignment TEXT PRIMARY KEY,run TEXT NOT NULL,unit TEXT NOT NULL UNIQUE,exit_code INTEGER)')
+        finally:db.close()
+    def _db(self): return sqlite3.connect(self.supervisor.db,timeout=10,isolation_level=None)
+    def verify_terminal(self,assignment,run,exit_code):
+        if type(exit_code) is not int:return False
+        db=self._db()
+        try:return bool(db.execute("SELECT 1 FROM local_command_scopes c JOIN local_scopes s ON s.run=c.run AND s.unit=c.unit WHERE c.assignment=? AND c.run=? AND c.exit_code=? AND s.state='terminated'",(assignment,run,exit_code)).fetchone())
+        finally:db.close()
+    def execute(self,*,assignment,run,workspace,commit,argv,timeout,output_limit):
+        s=self.supervisor; deadline=time.monotonic()+timeout
+        if not s.preflight() or s.fence(run) is not True: raise LocalCommandError('local runtime unavailable')
+        spec={'argv':argv,'timeout_seconds':timeout,'output_limit':output_limit}
+        policy=hashlib.sha256(json.dumps(spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        db=self._db()
+        try:
+            row=db.execute('SELECT run,commit_id,policy_hash,state FROM supervised_commands WHERE id=?',(assignment,)).fetchone()
+            bound=db.execute('SELECT path,policy,assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
+            approved=db.execute("SELECT 1 FROM external_actions WHERE run='controller' AND action='command_policy' AND version=? AND status='approved'",(policy,)).fetchone()
+            if row!=(run,commit,policy,'uncertain') or bound!=(workspace,s.policy_hash,assignment) or not approved: raise LocalCommandError('exact command and workspace approval required')
+        finally:db.close()
+        def record(unit):
+            db=self._db()
+            try:db.execute('INSERT INTO local_command_scopes(assignment,run,unit) VALUES(?,?,?)',(assignment,run,unit))
+            finally:db.close()
+        result=run_scoped_sandbox(s,run,workspace,argv,deadline,output_limit,record)
+        unit=result.pop('unit')
+        db=self._db()
+        try:
+            if db.execute('UPDATE local_command_scopes SET exit_code=? WHERE assignment=? AND run=? AND unit=? AND exit_code IS NULL',(result['exit_code'],assignment,run,unit)).rowcount!=1: raise LocalCommandError('command scope binding changed')
+        finally:db.close()
+        return result

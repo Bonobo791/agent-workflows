@@ -8,6 +8,7 @@ import hashlib
 import re
 import os
 import stat
+import time
 from pathlib import Path
 from runner.actions import ActionLedger, ActionConflict
 from runner.artifacts import ArtifactStore
@@ -27,12 +28,21 @@ class Service:
         self.docker_assignments=None
         self.docker_supervisor=None
         self.docker_executor=None
+        self.model_supervisor=None
+        self.model_executor=None
         self.session_store=None
         self.model_policy=None
         self.stage_dispatcher=None
         self.source_verifier=None
         self.source_tool_authority=None
+        self.source_snapshots=None
         self.source_reviewer=None
+        self.openfilm_backend=None
+        self.openfilm_reviewer=None
+        self.audio_transcriber=None
+        self.openfilm_platform_authority=None
+        self.reddit_context_authority=None
+        self.page_rules=None
         self.command_supervisor=None
         self.human_review=None
         self.pr_authority=None
@@ -95,6 +105,9 @@ class Service:
         if isinstance(self.lifecycle,ManualLifecycle) and self.docker_supervisor is not None:
             rows=self.graph.db.execute("SELECT m.assignment,a.container_id,COALESCE(a.state,'unresolved') FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated') ORDER BY m.assignment",(run,)).fetchall()
             result['docker_assignments']=[{'assignment':row[0],'container_id':row[1],'state':row[2]} for row in rows]
+        if isinstance(self.lifecycle,ManualLifecycle) and self.model_supervisor is not None:
+            rows=self.graph.db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state!='terminated' ORDER BY unit",(run,)).fetchall()
+            result['local_scopes']=[{'unit':row[0],'state':row[1]} for row in rows]
         return result
     def confirm_lifecycle_stop(self,run,evidence):
         if self.lifecycle is None: raise ServiceError('lifecycle supervisor unavailable')
@@ -114,6 +127,20 @@ class Service:
         except Exception:
             db.execute('ROLLBACK'); raise
         return self.lifecycle.status(run)
+    def stop_local_scope(self,run,unit):
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.local_scope import LocalScopes
+        if not isinstance(self.lifecycle,ManualLifecycle) or self.model_supervisor is None: raise ServiceError('local manual supervisor unavailable')
+        state=self.lifecycle.status(run)
+        graph=self.graph.db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()
+        job=self.graph.db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()
+        if state['incarnation']!=self.lifecycle.incarnation or state['status']!='pending' or graph!=('cancelled',) or not job or job[0] not in ('cancelling','uncertain'): raise ServiceError('run must be fenced before stopping its scope')
+        scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
+        try:
+            if scopes.state(run,unit)=='starting': scopes.bind(run,unit)
+            scopes.stop(run,unit)
+            return {'unit':unit,'state':'terminated'}
+        finally: scopes.close()
     def _cancel(self,run,token=None,require_job=False):
         db=self.graph.db; db.execute('BEGIN IMMEDIATE')
         try:
@@ -135,6 +162,19 @@ class Service:
         from runner.manual_lifecycle import ManualLifecycle
         if not isinstance(self.lifecycle,ManualLifecycle): raise ServiceError('manual lifecycle unavailable')
         return self.request_lifecycle_stop(run)
+    def fence_execution_detached(self,run):
+        """Fence from a worker thread using connections created in that thread."""
+        from runner.manual_lifecycle import ManualLifecycle
+        if not isinstance(self.lifecycle,ManualLifecycle): raise ServiceError('manual lifecycle unavailable')
+        lifecycle=ManualLifecycle(self.state_db_path,self.lifecycle.target['manual_target'],self.lifecycle.incarnation)
+        service=None
+        try:
+            service=Service(Path(self.state_db_path).parent,lifecycle=lifecycle)
+            service.model_supervisor=self.model_supervisor; service.docker_supervisor=self.docker_supervisor
+            return service.request_lifecycle_stop(run)
+        finally:
+            lifecycle.close()
+            if service is not None: service.close()
     def cancel(self,run,token): self._cancel(run,token=token)
     def verify_terminal(self,run):
         try:
@@ -166,6 +206,12 @@ class Service:
                         current=self.graph.get(run,stage); included=assembly['stages'].get(stage)
                         if not current or not included or any(included.get(key)!=current[key] for key in ('status','version','revision')): return False
                     for review_stage in ('canonical_review',*[channel+'_review' for channel in CHANNELS]): dispatcher._verify_recorded_review(run,review_stage)
+                    asset=self.graph.get(run,'asset_production')
+                    asset_record=json.loads(self.artifacts.get(asset['version']))
+                    if asset['status']=='passed' and 'manifest_ref' not in asset_record: return False
+                    if 'manifest_ref' in asset_record:
+                        from runner.openfilm_review import verify_evidence
+                        if asset_record.get('status')!=asset['status'] or not verify_evidence(self,run,asset_record): return False
             inspector=GraphRunner(self.graph,self.artifacts,lambda *_:None,lambda *_:False,skill_resolver=self.skill_resolver,required_skills=self.required_skills)
             for stage,version in self.graph.db.execute('SELECT stage,version FROM graph_stages WHERE run=?',(run,)):
                 record=inspector._validate_artifact_graph(version)
@@ -200,6 +246,14 @@ class Service:
             if run!='controller' or self.docker_supervisor is None or self.docker_supervisor.config is None or version!=self.docker_supervisor.config.policy_hash: raise ServiceError('Docker policy mismatch')
         elif action=='command_policy':
             if run!='controller' or self.command_supervisor is None or not self.command_supervisor.policy_hash or version!=self.command_supervisor.policy_hash: raise ServiceError('command policy mismatch')
+        elif action=='openfilm_policy':
+            if run!='controller' or self.openfilm_backend is None or version!=self.openfilm_backend.policy_hash or self.openfilm_backend._policy()!=version: raise ServiceError('OpenFilm policy mismatch')
+        elif action=='openfilm_builder_policy':
+            builder=getattr(self.openfilm_backend,'builder',None)
+            if run!='controller' or builder is None or version!=getattr(builder,'policy_hash',None) or not callable(getattr(builder,'_policy',None)) or builder._policy()!=version: raise ServiceError('OpenFilm builder policy mismatch')
+        elif action=='audio_policy':
+            transcriber=self.audio_transcriber
+            if run!='controller' or transcriber is None or version!=transcriber.policy_hash or transcriber._current() is not True: raise ServiceError('audio policy mismatch')
         elif action=='docker_kill':
             if self.docker_supervisor is None or self.docker_supervisor.config is None or version!=self.docker_supervisor.escalation_version(run,self.docker_supervisor.config.policy_hash): raise ServiceError('Docker escalation mismatch')
         elif action=='freeze':
@@ -276,6 +330,10 @@ class Service:
                             for output in artifact.get('outputs',[]): contents.append(self.artifacts.get(output).decode('utf-8'))
                         except Exception: raise ServiceError('review content unavailable') from None
                         summary[name]={**entry,'artifact':artifact,'contents':contents}
+                        if name=='asset_production' and 'manifest_ref' in artifact:
+                            from runner.openfilm_review import verify_evidence
+                            if entry['status']!=artifact.get('status') or not verify_evidence(self,run,artifact): raise ServiceError('asset review evidence unavailable')
+                            summary[name]['asset_manifest']=json.loads(self.artifacts.get(artifact['manifest_ref']))
                         if name=='brief' and artifact.get('_source_verification'):
                             try: summary[name]['source_verification']=json.loads(self.artifacts.get(artifact['_source_verification']))
                             except Exception: raise ServiceError('source verification unavailable') from None
@@ -347,7 +405,7 @@ class Service:
                     snapshot=self.graph.prepare(run,stage,token)
                     if snapshot['dependencies'].get('canonical_review') != prior['revision']: raise ServiceError('review changed')
                     if db.execute("SELECT 1 FROM external_actions WHERE run=? AND action='freeze' AND status='uncertain'",(run,)).fetchone(): raise ServiceError('prior approval outcome unresolved')
-                    cur=db.execute("UPDATE external_actions SET status='uncertain' WHERE run=? AND action='freeze' AND version=? AND status='approved'",(run,version))
+                    cur=db.execute("UPDATE external_actions SET status='uncertain',updated=? WHERE run=? AND action='freeze' AND version=? AND status='approved'",(time.time(),run,version))
                     if not cur.rowcount: raise ServiceError('exact approval required')
                     db.execute('COMMIT')
                 except Exception:

@@ -137,7 +137,7 @@ class DockerAssignments:
     """Persist launch intent before contacting Engine; ambiguous calls stay fenced."""
     def __init__(self,path,engine,image):
         import sqlite3
-        if not isinstance(image,str) or not re.fullmatch(r'[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}',image): raise DockerError('immutable image digest required')
+        if not isinstance(image,str) or not re.fullmatch(r'(?:[A-Za-z0-9._/:@-]+@)?sha256:[0-9a-f]{64}',image): raise DockerError('immutable image digest required')
         self.engine,self.image=engine,image
         self.db=sqlite3.connect(path,timeout=10,isolation_level=None)
         self.db.execute('CREATE TABLE IF NOT EXISTS docker_assignments(run TEXT PRIMARY KEY, container_id TEXT UNIQUE, state TEXT NOT NULL, image TEXT NOT NULL)')
@@ -160,12 +160,13 @@ class DockerAssignments:
             self.db.execute("UPDATE docker_assignments SET container_id=?,state='created' WHERE run=? AND state='creating'",(cid,run))
             return cid
         except Exception: raise DockerError('create outcome uncertain; inspect before retry') from None
-    def create_disposable(self,run,config,mounts,session=None,workspace_binding=None,command=None,push=None,mutation=None):
+    def create_disposable(self,run,config,mounts,session=None,workspace_binding=None,command=None,push=None,mutation=None,openfilm=None):
         from runner.docker_config import DockerConfig
         from runner.adapter import app_server_command
         from pathlib import Path
         import os, stat
         if not isinstance(config,DockerConfig) or config.image!=self.image or not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}',run) or run in ('.','..'): raise DockerError('invalid disposable assignment')
+        if config.engine=='podman-rootless' and openfilm is None: raise DockerError('rootless Podman policy is restricted to OpenFilm rendering')
         expected={'workspace':str(config.job_root/run/'workspace'),'output':str(config.job_root/run/'output')}
         if workspace_binding is not None:
             from runner.engineering_workspace import EngineeringWorkspace
@@ -183,6 +184,14 @@ class DockerAssignments:
         exists=self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone()
         role=self.db.execute('SELECT role FROM docker_execution_map WHERE assignment=?',(run,)).fetchone() if exists else None
         if role==('pr_mutation',) and mutation is None: raise DockerError('mutation specification required')
+        if role==('openfilm_render',) and openfilm is None: raise DockerError('render specification required')
+        if openfilm is not None:
+            if os.geteuid()==0: raise DockerError('render controller must be unprivileged')
+            if session is not None or workspace_binding is not None or command is not None or push is not None or mutation is not None or not isinstance(openfilm,dict) or set(openfilm)!={'task','attempt_id','policy_hash'} or role!=('openfilm_render',): raise DockerError('invalid render assignment')
+            row=self.db.execute("SELECT task_run,attempt_id,policy_hash,state FROM openfilm_render_jobs WHERE assignment=?",(run,)).fetchone()
+            mapping=self.db.execute('SELECT task_run,role FROM docker_execution_map WHERE assignment=?',(run,)).fetchone()
+            approved=self.db.execute("SELECT 1 FROM external_actions WHERE run='controller' AND action='openfilm_policy' AND version=? AND status='approved'",(openfilm['policy_hash'],)).fetchone()
+            if row!=(openfilm['task'],openfilm['attempt_id'],openfilm['policy_hash'],'launching') or mapping!=(openfilm['task'],'openfilm_render') or not approved: raise DockerError('approved render binding unavailable')
         if mounts!=expected: raise DockerError('unexpected mount paths')
         session_source=None
         if session is not None:
@@ -209,6 +218,17 @@ class DockerAssignments:
         spec={'Image':self.image,'Labels':{'agent-workflows.run':run},'Cmd':app_server_command(),'WorkingDir':'/workspace','OpenStdin':True,'AttachStdin':True,'AttachStdout':True,'AttachStderr':True,'Tty':False,
               'HostConfig':{'NetworkMode':config.network,'ReadonlyRootfs':True,'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges'],'RestartPolicy':{'Name':'no'},'AutoRemove':False,
                             'Mounts':[{'Type':'bind','Source':expected['workspace'],'Target':'/workspace'},{'Type':'bind','Source':expected['output'],'Target':'/output'}]}}
+        if openfilm is not None:
+            spec['Entrypoint']=['node','/app/runner/openfilm_render.mjs']; spec['Cmd']=[]
+            spec['User']=str(os.geteuid())+':'+str(os.getegid())
+            spec['OpenStdin']=False; spec['AttachStdin']=False
+            spec['Env']=['OPENFILM_NO_BROWSER=1','OPENFILM_NO_UPDATE_CHECK=1','OPENFILM_HOME=/tmp/openfilm','PLAYWRIGHT_BROWSERS_PATH=/opt/openfilm-browsers']
+            spec['HostConfig']['NetworkMode']='none'
+            spec['HostConfig']['Tmpfs']={'/tmp':'rw,nosuid,nodev,size=1073741824'}
+            if config.engine=='podman-rootless':
+                spec['HostConfig']['UsernsMode']='keep-id'
+                del spec['HostConfig']['Mounts']
+                spec['HostConfig']['Binds']=[expected['workspace']+':/workspace:rw,Z',expected['output']+':/output:rw,Z']
         if command is not None:
             import hashlib, json
             if session is not None or workspace_binding is None or workspace_binding['role']!='test' or not isinstance(command,dict) or set(command)!={'argv','timeout_seconds','output_limit'}: raise DockerError('invalid command assignment')

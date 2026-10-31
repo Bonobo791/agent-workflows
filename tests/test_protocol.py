@@ -30,6 +30,26 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(RateLimited): AppServer(t).run('prompt','model')
 
 class BeforeTurnFenceTests(unittest.TestCase):
+    def test_config_guard_blocks_new_and_resumed_threads(self):
+        for session in (None,'existing'):
+            transport=FakeTransport([{'id':1,'result':{}},{'id':2,'result':{'config':{'unsafe':True}}}])
+            def guard(request):
+                request('config/read',{'cwd':'/synthetic','includeLayers':False})
+                return False
+            with self.subTest(session=session), self.assertRaises(ProtocolError):
+                AppServer(transport,before_thread=guard).run('p','m',thread_id=session)
+            self.assertEqual([m['method'] for m in transport.sent],['initialize','initialized','config/read'])
+    def test_config_guard_runs_before_thread_start(self):
+        t=FakeTransport([{'id':1,'result':{}},{'id':2,'result':{'config':{}}},{'id':3,'result':{'thread':{'id':'t'}}},{'id':4,'result':{'turn':{'id':'x'}}},{'method':'turn/completed','params':{'threadId':'t','turn':{'id':'x','status':'completed'}}}])
+        def guard(request): return request('config/read',{'cwd':'/synthetic','includeLayers':False})=={'config':{}}
+        self.assertEqual(AppServer(t,before_thread=guard).run('p','m'),'t')
+        self.assertEqual([m['method'] for m in t.sent],['initialize','initialized','config/read','thread/start','turn/start'])
+    def test_config_guard_blocks_model_discovery(self):
+        t=FakeTransport([{'id':1,'result':{}}])
+        class Policy:
+            def discover(self,request): raise AssertionError('discovery must be blocked')
+        with self.assertRaises(ProtocolError): AppServer(t,before_thread=lambda request:False).discover_model(Policy())
+        self.assertEqual([m['method'] for m in t.sent],['initialize','initialized'])
     def test_turn_is_not_sent_after_fence_fails(self):
         from runner.protocol import AppServer, ProtocolError
         class Transport:
@@ -42,6 +62,11 @@ class BeforeTurnFenceTests(unittest.TestCase):
         self.assertFalse(any(message.get('method')=='turn/start' for message in transport.sent))
 
 class ModelEffortTests(unittest.TestCase):
+    def test_turn_sends_verified_local_images_as_distinct_inputs(self):
+        transport=FakeTransport([{'id':1,'result':{}},{'id':2,'result':{'thread':{'id':'t'}}},{'id':3,'result':{'turn':{'id':'turn'}}},{'method':'turn/completed','params':{'threadId':'t','turn':{'id':'turn','status':'completed'}}}])
+        AppServer(transport).run('inspect','m',images=['/private/asset.png','/private/preview.png'])
+        turn=next(message for message in transport.sent if message.get('method')=='turn/start')
+        self.assertEqual(turn['params']['input'],[{'type':'text','text':'inspect'},{'type':'localImage','path':'/private/asset.png','detail':'original'},{'type':'localImage','path':'/private/preview.png','detail':'original'}])
     def test_turn_sends_discovered_model_and_medium_effort(self):
         from runner.protocol import AppServer
         class Transport:

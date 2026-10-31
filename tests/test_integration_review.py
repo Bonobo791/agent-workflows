@@ -48,6 +48,8 @@ class MarketingIntegrationReview(unittest.TestCase):
         with self.assertRaises(ServiceError): self.s.live_execute()
     def test_blocked_channel_cannot_be_assembled_via_service(self):
         self.freeze()
+        self.s.complete('r','asset_brief',self.token,{'output':'brief'})
+        self.assertEqual(self.s.complete('r','asset_production',self.token,{}),'blocked')
         self.s.complete('r','instagram_draft',self.token,{'output':'draft','session_id':'writer'})
         self.assertEqual(self.s.complete('r','instagram_review',self.token,{'output':'review','session_id':'reviewer'}),'blocked')
         self.assertEqual(self.s.graph.get('r','instagram_review')['status'],'blocked')

@@ -4,6 +4,21 @@ from runner.control import ControlPlane, ControlError
 from runner.service import Service
 
 class ControlTests(unittest.TestCase):
+    def test_metrics_are_authenticated_and_failure_does_not_change_workflow(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); control=ControlPlane(service,'synthetic-secret')
+            try:
+                service.create('private-run','engineering','private-task'); service.enqueue('private-run')
+                with self.assertRaises(ControlError): control.handle('wrong',{'action':'metrics'})
+                result=control.handle('synthetic-secret',{'action':'metrics'})['metrics']
+                self.assertIn('workflow_jobs{status="queued"} 1',result)
+                self.assertNotIn('private',result)
+                with patch('runner.metrics.snapshot',side_effect=RuntimeError('private failure')):
+                    with self.assertRaisesRegex(ControlError,'request failed'): control.handle('synthetic-secret',{'action':'metrics'})
+                self.assertEqual(service.queue.get('private-run')['status'],'queued')
+            finally: service.close()
+
     def test_authentication_and_default_no_evidence_injection(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root); control=ControlPlane(service,'synthetic-secret')

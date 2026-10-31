@@ -36,7 +36,42 @@ class SingleTaskTests(unittest.TestCase):
             self.assertEqual(json.loads(service.artifacts.get(value['artifact_ref']))['task_id'],'DEMO-1')
             self.assertEqual(service.queue.get('run1')['status'],'queued')
             with self.assertRaises(ControlError): control.handle('secret',{**req,'run':'run2'})
+            rows=service.graph.db.execute('SELECT run,status,reasons,artifact_ref FROM task_admission_audit ORDER BY id').fetchall()
+            self.assertEqual(rows,[('run1','admitted','[]',value['artifact_ref']),('run2','rejected','["task already admitted"]',None)])
             service.close()
+    def test_audit_failure_prevents_task_admission(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); plan=FakePlan()
+            intake=SingleTaskIntake(service,plan,lambda *_:[],{'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'})
+            try:
+                service.graph.db.execute("CREATE TRIGGER reject_admission_audit BEFORE INSERT ON task_admission_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+                with self.assertRaises(sqlite3.IntegrityError): intake.submit('run','engineering','DEMO',1)
+                self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_runs WHERE id='run'").fetchone())
+                self.assertIsNone(service.queue.get('run'))
+            finally: service.close()
+
+    def test_owner_block_is_recorded_without_owner_identity(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); plan=FakePlan(); plan.owner='private-owner'
+            intake=SingleTaskIntake(service,plan,lambda *_:[],{'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'})
+            try:
+                with self.assertRaises(Exception): intake.submit('run','engineering','DEMO',1)
+                row=service.graph.db.execute('SELECT status,reasons FROM task_admission_audit').fetchone()
+                self.assertEqual((row[0],json.loads(row[1])),('blocked',['already owned']))
+                self.assertNotIn('private-owner',str(row)); self.assertIsNone(service.queue.get('run'))
+            finally: service.close()
+    def test_discovery_failure_records_unavailable_without_exception_details(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); plan=FakePlan()
+            def fail(*_): raise RuntimeError('private transport detail')
+            intake=SingleTaskIntake(service,plan,fail,{'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'})
+            try:
+                with self.assertRaisesRegex(RuntimeError,'private transport detail'): intake.submit('run','engineering','DEMO',1)
+                row=service.graph.db.execute('SELECT status,reasons FROM task_admission_audit').fetchone()
+                self.assertEqual((row[0],json.loads(row[1])),('unavailable',['task snapshot unavailable']))
+                self.assertNotIn('private',str(row)); self.assertIsNone(service.queue.get('run'))
+            finally: service.close()
     def test_unknown_or_existing_work_and_owner_block_admission(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root); plan=FakePlan(); policy={'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'}

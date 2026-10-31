@@ -12,6 +12,22 @@ class ActionLedger:
             run TEXT NOT NULL, action TEXT NOT NULL, version TEXT NOT NULL,
             actor TEXT NOT NULL, status TEXT NOT NULL, updated REAL NOT NULL,
             PRIMARY KEY(run, action, version))''')
+        self.db.executescript('''
+        CREATE TABLE IF NOT EXISTS action_audit (
+            id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL,
+            action TEXT NOT NULL, version TEXT NOT NULL, actor TEXT NOT NULL,
+            status TEXT NOT NULL, created REAL NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS action_audit_insert AFTER INSERT ON external_actions
+        BEGIN
+            INSERT INTO action_audit(schema_version,run,action,version,actor,status,created)
+            VALUES(1,NEW.run,NEW.action,NEW.version,NEW.actor,NEW.status,NEW.updated);
+        END;
+        CREATE TRIGGER IF NOT EXISTS action_audit_update AFTER UPDATE ON external_actions
+        BEGIN
+            INSERT INTO action_audit(schema_version,run,action,version,actor,status,created)
+            VALUES(1,NEW.run,NEW.action,NEW.version,NEW.actor,NEW.status,NEW.updated);
+        END;
+        ''')
         self.db.execute('CREATE TABLE IF NOT EXISTS action_authorization_history(run TEXT NOT NULL, action TEXT NOT NULL, version TEXT NOT NULL, actor TEXT NOT NULL, created REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS action_scopes(scope TEXT PRIMARY KEY, run TEXT NOT NULL, action TEXT NOT NULL, version TEXT NOT NULL)')
         self.db.execute("CREATE TABLE IF NOT EXISTS action_followups(run TEXT NOT NULL, action TEXT NOT NULL, version TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', PRIMARY KEY(run,action,version,kind))")

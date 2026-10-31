@@ -27,6 +27,72 @@ class Supervisor:
     def can_resume(self,run,role,session): return True  # synthetic app-server fixture
     def start(self,run,role): return Handle(self.root,self.mode,self.thread,self.turn,role)
 class ExecutorTests(unittest.TestCase):
+    def test_local_turn_requires_and_records_terminated_scope(self):
+        from unittest.mock import patch
+        from runner.local_supervisor import LocalSupervisor
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        class ScopedHandle(Handle):
+            def __init__(self,root,db,backend,unit):
+                super().__init__(root,'ok','local-thread','local-turn','asset_production')
+                self.db,self.backend,self.unit=db,backend,unit
+                self.output_path_prefix=root
+            def assert_active(self): return True
+            def verify_config(self,request): return True
+            def open_transport(self,deadline,cancelled):
+                from runner.process_transport import ProcessTransport
+                return ProcessTransport(self.process,deadline,cancelled)
+            def finish(self):
+                if not super().finish(): return False
+                scopes=LocalScopes(self.db,self.backend)
+                try: return scopes.stop('r',self.unit)
+                finally: scopes.close()
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(mode=0o700); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            binary=Path(root)/'codex'; binary.write_text('x'); binary.chmod(0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            backend=Backend(); supervisor=LocalSupervisor(root+'/db',str(binary),{'HOME':root},backend,lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+            scopes=LocalScopes(root+'/db',backend); unit=scopes.reserve('r'); backend.unit=unit; scopes.bind('r',unit); scopes.close()
+            handle=ScopedHandle(str(output),root+'/db',backend,unit)
+            store=ArtifactStore(str(art));executor=CodexExecutor(supervisor,Provenance(graph),store,lambda run:None)
+            try:
+                with patch.object(supervisor,'preflight',return_value=True), patch('runner.local_supervisor.start_local_process',return_value=handle):
+                    result=executor.execute(run='r',role='asset_production',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
+                row=graph.db.execute('SELECT unit,binding FROM local_turn_scopes WHERE run=? AND role=? AND session=? AND turn=?',('r','asset_production',result['session_id'],result['turn_id'])).fetchone()
+                self.assertEqual(row,(unit,supervisor._binding('r','asset_production',{},'m')[1]))
+                self.assertEqual(graph.db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('terminated',))
+            finally: graph.close()
+    def test_images_require_a_subject_bound_local_asset_review(self):
+        from runner.codex_executor import ExecutorError
+        from tests.test_assets import png
+        with tempfile.TemporaryDirectory() as root:
+            art=Path(root)/'art';art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db');graph.register(marketing_definition());graph.create('r','marketing');claim=graph.claim('r',60)
+            store=ArtifactStore(str(art));ref=store.put(png())
+            executor=CodexExecutor(Supervisor(root),Provenance(graph),store,lambda run:None)
+            try:
+                with self.assertRaises(ExecutorError): executor.execute(run='r',role='asset_review',claim=claim,skills={},prompt='x',model='m',input_versions=[ref],output_paths=[],review_subject='subject',image_refs=[ref])
+                self.assertEqual(graph.db.execute('SELECT count(*) FROM execution_image_inputs').fetchone()[0],0)
+            finally:graph.close()
+    def test_local_output_rewrite_preserves_untrusted_payload(self):
+        from runner.codex_executor import _local_prompt, ExecutorError
+        prompt='Write /output/result.txt and /output/sources.json.\n<workflow-input-json>\n{"text":"/output/untrusted"}\nReview subject: x'
+        self.assertEqual(_local_prompt(prompt,'/workspace/private',['result.txt'],prompt.index('\n<workflow-input-json>')), 'Write /workspace/private/result.txt and /workspace/private/sources.json.\n<workflow-input-json>\n{"text":"/output/untrusted"}\nReview subject: x')
+        with self.assertRaises(ExecutorError): _local_prompt('missing instructions\n{}','/workspace/private',['result.txt'],len('missing instructions'))
+    def test_supervisor_config_guard_blocks_thread_and_fences(self):
+        class GuardedHandle(Handle):
+            def verify_config(self,request): return False
+        class GuardedSupervisor(Supervisor):
+            def start(self,run,role): return GuardedHandle(self.root,self.mode,self.thread,self.turn,role)
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            fenced=[]; executor=CodexExecutor(GuardedSupervisor(str(output)),Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with self.assertRaises(Exception): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[])
+                self.assertEqual(fenced,['r'])
+                self.assertEqual(graph.db.execute('SELECT count(*) FROM graph_sessions').fetchone()[0],0)
+            finally: graph.close()
     def test_hung_supervisor_start_is_bounded_and_fenced(self):
         import threading
         release=threading.Event()
@@ -39,7 +105,29 @@ class ExecutorTests(unittest.TestCase):
             try:
                 with self.assertRaises(Exception): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[],timeout=.05)
                 self.assertEqual(fenced,['r'])
+                self.assertEqual(graph.db.execute('SELECT status FROM execution_launch_audit ORDER BY id').fetchall(),[('requested',),('uncertain',)])
+                from runner.audit_export import read_events
+                events,_=read_events(graph.db,'execution_launch_audit',0,10,b'x'*32)
+                self.assertEqual(events[0]['execution_id'],events[1]['execution_id'])
+                self.assertEqual([event['status'] for event in events],['requested','uncertain'])
             finally: release.set(); graph.close()
+            import sqlite3
+            from contextlib import closing
+            with closing(sqlite3.connect(root+'/db')) as reopened:
+                self.assertEqual(reopened.execute('SELECT status FROM execution_launch_audit ORDER BY id').fetchall(),[('requested',),('uncertain',)])
+
+    def test_launch_audit_failure_blocks_supervisor_start(self):
+        import sqlite3
+        class NeverStart:
+            def preflight(self): return True
+            def start(self,*args): raise AssertionError('must not start')
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            executor=CodexExecutor(NeverStart(),Provenance(graph),ArtifactStore(root),lambda _:None)
+            try:
+                graph.db.execute("CREATE TRIGGER reject_launch_audit BEFORE INSERT ON execution_launch_audit BEGIN SELECT RAISE(ABORT,'failure'); END")
+                with self.assertRaises(sqlite3.IntegrityError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[])
+            finally: graph.close()
 
     def test_marketing_role_adapter_uses_actual_subprocess_executor(self):
         import hashlib
@@ -57,6 +145,7 @@ class ExecutorTests(unittest.TestCase):
             graph.close()
 
     def test_real_process_success_resume_and_fresh_review(self):
+        import json
         with tempfile.TemporaryDirectory() as root:
             output=Path(root)/'output'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
             graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
@@ -64,12 +153,96 @@ class ExecutorTests(unittest.TestCase):
             executor=CodexExecutor(supervisor,provenance,ArtifactStore(str(art)),fenced.append)
             args=dict(run='r',role='canonical_draft',claim=claim,skills={'writer':'hash'},prompt='prompt',model='synthetic',input_versions=['input'],output_paths=['draft.txt'])
             result=executor.execute(**args); self.assertEqual(result['output'],'correct'); self.assertEqual(executor.artifacts.get(result['outputs'][0]),b'synthetic output')
+            self.assertEqual(graph.db.execute('SELECT status FROM execution_launch_audit ORDER BY id').fetchall(),[('requested',),('completed',)])
+            launch=graph.db.execute("SELECT execution FROM execution_launch_audit WHERE status='completed'").fetchone()[0]
+            self.assertEqual(graph.db.execute('SELECT execution,session,turn,status FROM execution_link_audit').fetchone(),(launch,result['session_id'],result['turn_id'],'completed'))
+            audit=graph.db.execute('SELECT model,input_versions,output_refs,response_ref,tool_evidence_ref FROM execution_turn_audit WHERE run=? AND session=? AND turn=?',('r',result['session_id'],result['turn_id'])).fetchone()
+            self.assertEqual(audit,('synthetic',json.dumps(['input']),json.dumps(result['outputs']),result['response_ref'],result['tool_evidence_ref']))
             graph.bind_session('r','canonical_draft',result['session_id'],claim)
             supervisor.turn='turn-two'; resumed=executor.execute(**args,session_id=result['session_id']); self.assertEqual(resumed['turn_id'],'turn-two')
             supervisor.thread='review-thread'; supervisor.turn='review-turn'
             review=executor.review(subject='subject-hash',**{**args,'role':'canonical_review','skills':{'editor':'hash'}})
             self.assertEqual(review['session_id'],'review-thread'); self.assertTrue(provenance.subject_matches('r','canonical_review','review-thread','subject-hash'))
             self.assertEqual(fenced,[]); graph.close()
+
+    def test_turn_audit_failure_rolls_back_completion(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            provenance=Provenance(graph); executor=CodexExecutor(Supervisor(str(output)),provenance,ArtifactStore(str(art)),lambda _:None)
+            graph.db.execute("CREATE TRIGGER reject_turn_audit BEFORE INSERT ON execution_turn_audit BEGIN SELECT RAISE(ABORT,'failure'); END")
+            with self.assertRaises(sqlite3.IntegrityError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=['draft.txt'])
+            self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM completed_turn_outputs').fetchone()[0],0)
+            self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_link_audit').fetchone()[0],0)
+            self.assertFalse(provenance.completed('r','canonical_draft','thread-one')); graph.close()
+    def test_link_audit_failure_rolls_back_completion(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            provenance=Provenance(graph); executor=CodexExecutor(Supervisor(str(output)),provenance,ArtifactStore(str(art)),lambda _:None)
+            try:
+                graph.db.execute("CREATE TRIGGER reject_link_audit BEFORE INSERT ON execution_link_audit BEGIN SELECT RAISE(ABORT,'failure'); END")
+                with self.assertRaises(sqlite3.IntegrityError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=['draft.txt'])
+                self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_turn_audit').fetchone()[0],0)
+                self.assertFalse(provenance.completed('r','canonical_draft','thread-one'))
+            finally: graph.close()
+    def test_tool_audit_is_redacted_and_failure_rolls_back_completion(self):
+        import sqlite3
+        for failure in (False,True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as root:
+                output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+                graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+                provenance=Provenance(graph); executor=CodexExecutor(Supervisor(str(output),mode='tool'),provenance,ArtifactStore(str(art)),lambda _:None)
+                try:
+                    if failure: graph.db.execute("CREATE TRIGGER reject_tool_audit BEFORE INSERT ON tool_audit BEGIN SELECT RAISE(ABORT,'failure'); END")
+                    args=dict(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=['draft.txt'])
+                    if failure:
+                        with self.assertRaises(sqlite3.IntegrityError): executor.execute(**args)
+                        self.assertFalse(provenance.completed('r','canonical_draft','thread-one'))
+                        self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_turn_audit').fetchone()[0],0)
+                    else:
+                        result=executor.execute(**args)
+                        row=graph.db.execute('SELECT tool_kind,status,input_present,output_present,evidence_ref FROM tool_audit').fetchone()
+                        self.assertEqual(row[:4],('mcpToolCall','completed',1,1))
+                        import json
+                        receipt=json.loads(executor.artifacts.get(row[4]))
+                        self.assertEqual(receipt['items'],result['tool_events'])
+                        self.assertNotIn('synthetic-private',str(row))
+                finally: graph.close()
+    def test_observed_tool_call_survives_interrupted_turn(self):
+        import json
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            provenance=Provenance(graph); fenced=[]; executor=CodexExecutor(Supervisor(str(output),mode='tool_exit'),provenance,ArtifactStore(str(art)),fenced.append)
+            try:
+                with self.assertRaises(Exception): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[])
+                row=graph.db.execute('SELECT status,evidence_ref FROM tool_audit').fetchone()
+                self.assertEqual(row[0],'completed')
+                self.assertEqual(json.loads(executor.artifacts.get(row[1]))['items'][0]['type'],'mcpToolCall')
+                self.assertEqual(graph.db.execute('SELECT session,turn,status FROM execution_link_audit').fetchone(),('thread-one','turn-one','observed'))
+                self.assertFalse(provenance.completed('r','canonical_draft','thread-one'))
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
+            import sqlite3
+            from contextlib import closing
+            with closing(sqlite3.connect(root+'/db')) as reopened:
+                self.assertEqual(reopened.execute('SELECT status FROM tool_audit').fetchall(),[('completed',)])
+                self.assertEqual(reopened.execute('SELECT status FROM execution_link_audit').fetchall(),[('observed',)])
+    def test_command_notification_is_observed_without_claiming_command_success(self):
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            fenced=[]; executor=CodexExecutor(Supervisor(str(output),mode='command_exit'),Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with self.assertRaises(Exception): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[])
+                row=graph.db.execute('SELECT tool_kind,status,input_present,output_present,evidence_ref FROM tool_audit').fetchone()
+                self.assertEqual(row[:4],('commandExecution','observed',1,1))
+                self.assertNotIn('synthetic-private',str(row))
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
     def test_failed_or_cancelled_process_fences_and_never_completes(self):
         for mode in ('invalid','approval','exit','hang','late-exit'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as root:

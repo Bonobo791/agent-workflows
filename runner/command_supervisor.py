@@ -21,6 +21,13 @@ class CommandSupervisor:
             self.spec=json.loads(json.dumps(spec)); self.policy_hash=hashlib.sha256(json.dumps(self.spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()
             if approval!=self.policy_hash: raise CommandError('exact command policy approval required')
         service.graph.db.execute('CREATE TABLE IF NOT EXISTS supervised_commands(id TEXT PRIMARY KEY,run TEXT NOT NULL,commit_id TEXT NOT NULL,workspace_hash TEXT NOT NULL,policy_hash TEXT NOT NULL,state TEXT NOT NULL,record_ref TEXT,started REAL NOT NULL)')
+        service.graph.db.execute('CREATE TABLE IF NOT EXISTS command_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, assignment TEXT NOT NULL, status TEXT NOT NULL, commit_id TEXT NOT NULL, policy_hash TEXT NOT NULL, record_ref TEXT, started REAL NOT NULL, created REAL NOT NULL)')
+        service.graph.db.execute('''CREATE TRIGGER IF NOT EXISTS command_audit_insert AFTER INSERT ON supervised_commands BEGIN
+            INSERT INTO command_audit(schema_version,run,assignment,status,commit_id,policy_hash,record_ref,started,created) VALUES(1,NEW.run,NEW.id,NEW.state,NEW.commit_id,NEW.policy_hash,NEW.record_ref,NEW.started,NEW.started);
+        END''')
+        service.graph.db.execute('''CREATE TRIGGER IF NOT EXISTS command_audit_update AFTER UPDATE OF state ON supervised_commands WHEN NEW.state!=OLD.state BEGIN
+            INSERT INTO command_audit(schema_version,run,assignment,status,commit_id,policy_hash,record_ref,started,created) VALUES(1,NEW.run,NEW.id,NEW.state,NEW.commit_id,NEW.policy_hash,NEW.record_ref,NEW.started,(julianday('now')-2440587.5)*86400.0);
+        END''')
     def ready(self):
         if self.spec is None or not callable(getattr(self.backend,'execute',None)) or not callable(getattr(self.backend,'verify_terminal',None)): return False
         try:

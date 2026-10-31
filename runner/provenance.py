@@ -14,6 +14,13 @@ class Provenance:
         graph.db.execute("CREATE TABLE IF NOT EXISTS execution_contexts(run TEXT NOT NULL, role TEXT NOT NULL, session TEXT NOT NULL, subject TEXT NOT NULL, PRIMARY KEY(run,role,session))")
         graph.db.execute("CREATE TABLE IF NOT EXISTS execution_completions(run TEXT NOT NULL, role TEXT NOT NULL, session TEXT NOT NULL, output_hash TEXT NOT NULL DEFAULT '', PRIMARY KEY(run,role,session))")
         if 'output_hash' not in [row[1] for row in graph.db.execute('PRAGMA table_info(execution_completions)')]: graph.db.execute("ALTER TABLE execution_completions ADD COLUMN output_hash TEXT NOT NULL DEFAULT ''")
+        graph.db.execute('''CREATE TABLE IF NOT EXISTS execution_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, role TEXT NOT NULL, session TEXT NOT NULL, status TEXT NOT NULL, skills TEXT, output_hash TEXT, created REAL NOT NULL)''')
+        graph.db.execute('''CREATE TRIGGER IF NOT EXISTS execution_audit_bind AFTER INSERT ON execution_provenance BEGIN
+            INSERT INTO execution_audit(schema_version,run,role,session,status,skills,created) VALUES(1,NEW.run,NEW.role,NEW.session,'bound',NEW.skills,(julianday('now')-2440587.5)*86400.0);
+        END''')
+        graph.db.execute('''CREATE TRIGGER IF NOT EXISTS execution_audit_complete AFTER INSERT ON execution_completions BEGIN
+            INSERT INTO execution_audit(schema_version,run,role,session,status,output_hash,created) VALUES(1,NEW.run,NEW.role,NEW.session,'completed',NEW.output_hash,(julianday('now')-2440587.5)*86400.0);
+        END''')
     @staticmethod
     def _skills(skills):
         if not isinstance(skills,dict) or any(not isinstance(k,str) or not k or not isinstance(v,str) or not v for k,v in skills.items()): raise ProvenanceError('invalid skill fingerprints')

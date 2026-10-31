@@ -19,6 +19,13 @@ class PRBridge:
         service.graph.db.execute('CREATE TABLE IF NOT EXISTS pr_reauthorization_history(id INTEGER PRIMARY KEY AUTOINCREMENT,proposal TEXT NOT NULL,reason TEXT NOT NULL,actor TEXT NOT NULL,created REAL NOT NULL)')
         service.graph.db.execute('CREATE TABLE IF NOT EXISTS pr_review_blockers(run TEXT NOT NULL,number INTEGER NOT NULL,comment_id TEXT NOT NULL,head TEXT NOT NULL,state TEXT NOT NULL,evidence_ref TEXT,PRIMARY KEY(run,number,comment_id,head))')
         if 'evidence_ref' not in [row[1] for row in service.graph.db.execute('PRAGMA table_info(pr_review_blockers)')]: service.graph.db.execute('ALTER TABLE pr_review_blockers ADD COLUMN evidence_ref TEXT')
+        service.graph.db.execute('CREATE TABLE IF NOT EXISTS review_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, number INTEGER NOT NULL, comment_id TEXT NOT NULL, head TEXT NOT NULL, status TEXT NOT NULL, evidence_ref TEXT, created REAL NOT NULL)')
+        service.graph.db.execute('''CREATE TRIGGER IF NOT EXISTS review_audit_insert AFTER INSERT ON pr_review_blockers BEGIN
+            INSERT INTO review_audit(schema_version,run,number,comment_id,head,status,evidence_ref,created) VALUES(1,NEW.run,NEW.number,NEW.comment_id,NEW.head,NEW.state,NEW.evidence_ref,(julianday('now')-2440587.5)*86400.0);
+        END''')
+        service.graph.db.execute('''CREATE TRIGGER IF NOT EXISTS review_audit_update AFTER UPDATE OF state ON pr_review_blockers WHEN NEW.state!=OLD.state BEGIN
+            INSERT INTO review_audit(schema_version,run,number,comment_id,head,status,evidence_ref,created) VALUES(1,NEW.run,NEW.number,NEW.comment_id,NEW.head,NEW.state,NEW.evidence_ref,(julianday('now')-2440587.5)*86400.0);
+        END''')
     def _loop(self,run,queue_claim,graph_claim,*,reconcile=False):
         service=self.service; authority=service.pr_authority; intake=service.task_intake
         if authority is not None and callable(getattr(authority,'for_claim',None)): authority=authority.for_claim(run,queue_claim,graph_claim)
@@ -26,7 +33,9 @@ class PRBridge:
         c=intake.config
         if c.get('run')!=run or c.get('workflow')!='engineering' or not c.get('github_base'): raise PRBridgeError('exact repository and base branch required')
         def locked(selected):
-            if selected!=run or not service.queue.may_start(run,queue_claim) or service.docker_supervisor is None or not callable(service.docker_supervisor.fence_ready) or service.docker_supervisor.fence_ready(run) is not True: return False
+            supervisor=service.model_supervisor or service.docker_supervisor
+            fence=getattr(supervisor,'fence',None) if service.model_supervisor is not None else getattr(supervisor,'fence_ready',None)
+            if selected!=run or not service.queue.may_start(run,queue_claim) or not callable(fence) or fence(run) is not True: return False
             try: service.graph._lease(run,graph_claim); return True
             except Exception: return False
         def workspace(selected):
@@ -192,7 +201,12 @@ class PRBridge:
                     for comment_id,old_head,evidence_ref in blockers:
                         if evidence_ref and self._corrected_by_review(run,target['head'],old_head,evidence_ref):
                             db.execute("UPDATE pr_review_blockers SET state='resolved' WHERE run=? AND number=? AND comment_id=? AND head=? AND state='open'",(run,number,comment_id,old_head))
-                if db.execute("SELECT 1 FROM pr_review_blockers WHERE run=? AND number=? AND state='open'",(run,number)).fetchone(): status='blocked_for_correction'; digest=None
+                if db.execute("SELECT 1 FROM pr_review_blockers WHERE run=? AND number=? AND state='open'",(run,number)).fetchone():
+                    status='blocked_for_correction'; digest=None
+                    final_ref=self.service.artifacts.put(json.dumps({'run':run,'number':number,'snapshot':snapshot,'dispositions':dispositions,'digest':digest,'status':status},sort_keys=True,separators=(',',':')).encode())
+                    if final_ref!=ref:
+                        db.execute('UPDATE pr_review_blockers SET evidence_ref=? WHERE run=? AND number=? AND evidence_ref=?',(final_ref,run,number,ref))
+                        ref=final_ref
                 db.execute('COMMIT')
             except Exception: db.execute('ROLLBACK'); raise
             self._record_stage(run,graph_claim,'triage',{'review_ref':ref,'number':number,'head':target['head'],'digest':digest},'passed' if status=='ready_for_approval' else 'blocked')
