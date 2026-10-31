@@ -48,13 +48,14 @@ class LocalSessionLiveTests(unittest.TestCase):
         from runner.model_policy import ModelPolicy
         from runner.protocol import AppServer
 
+        environment = dict(os.environ)
         with tempfile.TemporaryDirectory(prefix='workflow-resume-') as root:
             workspace = Path(root) / 'workspace'
             workspace.mkdir(mode=0o700)
             db = str(Path(root) / 'state.db')
-            config = inspect_config(os.environ['CODEX_TEST_EXECUTABLE'], str(workspace), os.environ)
-            backend = SystemdScopes(os.environ)
-            discovery = start_local_process(db, 'discovery', str(workspace), config['codex_executable'], os.environ, backend, lambda: True, config['disabled_integrations'])
+            config = inspect_config(environment['CODEX_TEST_EXECUTABLE'], str(workspace), environment)
+            backend = SystemdScopes(environment)
+            discovery = start_local_process(db, 'discovery', str(workspace), config['codex_executable'], environment, backend, lambda: True, config['disabled_integrations'])
             try:
                 server = AppServer(discovery.open_transport(time.monotonic() + 90, lambda: False))
                 server.initialize()
@@ -64,7 +65,7 @@ class LocalSessionLiveTests(unittest.TestCase):
             finally:
                 discovery.finish()
 
-            supervisor = LocalSupervisor(db, config['codex_executable'], os.environ, backend, lambda run: True, lambda run, role: str(workspace), lambda: True, config['disabled_integrations'])
+            supervisor = LocalSupervisor(db, config['codex_executable'], environment, backend, lambda run: True, lambda run, role: str(workspace), lambda: True, config['disabled_integrations'])
             session = None
             prompts = ('Remember this exact token for the next turn: cobalt-orchid. Reply OK. Do not use tools.',
                        'Reply with only the exact token I asked you to remember. Do not use tools.')
@@ -76,6 +77,8 @@ class LocalSessionLiveTests(unittest.TestCase):
                         self.assertEqual(actual, session)
                         self.assertIn('cobalt-orchid', output.lower())
                     session = actual
+                    self.assertFalse(supervisor.can_resume('resume-probe', 'canonical_draft', session, {}, model))
                 finally:
                     handle.finish()
+                # Resumption requires an idle session and a verified terminated scope.
                 self.assertTrue(supervisor.can_resume('resume-probe', 'canonical_draft', session, {}, model))
