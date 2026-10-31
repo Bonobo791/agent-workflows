@@ -335,6 +335,8 @@ class WorkerTests(unittest.TestCase):
                 result=control.handle('x'*40,{'action':'manual_stop','run':'run'})
                 self.assertEqual(result['local_scopes'],[{'unit':'unknown.scope','state':None}])
                 with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
+                service.graph.db.execute("UPDATE local_scopes SET state='terminated' WHERE run='run'")
+                with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
                 self.assertEqual(service.queue.get('run')['status'],'cancelling')
             finally:service.lifecycle.close();service.close()
 
@@ -357,6 +359,11 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(scopes.state('run',unit),'starting')
                 backend.unit=unit
                 self.assertEqual(control.handle('x'*40,{'action':'stop_local_scope','run':'run','unit':unit})['state'],'terminated')
+                identity=scopes.db.execute('SELECT invocation,cgroup FROM local_scopes WHERE unit=?',(unit,)).fetchone()
+                for field,bad,value in (('invocation',None,identity[0]),('invocation','bad',identity[0]),('cgroup',None,identity[1]),('cgroup','/wrong',identity[1])):
+                    scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(bad,unit))
+                    with self.subTest(field=field,bad=bad),self.assertRaises(ControlError): control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
+                    scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(value,unit))
                 self.assertEqual(control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})['status'],'stopped')
                 scopes.close()
             finally: service.lifecycle.close(); service.close()

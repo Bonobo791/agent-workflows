@@ -10,6 +10,10 @@ import subprocess
 
 class ScopeError(RuntimeError): pass
 
+def valid_scope_identity(unit,invocation,cgroup):
+    return (isinstance(unit,str) and bool(unit) and isinstance(invocation,str) and re.fullmatch(r'[0-9a-f]{32}',invocation) is not None
+            and isinstance(cgroup,str) and cgroup.startswith('/') and cgroup.endswith('/'+unit) and '..' not in PurePosixPath(cgroup).parts)
+
 class SystemdScopes:
     def __init__(self, environment):
         self.environment=dict(environment)
@@ -66,7 +70,7 @@ class LocalScopes:
     def bind(self,run,unit):
         info=self.backend.inspect(unit)
         group=info.get('cgroup','')
-        if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or not re.fullmatch(r'[0-9a-f]{32}',info.get('invocation','')) or not group.startswith('/') or not group.endswith('/'+unit) or '..' in PurePosixPath(group).parts: raise ScopeError('active scope identity unverified')
+        if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or not valid_scope_identity(unit,info.get('invocation'),group): raise ScopeError('active scope identity unverified')
         changed=self.db.execute("UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit)).rowcount
         if changed!=1: raise ScopeError('scope assignment changed')
     def assert_active(self,run,unit):

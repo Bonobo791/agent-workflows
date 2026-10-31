@@ -48,6 +48,12 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.registry.bind_local_scope('run-1',assignment,unit)
             with self.assertRaises(WorkspaceError): self.registry.release_local('run-1',assignment,unit)
             self.assertTrue(scopes.stop('run-1',unit))
+            identity=scopes.db.execute('SELECT invocation,cgroup FROM local_scopes WHERE unit=?',(unit,)).fetchone()
+            for field,bad,value in (('invocation',None,identity[0]),('invocation','bad',identity[0]),('cgroup',None,identity[1]),('cgroup','/wrong',identity[1])):
+                scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(bad,unit))
+                with self.subTest(field=field,bad=bad),self.assertRaises(WorkspaceError): self.registry.release_local('run-1',assignment,unit)
+                self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+                scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(value,unit))
             with self.assertRaises(WorkspaceError): self.registry.release_local('run-1',assignment,'wrong.scope')
             self.registry.release_local('run-1',assignment,unit)
             self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(None,))

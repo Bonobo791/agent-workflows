@@ -75,8 +75,11 @@ class ManualLifecycle:
                 unresolved=db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated' OR e.run IS NULL) LIMIT 1",(run,)).fetchone()
                 if unresolved: raise ManualLifecycleError('Docker termination or launch remains unresolved')
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone():
+                from runner.local_scope import valid_scope_identity
                 columns={row[1] for row in db.execute('PRAGMA table_info(local_scopes)')}
-                if not {'run','unit','state'}<=columns or db.execute("SELECT 1 FROM local_scopes WHERE run=? AND state IS NOT 'terminated' LIMIT 1",(run,)).fetchone(): raise ManualLifecycleError('local scope termination or launch remains unresolved')
+                if not {'run','unit','invocation','cgroup','state'}<=columns: raise ManualLifecycleError('local scope termination or launch remains unresolved')
+                rows=db.execute('SELECT unit,invocation,cgroup,state FROM local_scopes WHERE run=?',(run,)).fetchall()
+                if any(state!='terminated' or not valid_scope_identity(unit,invocation,cgroup) for unit,invocation,cgroup,state in rows): raise ManualLifecycleError('local scope termination or launch remains unresolved')
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engineering_workspaces'").fetchone() and db.execute('SELECT 1 FROM engineering_workspaces WHERE run=? AND assignment IS NOT NULL',(run,)).fetchone(): raise ManualLifecycleError('engineering workspace claim remains unresolved')
             db.execute("UPDATE manual_assignments SET state='stopped',attestation=? WHERE run=?",(attestation,run))
             db.execute("UPDATE manual_workers SET state='stopped' WHERE target=?",(self.target['manual_target'],))

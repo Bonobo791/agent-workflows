@@ -251,6 +251,8 @@ stop confirmation.
 An unknown scope state is treated as unresolved. If an older database contains
 multiple unresolved scopes for one run, the stricter scope index fails closed;
 inspect that state before attempting recovery.
+Manual confirmation and local workspace release also require the recorded
+terminated scope to have a valid invocation ID and matching cgroup path.
 
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
 engineering workspace claim. Operator stop confirmation still requires the exact
