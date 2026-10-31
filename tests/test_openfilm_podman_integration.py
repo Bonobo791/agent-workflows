@@ -90,7 +90,7 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
         from tests.test_openfilm_stage import OpenFilmStageTests
         from runner.docker_controller import DockerError, UnixEngine
         fixture=OpenFilmStageTests('test_production_ingests_actual_output_but_requires_review')
-        fixture.setUp(); assignments=None; pool=None
+        fixture.setUp(); assignments=None; pool=None; future=None; attempt=None
         try:
             started=threading.Event(); raw=UnixEngine(os.environ['OPENFILM_PODMAN_SOCKET'])
             class Engine:
@@ -106,7 +106,9 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
             future=pool.submit(backend.execute,run='run',attempt_id=attempt,brief_ref=fixture.brief_ref,brief=fixture.brief,canonical='Approved synthetic statement.',graph_claim=fixture.claim,queue_claim=fixture.queue)
             self.assertTrue(started.wait(20),'render did not reach the Engine wait')
             with sqlite3.connect(supervisor.db_path) as db:
-                cid,state=db.execute('SELECT container_id,state FROM docker_assignments WHERE run=?',('of-'+attempt,)).fetchone()
+                row=db.execute('SELECT container_id,state FROM docker_assignments WHERE run=?',('of-'+attempt,)).fetchone()
+            self.assertIsNotNone(row,'render assignment unavailable')
+            cid,state=row
             self.assertEqual(state,'running')
             self.assertTrue(raw.request('GET','/containers/'+cid+'/json')[1]['State']['Running'])
             backend.cancel('run',attempt)
@@ -115,14 +117,27 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
                 self.assertEqual(db.execute('SELECT state,result_ref FROM openfilm_render_jobs WHERE assignment=?',('of-'+attempt,)).fetchone(),('cancel_requested',None))
                 self.assertEqual(db.execute('SELECT state FROM docker_assignments WHERE run=?',('of-'+attempt,)).fetchone(),('terminated',))
                 self.assertEqual(db.execute("SELECT status FROM graph_attempts WHERE run='run' AND stage='asset_production'").fetchone(),('uncertain',))
-            self.assertFalse(raw.request('GET','/containers/'+cid+'/json')[1]['State']['Running'])
+            status,details=raw.request('GET','/containers/'+cid+'/json')
+            self.assertEqual(status,200)
+            self.assertFalse(details['State']['Running'])
         finally:
-            if pool: pool.shutdown(wait=True)
-            if assignments:
-                for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
-                    subprocess.run(['podman','rm','-f',cid],check=True,stdout=subprocess.DEVNULL,timeout=30)
-                assignments.close();fixture.service.docker_supervisor=None
-            fixture.tearDown()
+            try:
+                if future and not future.done():
+                    try: backend.cancel('run',attempt)
+                    except DockerError: pass
+                if assignments:
+                    for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
+                        subprocess.run(['podman','stop','-t','0',cid],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+            finally:
+                try:
+                    if pool: pool.shutdown(wait=True)
+                finally:
+                    try:
+                        if assignments:
+                            for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
+                                subprocess.run(['podman','rm','-f',cid],check=True,stdout=subprocess.DEVNULL,timeout=30)
+                            assignments.close();fixture.service.docker_supervisor=None
+                    finally: fixture.tearDown()
 
     def test_render_and_independent_terminal_verification(self):
         from tests.test_openfilm_stage import OpenFilmStageTests
