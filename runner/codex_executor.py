@@ -10,6 +10,7 @@ from runner.process_transport import ProcessTransport
 from runner.structured import parse_marketing_result
 
 class ExecutorError(RuntimeError): pass
+class UncertainExecutorError(ExecutorError): pass
 
 def _local_prompt(prompt,output_dir,output_paths,instruction_length):
     if not isinstance(prompt,str) or type(instruction_length) is not int or not 0<instruction_length<len(prompt): raise ExecutorError('local output instructions unavailable')
@@ -35,7 +36,7 @@ def _bounded(call,deadline,cancelled,late_cleanup=None):
             with lock:
                 if result: break
                 state['abandoned']=True
-            raise ExecutorError('supervisor operation timed out or cancelled; outcome uncertain')
+            raise UncertainExecutorError('supervisor operation timed out or cancelled; outcome uncertain')
     if not result or not result[0][0]: raise ExecutorError('supervisor operation failed') from None
     return result[0][1]
 

@@ -334,6 +334,7 @@ class Service:
                             from runner.openfilm_review import verify_evidence
                             if entry['status']!=artifact.get('status') or not verify_evidence(self,run,artifact): raise ServiceError('asset review evidence unavailable')
                             summary[name]['asset_manifest']=json.loads(self.artifacts.get(artifact['manifest_ref']))
+                            summary[name]['asset_review']=json.loads(self.artifacts.get(artifact['response_ref']))
                         if name=='brief' and artifact.get('_source_verification'):
                             try: summary[name]['source_verification']=json.loads(self.artifacts.get(artifact['_source_verification']))
                             except Exception: raise ServiceError('source verification unavailable') from None

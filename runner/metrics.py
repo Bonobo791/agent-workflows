@@ -15,6 +15,15 @@ def snapshot(db, now=None):
         jobs=db.execute('SELECT status,COUNT(*) FROM jobs GROUP BY status').fetchall()
         expired=db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('running','cancelling') AND expires IS NOT NULL AND expires<=?",(now,)).fetchone()[0]
         stages=db.execute('SELECT r.workflow,s.stage,s.status,COUNT(*) FROM graph_stages s JOIN graph_runs r ON r.id=s.run GROUP BY r.workflow,s.stage,s.status').fetchall()
+        waits=db.execute("""SELECT r.workflow,w.stage,COUNT(*) FROM approval_waits w
+            JOIN graph_runs r ON r.id=w.run AND r.status='active'
+            JOIN jobs j ON j.run=w.run AND j.status='running' AND j.expires>?
+            JOIN graph_claims c ON c.run=w.run AND c.task_id=r.task_id AND c.expires>?
+            JOIN graph_stages d ON d.run=w.run AND d.stage=w.dependency AND d.status='passed' AND d.version=w.version AND d.revision=w.revision
+            WHERE NOT EXISTS (SELECT 1 FROM graph_stages s WHERE s.run=w.run AND s.stage=w.stage)
+              AND w.claim_id=(SELECT MAX(id) FROM claim_audit WHERE task_id=r.task_id AND status='claimed')
+              AND NOT (w.stage='freeze' AND EXISTS (SELECT 1 FROM external_actions a WHERE a.run=w.run AND a.action='freeze' AND a.version=w.version AND a.status='approved'))
+            GROUP BY r.workflow,w.stage""",(now,now)).fetchall()
         attempts=db.execute('SELECT r.workflow,a.stage,a.status,COUNT(*),SUM(CASE WHEN a.count>1 THEN 1 ELSE 0 END) FROM graph_attempts a JOIN graph_runs r ON r.id=a.run GROUP BY r.workflow,a.stage,a.status').fetchall()
         cache=db.execute("SELECT r.workflow,a.stage,COUNT(*) FROM cache_audit a JOIN graph_runs r ON r.id=a.run WHERE a.status='reused' GROUP BY r.workflow,a.stage").fetchall()
         launches=db.execute('SELECT r.workflow,a.role,a.status,COUNT(*) FROM execution_launch_audit a JOIN (SELECT MAX(id) id FROM execution_launch_audit GROUP BY run,execution) latest ON latest.id=a.id JOIN graph_runs r ON r.id=a.run GROUP BY r.workflow,a.role,a.status').fetchall()
@@ -36,6 +45,7 @@ def snapshot(db, now=None):
     add('workflow_snapshot_timestamp_seconds',(),int(now))
     add('workflow_expired_leases',(),expired)
     for flow,name,state,count in stages: add('workflow_stages',(('workflow',workflow(flow)),('stage',stage(name)),('status',status(state))),count)
+    for flow,name,count in waits: add('workflow_stages',(('workflow',workflow(flow)),('stage',stage(name)),('status','awaiting_approval')),count)
     for flow,name,state,count,retried in attempts:
         labels=(('workflow',workflow(flow)),('stage',stage(name)),('status',status(state)))
         add('workflow_attempts',labels,count); add('workflow_retried_inputs',labels,retried)

@@ -95,6 +95,40 @@ class OpenFilmStageTests(unittest.TestCase):
         result=produce(self.service,'run',self.queue,self.claim,self.backend)
         self.assertEqual((result['status'],result['reason']),('blocked','current platform constraints unavailable'))
         self.assertFalse(hasattr(self.backend,'calls'))
+    def test_platform_review_timeout_fences_instead_of_recording_a_terminal_block(self):
+        self.backend.timeout_seconds=1
+        self.service.openfilm_platform_authority.check=lambda *_:time.sleep(1.5)
+        with patch.object(self.service,'fence_execution') as fence:
+            with self.assertRaises(OpenFilmStageError): produce(self.service,'run',self.queue,self.claim,self.backend)
+        fence.assert_called_once_with('run')
+        self.assertIsNone(self.service.graph.get('run','asset_production'))
+        self.assertFalse(hasattr(self.backend,'calls'))
+    def test_dispatch_reports_uncertain_platform_review(self):
+        from runner.openfilm_stage import PlatformReviewUncertain
+        self.service.openfilm_backend=self.backend
+        dispatcher=StageDispatcher(self.service)
+        with patch.object(dispatcher,'next_stage',return_value='asset_production'),patch('runner.openfilm_stage.produce',side_effect=PlatformReviewUncertain('inspect worker')):
+            result=dispatcher.step('run',self.queue,self.claim)
+        self.assertEqual(result['status'],'uncertain')
+        self.assertIn('inspect',result['reason'])
+    def test_verified_platform_block_is_in_review_artifact(self):
+        evidence=self.service.artifacts.put(json.dumps({'reason':'Height is unspecified.','findings':[{'description':'Supply a height limit.'}]}).encode())
+        self.service.openfilm_platform_authority.check=lambda *_:{'blocked_ref':evidence}
+        self.service.openfilm_platform_authority.verify_blocked=lambda *args:args[-1]==evidence
+        result=produce(self.service,'run',self.queue,self.claim,self.backend)
+        self.assertEqual(result['status'],'blocked')
+        artifact=json.loads(self.service.artifacts.get(result['artifact_ref']))
+        self.assertEqual(artifact['platform_block_ref'],evidence)
+        self.assertEqual(artifact['platform_review']['reason'],'Height is unspecified.')
+        self.assertFalse(hasattr(self.backend,'calls'))
+    def test_unverified_platform_block_does_not_expose_findings(self):
+        evidence=self.service.artifacts.put(json.dumps({'reason':'untrusted'}).encode())
+        self.service.openfilm_platform_authority.check=lambda *_:{'blocked_ref':evidence}
+        self.service.openfilm_platform_authority.verify_blocked=lambda *_:False
+        result=produce(self.service,'run',self.queue,self.claim,self.backend)
+        artifact=json.loads(self.service.artifacts.get(result['artifact_ref']))
+        self.assertEqual(artifact['reason'],'current platform constraints unavailable')
+        self.assertNotIn('platform_review',artifact)
     def test_expired_platform_evidence_blocks_before_render(self):
         source=self.service.artifacts.put(b'synthetic source')
         items=[{**{key:item[key] for key in ('channel','kind','width','height','duration_seconds')},'source_ref':source,'supported':True} for item in self.brief['assets']]

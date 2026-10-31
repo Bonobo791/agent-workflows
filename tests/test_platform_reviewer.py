@@ -21,16 +21,21 @@ class PlatformReviewerTests(unittest.TestCase):
                 service.create('run','marketing','task');service.enqueue('run');job=service.lifecycle.claim();claim=service.claim('run')
                 brief={'assets':[{'channel':'linkedin','kind':'png','width':400,'height':400,'duration_seconds':None}]};brief_ref=service.artifacts.put(json.dumps(brief).encode())
                 authority=service.openfilm_platform_authority
-                def fetch(url):
+                def fetch(url,**_):
                     data=b'official platform source';return {'url':url,'content_type':'text/plain','content':data.decode(),'sha256':hashlib.sha256(data).hexdigest()}
                 class Executor:
-                    supported=True;counter=0
+                    supported=True;blocked=False;counter=0
                     def __init__(self,supervisor,provenance,artifacts,fence,model_policy=None): self.provenance=provenance;self.artifacts=artifacts;self.supervisor=supervisor
                     def review(self,**kw):
                         Executor.counter+=1;session='session-'+str(Executor.counter)
+                        assert 'Return only passed or blocked' in kw['prompt']
+                        assert 'Each finding evidence must exactly match one SHA-256 string in input_versions' in kw['prompt']
                         payload=json.loads(kw['prompt'].split('\n',1)[1]);assert payload['skills']=={'platform':'Review platform requirements.'};source=payload['sources'][0]['content_ref'];spec=brief['assets'][0]
                         report={'assets':[{**spec,'source_ref':source,'supported':Executor.supported}]};out=self.artifacts.put(json.dumps(report).encode())
-                        response=json.dumps({'stage':'platform_review','status':'passed','input_versions':kw['input_versions'],'outputs':[out],'findings':[]});response_ref=self.artifacts.put(response.encode())
+                        finding={'id':'f1','severity':'blocking','description':'The source omits a height limit.','location':'asset','evidence':kw['input_versions'][2],'remedy':'Supply current requirements.','resolution':'open'}
+                        value={'stage':'platform_review','status':'blocked' if Executor.blocked else 'passed','input_versions':kw['input_versions'],'outputs':[out],'findings':[finding] if Executor.blocked else []}
+                        if Executor.blocked:value['reason']='Exact dimensions are unverified.'
+                        response=json.dumps(value);response_ref=self.artifacts.put(response.encode())
                         self.provenance.bind('run','platform_review',session,kw['skills'],claim,fresh=True,subject=brief_ref);self.provenance.mark_completed('run','platform_review',session,claim,response_ref)
                         db=self.provenance.graph.db;db.execute('CREATE TABLE IF NOT EXISTS completed_turn_outputs(run TEXT,role TEXT,session TEXT,turn TEXT,input_versions TEXT,output_refs TEXT)')
                         db.execute('INSERT INTO completed_turn_outputs VALUES(?,?,?,?,?,?)',('run','platform_review',session,'turn',json.dumps(kw['input_versions']),json.dumps([out])))
@@ -42,6 +47,19 @@ class PlatformReviewerTests(unittest.TestCase):
                     proof=authority.check_for_claim('run',brief_ref,brief,claim,job['token'])
                 self.assertTrue(authority.verify('run',brief_ref,brief,proof))
                 self.assertTrue(verify_platform(service,'run',brief_ref,brief,proof,5,lambda:False))
+                Executor.blocked=True;Executor.supported=False
+                with patch.object(authority.fetcher,'fetch',side_effect=fetch),patch('runner.platform_reviewer.CodexExecutor',Executor):
+                    blocked=authority.check_for_claim('run',brief_ref,brief,claim,job['token'])
+                self.assertEqual(set(blocked),{'blocked_ref'})
+                self.assertTrue(authority.verify_blocked('run',brief_ref,brief,blocked['blocked_ref']))
+                self.assertFalse(authority.verify('run',brief_ref,brief,blocked['blocked_ref']))
+                self.assertFalse(authority.verify_blocked('other',brief_ref,brief,blocked['blocked_ref']))
+                evidence=json.loads(service.artifacts.get(blocked['blocked_ref']))
+                self.assertEqual(evidence['findings'][0]['description'],'The source omits a height limit.')
+                service.graph.db.execute("UPDATE local_scopes SET state='running' WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='session-2')")
+                self.assertFalse(authority.verify_blocked('run',brief_ref,brief,blocked['blocked_ref']))
+                service.graph.db.execute("UPDATE local_scopes SET state='terminated' WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='session-2')")
+                Executor.blocked=False
                 Executor.supported=False
                 with patch.object(authority.fetcher,'fetch',side_effect=fetch),patch('runner.platform_reviewer.CodexExecutor',Executor):
                     with self.assertRaises(ValueError): authority.check_for_claim('run',brief_ref,brief,claim,job['token'])

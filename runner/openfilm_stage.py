@@ -7,7 +7,7 @@ import time
 import zipfile
 from pathlib import PurePosixPath
 from runner.artifacts import ArtifactError
-from runner.codex_executor import _bounded
+from runner.codex_executor import _bounded, UncertainExecutorError
 from runner.graph import GraphError
 from runner.graph_runner import GraphRunner
 from runner.source_register import validate as validate_sources
@@ -17,6 +17,7 @@ from workflows.marketing.openfilm_brief import validate_brief
 
 
 class OpenFilmStageError(RuntimeError): pass
+class PlatformReviewUncertain(OpenFilmStageError): pass
 class TextCutoffError(OpenFilmStageError): pass
 class MissingAudioError(OpenFilmStageError): pass
 
@@ -84,7 +85,17 @@ def produce(service, run, queue_claim, graph_claim, backend):
         elif callable(getattr(authority,'check',None)):
             platform_ref=_bounded(lambda:authority.check(run,brief_ref,brief),time.monotonic()+timeout,cancelled)
         else: raise ValueError('platform authority unavailable')
+        if isinstance(platform_ref,dict):
+            if set(platform_ref)!={'blocked_ref'} or not isinstance(platform_ref['blocked_ref'],str) or not callable(getattr(authority,'verify_blocked',None)) or _bounded(lambda:authority.verify_blocked(run,brief_ref,brief,platform_ref['blocked_ref']),time.monotonic()+timeout,cancelled) is not True: raise ValueError('platform block unverified')
+            evidence=json.loads(service.artifacts.get(platform_ref['blocked_ref']))
+            ref=service.artifacts.put(json.dumps({'status':'blocked','reason':'platform constraints unsupported or unclear','platform_block_ref':platform_ref['blocked_ref'],'platform_review':evidence,'outputs':[]},sort_keys=True).encode())
+            graph.finish(run,'asset_production',snapshot,'blocked',ref,graph_claim,skill_fingerprint=fingerprint,queue_claim=queue_claim)
+            return {'stage':'asset_production','status':'blocked','artifact_ref':ref,'reason':'platform constraints unsupported or unclear'}
         verify_platform(service,run,brief_ref,brief,platform_ref,timeout,cancelled)
+    except UncertainExecutorError:
+        try: service.fence_execution(run)
+        except Exception: pass
+        raise PlatformReviewUncertain('platform review outcome uncertain; inspect worker before retry') from None
     except Exception:
         ref=service.artifacts.put(json.dumps({'status':'blocked','reason':'current platform constraints unavailable','outputs':[]},sort_keys=True).encode())
         graph.finish(run,'asset_production',snapshot,'blocked',ref,graph_claim,skill_fingerprint=fingerprint,queue_claim=queue_claim)

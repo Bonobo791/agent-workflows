@@ -5,6 +5,7 @@ import socket
 import sys
 from pathlib import Path
 from runner.worker import read_secret, ConfigurationError
+from runner.control import MAX_CONTROL_RESPONSE
 
 def request_control(request):
     secret_path=os.environ.get('CONTROL_SECRET_FILE')
@@ -16,8 +17,8 @@ def request_control(request):
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
         client.settimeout(5); client.connect(str(path)); client.sendall(payload)
         with client.makefile('rb') as stream:
-            raw=stream.readline(65537)
-            if not raw.endswith(b'\n') or len(raw)>65536: raise ConfigurationError('invalid response')
+            raw=stream.readline(MAX_CONTROL_RESPONSE+1)
+            if not raw.endswith(b'\n') or len(raw)>MAX_CONTROL_RESPONSE: raise ConfigurationError('invalid response')
             response=json.loads(raw)
     if not isinstance(response,dict) or type(response.get('ok')) is not bool: raise ConfigurationError('invalid response')
     return response

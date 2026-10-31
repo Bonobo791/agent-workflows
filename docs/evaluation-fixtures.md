@@ -26,7 +26,10 @@ static record:
 - `tests.test_openfilm_stage` tests actual decoded artifact references, reviewer
   access evidence, missing and stale inputs, cancellation and retry limits.
   `tests.test_openfilm_integration` optionally renders synthetic media with a
-  locally installed OpenFilm package; it does not verify the intended container.
+  locally installed OpenFilm package. The opt-in
+  `tests.test_openfilm_podman_integration` also renders a synthetic still and
+  vertical MP4 without credentials in the configured isolated image, then checks
+  the resulting files and previews. It does not establish platform compliance.
 - `tests.test_engineering_entrypoint` exercises supervisor-observed acceptance
   commands, separate QA, exact-commit checks, review dispositions, approved PR
   actions and a second review using synthetic integrations.

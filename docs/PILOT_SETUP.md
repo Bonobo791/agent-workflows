@@ -24,6 +24,17 @@ must not contain private skills, credentials, user data or session histories.
   under the private state directory. Local engineering uses the separately
   provisioned and explicitly bound checkout described below. Never put
   credentials in this JSON file.
+  To inspect the current launch inputs without printing configuration values,
+  run `python -m runner.local_config_inspect /absolute/path/to/codex /private/state`.
+  The directory must already exist and be owner-only. The command prints the
+  binary path and hash and the integration names needed for the JSON; save its
+  output only in an owner-only file outside the repository. It makes no model
+  turn and does not copy credentials. Names and paths can still be private.
+  On Linux, the standard npm `codex` launcher is resolved to its native binary;
+  the resulting configuration pins that binary rather than the Node launcher.
+  This is a candidate for the inspected directory, not proof of isolation:
+  each actual workspace is checked separately at runtime, and changed binaries
+  or inherited integrations fail closed.
 - `WORKFLOW_TASK_CONFIG_FILE`: an owner-only JSON object with `run`, `workflow`,
   `project`, `number`, `ready_columns`, `completed_columns`,
   `blocker_direction`, `plan_endpoint`, `github_owner`, `github_repo` and
@@ -51,6 +62,11 @@ must not contain private skills, credentials, user data or session histories.
   establishes what was retrieved, not that a source is primary or a claim true;
   the independent reviewer makes those judgments. Requests with invented paths
   or queries are rejected even on an approved host.
+  Each retrieval has one total deadline covering DNS and response reads; a
+  cancelled or timed-out retrieval stops its helper and produces no snapshot.
+  Approved JSON sources are size-limited and must parse as valid JSON. Changing
+  the fetcher changes its snapshot policy, so older snapshots require a fresh
+  fetch and review.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
@@ -169,3 +185,11 @@ verify the pinned app-server version and requested Terra-medium model with a
 real authorized turn, confirm session resume and container stop/fencing, and run
 one expressly approved task. Model catalog discovery is not an entitlement
 test. Local fake-Engine tests do not prove any of these host properties.
+
+# Approval-wait metrics
+
+The private metrics snapshot reports an approval wait after the dispatcher reaches a marketing freeze or engineering PR gate. It counts the observation only while both claims are live, the recorded upstream stage revision remains current, and the gate has not completed. A matching freeze approval removes that wait immediately. The observation does not grant approval; inspect the private control plane for the current action. Existing waits appear after the worker next dispatches. Alert rules and dashboards are local definitions and do not establish a deployed collector or notifications.
+
+The approval alert measures a continuous nonzero aggregate for one hour; it does not measure the age of each individual wait.
+
+On worker shutdown, an active automatic assignment is fenced before the control process exits. Fencing invalidates its claims and requests a manual lifecycle stop; it does not prove that an in-flight process or remote request has stopped. Inspect unresolved scopes and confirm termination before replacement or recovery.

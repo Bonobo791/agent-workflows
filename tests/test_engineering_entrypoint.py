@@ -138,6 +138,8 @@ class EngineeringEntrypointTests(unittest.TestCase):
                         if result.get('status')=='awaiting_approval': break
                     self.assertEqual(seen,['intake','plan','implement','test','qa','implement','test','qa','open_draft'])
                     self.assertEqual(result['status'],'awaiting_approval'); self.assertEqual(Engine.canonical_reviews,2); self.assertEqual(len(Engine.resumed),1)
+                    from runner.metrics import snapshot, prometheus_text
+                    self.assertIn('workflow_stages{workflow="engineering",stage="open_draft",status="awaiting_approval"} 1',prometheus_text(snapshot(service.graph.db)))
                     package=json.loads(service.artifacts.get(result['version'])); report=json.loads(service.artifacts.get(package['test_report']))
                     self.assertEqual(report['commands'][0]['exit_code'],0)
                     self.assertEqual(package['test_evidence_kind'],'supervisor_observed'); self.assertTrue(package['trusted_execution_verified']); self.assertEqual(package['role_report_kind'],'role_reported')
@@ -237,6 +239,7 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     self.assertEqual(draft_observed['outcome'],'desired_state_observed')
                     self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(draft['proposal'],)).fetchone(),('desired_state_observed',))
                     self.assertEqual(service.graph.get('run-1','open_draft')['status'],'passed')
+                    self.assertNotIn('stage="open_draft",status="awaiting_approval"',prometheus_text(snapshot(service.graph.db)))
                     service.pr_authority.http.comments=[{'id':1,'body':'Fix this'}]
                     service.graph.db.execute("CREATE TRIGGER reject_review_audit BEFORE INSERT ON review_audit BEGIN SELECT RAISE(ABORT,'synthetic audit failure'); END")
                     with self.assertRaises(ControlError): control.handle('x'*40,{**base_req,'action':'pr_review','number':7,'dispositions':{'review:1':{'disposition':'valid','evidence':'fixture'}}})

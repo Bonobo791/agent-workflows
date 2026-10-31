@@ -129,13 +129,23 @@ evidence, not the truth of arbitrary claims or a complete marketing workflow.
 An optional local platform reviewer binds configured source URLs and posting
 surfaces to a fresh reviewer session and terminated scope. A synthetic LinkedIn
 Page logo brief passed against a live official specification; other surfaces
-and channels are not thereby validated.
+and channels are not thereby validated. Meta's official Instagram API page on
+Postman exposed only a page shell to the bounded fetcher in an initial test. The
+page's public JSON collection is now fetchable and contains Reel specifications.
+A signed-in synthetic 1080 × 1920 Reel review initially blocked because the
+source did not explicitly establish a vertical-pixel limit; a later run passed
+the same dimensions. A synthetic 3000-pixel-wide Reel was blocked and its
+finding was retained with verified source and scope evidence. These are model
+judgments, not proof that Instagram will accept or reject actual media.
 With an asset-review role skill, a fresh local reviewer receives the actual PNG
 assets and previews as image inputs. Delivery is bound to the completed turn,
 artifact hashes and terminated scope; a matching synthetic still passed and a
 missing-text image was blocked.
 MP4 review uses 12 timestamp-verified frames extracted from the actual video in
-a local scope. An experimental approved offline policy can also transcribe one
+a local scope. A signed-in synthetic vertical-video brief was rendered by the
+offline OpenFilm container and passed sampled-frame review with synthetic
+platform rules; its package requires full human playback. An experimental
+approved offline policy can also transcribe one
 audio stream in an explicitly configured language. A synthetic Portuguese video
 passed transcription and a signed-in reviewer blocked an inconsistent fixture.
 Machine transcription can be wrong and does not establish audio quality. The
@@ -171,9 +181,11 @@ policy or other source authority, the worker blocks at the source gate. A synthe
 signed-in local run using an approved public source reached a human-review
 package: LinkedIn, X and Facebook reviews passed; Reddit lacked community
 context and Instagram lacked verified media. Its proposed media brief used an
-invalid generic channel; the prompt now requires a supported concrete channel,
-but that correction has not yet been verified in another signed-in run. This
-partial package does not establish full marketing acceptance. A separate synthetic
+invalid generic channel; a later signed-in synthetic asset-brief turn produced
+a valid Instagram brief. The local OpenFilm container rendered its PNG, and an
+independent signed-in image reviewer passed it. That probe used preseeded
+upstream stages and synthetic platform rules. This partial evidence does not
+establish full marketing acceptance. A separate synthetic
 entrypoint fixture reaches five passed channel reviews with a decoded private
 image and synthetic platform, community and media-review authorities; a second
 fixture demonstrates blocked missing media. These fixtures do not verify actual

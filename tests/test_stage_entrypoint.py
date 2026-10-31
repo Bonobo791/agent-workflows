@@ -18,7 +18,9 @@ class StageEntrypointTests(unittest.TestCase):
         self._run_marketing(with_asset=False)
     def test_marketing_all_channels_with_synthetic_verified_asset(self):
         self._run_marketing(with_asset=True)
-    def _run_marketing(self,with_asset):
+    def test_review_package_includes_verified_blocked_media_findings(self):
+        self._run_marketing(with_asset=True,asset_blocked=True)
+    def _run_marketing(self,with_asset,asset_blocked=False):
         class External(http.server.BaseHTTPRequestHandler):
             version='v1'; owner=None; available=True
             def log_message(self,*args): pass
@@ -169,8 +171,12 @@ class StageEntrypointTests(unittest.TestCase):
                                 try:
                                     provenance=Provenance(graph); session='synthetic-asset-review'
                                     checks={'content_fidelity':True,'brand_fidelity':True,'rights':True,'platform_suitability':True,'readability':True,'captions':True,'safe_zones':True,'audio':True}
+                                    if asset_blocked: checks['safe_zones']=False
                                     report_ref=service.artifacts.put(json.dumps({'assets':[{'artifact_ref':ref,**checks} for ref in asset_refs]}).encode())
-                                    response=service.artifacts.put(json.dumps({'stage':'asset_review','status':'passed','input_versions':inputs,'outputs':[report_ref],'findings':[]}).encode())
+                                    finding={'id':'safe-zone','severity':'blocking','description':'Title too close to edge.','location':'image','evidence':asset_refs[0],'remedy':'Increase margin.','resolution':'open'}
+                                    result={'stage':'asset_review','status':'blocked' if asset_blocked else 'passed','input_versions':inputs,'outputs':[report_ref],'findings':[finding] if asset_blocked else []}
+                                    if asset_blocked: result['reason']='Safe area unverified.'
+                                    response=service.artifacts.put(json.dumps(result).encode())
                                     access=service.artifacts.put(b'synthetic media access evidence')
                                     provenance.bind(run,'asset_review',session,skills,claim,fresh=True,subject=subject); provenance.mark_completed(run,'asset_review',session,claim,response)
                                     return {'attempt_id':attempt_id,'session_id':session,'response_ref':response,'access_ref':access}
@@ -198,11 +204,15 @@ class StageEntrypointTests(unittest.TestCase):
                         if result.get('status')=='awaiting_approval': control.handle('x'*40,{'action':'approve','run':'run-1','approval':'freeze','version':result['version']})
                         if result.get('stage')=='assembly' and result.get('status')=='awaiting_review': break
                     self.assertEqual(result['status'],'awaiting_review'); self.assertEqual(Engine.canonical_reviews,2); self.assertEqual(Engine.source_reviews,3); self.assertEqual(len(Engine.resumed),1)
-                    self.assertEqual(service.graph.get('run-1','asset_production')['status'],'passed' if with_asset else 'blocked')
+                    self.assertEqual(service.graph.get('run-1','asset_production')['status'],'passed' if with_asset and not asset_blocked else 'blocked')
                     self.assertEqual(service.graph.get('run-1','reddit_review')['status'],'passed')
                     package=json.loads(service.artifacts.get(service.graph.get('run-1','assembly')['version']))
-                    if with_asset:
+                    if with_asset and not asset_blocked:
                         for channel in ('linkedin','x','facebook','instagram','reddit'): self.assertEqual(package['stages'][channel+'_review']['status'],'passed')
+                    if asset_blocked:
+                        self.assertEqual(package['stages']['instagram_review']['status'],'blocked')
+                        self.assertEqual(package['stages']['asset_production']['asset_review']['reason'],'Safe area unverified.')
+                        self.assertEqual(package['stages']['asset_production']['asset_review']['findings'][0]['description'],'Title too close to edge.')
                     self.assertIn('synthetic canonical_draft',package['stages']['canonical_draft']['contents'][0])
                     self.assertIn('synthetic brief',package['stages']['brief']['contents'][0])
                     self.assertEqual(package['stages']['brief']['source_verification']['verifier_id'],'synthetic-independent-verifier')
@@ -232,7 +242,7 @@ class StageEntrypointTests(unittest.TestCase):
                         asset=json.loads(service.artifacts.get(service.graph.get('run-1','asset_production')['version']))
                         manifest=json.loads(service.artifacts.get(asset['manifest_ref']))
                         self.assertEqual(service.artifacts.get(manifest['assets'][0]['artifact_ref']),image)
-                        refs.extend([asset['manifest_ref'],asset['access_ref'],asset['report_ref'],manifest['platform_ref'],manifest['assets'][0]['artifact_ref']])
+                        refs.extend([asset['manifest_ref'],asset['access_ref'],asset['report_ref'],asset['response_ref'],manifest['platform_ref'],manifest['assets'][0]['artifact_ref']])
                     for ref in refs:
                         path=Path(service.artifacts.directory)/ref; original=path.read_bytes()
                         path.unlink(); self.assertFalse(service.verify_terminal('run-1'))

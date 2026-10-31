@@ -18,6 +18,11 @@ class StageDispatcher:
     def __init__(self,service):
         self.service=service
         service.graph.db.execute('CREATE TABLE IF NOT EXISTS correction_attempts(id INTEGER PRIMARY KEY AUTOINCREMENT,run TEXT NOT NULL,writer_stage TEXT NOT NULL,writer_version TEXT NOT NULL,review_stage TEXT NOT NULL,review_version TEXT NOT NULL,state TEXT NOT NULL,input_hash TEXT,result_version TEXT)')
+    def _approval_wait(self,run,stage,dependency):
+        prior=self.service.graph.get(run,dependency)
+        claim=self.service.graph.db.execute("SELECT MAX(id) FROM claim_audit WHERE run=? AND status='claimed'",(run,)).fetchone()[0]
+        if claim is None: raise StageError('claim audit unavailable')
+        self.service.graph.db.execute('INSERT OR REPLACE INTO approval_waits VALUES(?,?,?,?,?,?)',(run,stage,dependency,prior['version'],prior['revision'],claim))
     def next_stage(self,run,claim):
         graph=self.service.graph
         graph._lease(run,claim)
@@ -32,6 +37,10 @@ class StageDispatcher:
                     import json
                     record=json.loads(self.service.artifacts.get(review['version']))
                     if record.get('_blocked_reason')=='page structure rules unavailable or unmet' and not record.get('_page_structure_blocked'): return 'blocked'
+                    draft=graph.get(run,'canonical_draft')
+                    subject=json.loads(self.service.artifacts.get(draft['version']))['outputs'][0]
+                    actionable=any(item.get('severity')=='blocking' and item.get('resolution')=='open' and item.get('evidence')==subject for item in record.get('findings',[]))
+                    if not actionable and not record.get('_source_coverage_blocked') and not record.get('_page_structure_blocked'): return 'blocked'
                 except Exception: return 'blocked'
             legacy=graph.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stage_corrections'").fetchone()
             if legacy and graph.db.execute('SELECT 1 FROM stage_corrections WHERE run=? AND stage=?',(run,writer_stage)).fetchone(): return 'blocked'
@@ -50,6 +59,11 @@ class StageDispatcher:
             return stage
         return 'blocked' if any((graph.get(run,name) or {}).get('status') in ('blocked','failed') for name in definition.dependencies) else None
     def step(self,run,queue_claim,graph_claim):
+        result=self._step(run,queue_claim,graph_claim)
+        if result.get('status')!='awaiting_approval' or result.get('stage') not in ('freeze','open_draft','triage','ready','post_ready'):
+            self.service.graph.db.execute('DELETE FROM approval_waits WHERE run=?',(run,))
+        return result
+    def _step(self,run,queue_claim,graph_claim):
         if not self.service.queue.may_start(run,queue_claim): raise StageError('queue claim unavailable')
         self.service.graph.migrate_marketing_assets(run,graph_claim,queue_claim)
         intake=self.service.task_intake
@@ -100,7 +114,11 @@ class StageDispatcher:
         if self.service.graph._definition(run).name=='engineering' and stage in ('open_draft','triage','ready','post_ready'):
             if stage=='open_draft':
                 from runner.engineering_dispatch import approval_package
-                return {'stage':stage,'status':'awaiting_approval','version':approval_package(self.service,run)}
+                package=approval_package(self.service,run)
+                self._approval_wait(run,stage,'qa')
+                return {'stage':stage,'status':'awaiting_approval','version':package}
+            dependency={'triage':'open_draft','ready':'triage','post_ready':'ready'}[stage]
+            self._approval_wait(run,stage,dependency)
             return {'stage':stage,'status':'awaiting_approval'}
         if stage=='intake':
             import datetime, json
@@ -115,13 +133,16 @@ class StageDispatcher:
             if not review: raise StageError('canonical review unavailable')
             self._verify_recorded_review(run,'canonical_review')
             approved=self.service.actions.db.execute("SELECT 1 FROM external_actions WHERE run=? AND action='freeze' AND version=? AND status='approved'",(run,review['version'])).fetchone()
-            if not approved: return {'stage':'freeze','status':'awaiting_approval','version':review['version']}
+            if not approved:
+                self._approval_wait(run,'freeze','canonical_review')
+                return {'stage':'freeze','status':'awaiting_approval','version':review['version']}
             self.service.complete(run,'freeze',graph_claim,{})
             return {'stage':'freeze','status':self.service.graph.get(run,'freeze')['status']}
         if stage in ('asset_production','assembly'):
             if stage=='asset_production' and self.service.openfilm_backend is not None:
-                from runner.openfilm_stage import produce, OpenFilmStageError
+                from runner.openfilm_stage import produce, OpenFilmStageError, PlatformReviewUncertain
                 try: return produce(self.service,run,queue_claim,graph_claim,self.service.openfilm_backend)
+                except PlatformReviewUncertain as exc: return {'stage':stage,'status':'uncertain','reason':str(exc)}
                 except OpenFilmStageError as exc: return {'stage':stage,'status':'blocked','reason':str(exc)}
             if stage=='assembly':
                 from workflows.marketing.gates import CHANNELS

@@ -58,6 +58,7 @@ class GraphStore:
         CREATE TABLE IF NOT EXISTS graph_claims(task_id TEXT PRIMARY KEY, run TEXT NOT NULL, token TEXT NOT NULL, expires REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS claim_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, task_id TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_stages(run TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, version TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(run,stage));
+        CREATE TABLE IF NOT EXISTS approval_waits(run TEXT PRIMARY KEY, stage TEXT NOT NULL, dependency TEXT NOT NULL, version TEXT NOT NULL, revision INTEGER NOT NULL, claim_id INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_results(run TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL, output_hash TEXT NOT NULL, PRIMARY KEY(run,stage,input_hash));
         CREATE TABLE IF NOT EXISTS graph_revisions(id INTEGER PRIMARY KEY AUTOINCREMENT);
         CREATE TABLE IF NOT EXISTS graph_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, version TEXT NOT NULL, revision INTEGER NOT NULL, created REAL NOT NULL);

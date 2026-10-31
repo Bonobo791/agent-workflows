@@ -14,6 +14,31 @@ from unittest.mock import patch
 
 @unittest.skipUnless(os.environ.get('OPENFILM_PODMAN_IMAGE') and os.environ.get('OPENFILM_PODMAN_SOCKET'), 'rootless Podman render not configured')
 class PodmanRenderIntegrationTests(unittest.TestCase):
+    def test_credential_free_still_and_vertical_video(self):
+        from runner.artifacts import ArtifactStore
+        from workflows.marketing.assets import ingest_verified_asset, ingest_verified_preview
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);workspace=root/'workspace';output=root/'output';storage=root/'storage'
+            for path in (workspace,output,storage):path.mkdir(mode=0o700)
+            fixture=Path(__file__).parent/'fixtures'/'openfilm'
+            for index in range(2):shutil.copytree(fixture,workspace/'project'/'projects'/str(index))
+            (workspace/'brief.json').write_text(json.dumps({'assets':[{'kind':'png'},{'kind':'mp4'}]}))
+            command=['podman','run','--rm','--network','none','--read-only','--cap-drop','all',
+                     '--security-opt','no-new-privileges','--userns','keep-id','--user',f'{os.geteuid()}:{os.getegid()}',
+                     '--tmpfs','/tmp:rw,nosuid,nodev','-e','OPENFILM_HOME=/tmp/openfilm',
+                     '-v',str(workspace)+':/workspace:rw,Z','-v',str(output)+':/output:rw,Z',os.environ['OPENFILM_PODMAN_IMAGE']]
+            completed=subprocess.run(command,capture_output=True,timeout=120)
+            self.assertEqual(completed.returncode,0,completed.stderr.decode(errors='replace'))
+            items=json.loads((output/'render-result.json').read_text())['outputs'];self.assertEqual(len(items),2)
+            store=ArtifactStore(str(storage))
+            for kind,item in zip(('png','mp4'),items):
+                brief={'version':'brief','kind':kind,'width':180,'height':320,'duration_seconds':1}
+                binding={'brief_version':'brief','project_version':'project','asset_sha256':item['sha256']}
+                self.assertEqual(ingest_verified_asset(store,output,item['path'],brief,binding,'project')['status'],'awaiting_review')
+                preview=item['previews'][0]
+                self.assertIn('artifact_ref',ingest_verified_preview(store,output,preview['path'],preview['sha256'],'brief','project'))
+                report=json.loads((output/item['report']['path']).read_text())
+                self.assertTrue(report['ok']);self.assertTrue(any(line.startswith('✓ ') and 'same picture' in line for line in report['lines']))
     def test_renderer_refuses_remaining_capabilities(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); workspace=root/'workspace'; output=root/'output'

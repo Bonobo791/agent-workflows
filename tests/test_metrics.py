@@ -7,6 +7,30 @@ from runner.service import Service
 
 
 class MetricsTests(unittest.TestCase):
+    def test_wait_observation_expires_with_claim_or_changed_dependency(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('run','engineering','task'); service.enqueue('run')
+                db=service.graph.db
+                db.execute("UPDATE jobs SET status='running',expires=20 WHERE run='run'")
+                db.execute("INSERT INTO graph_claims VALUES('task','run','private-token',20)")
+                db.execute("INSERT INTO claim_audit(schema_version,run,task_id,status,created) VALUES(1,'run','task','claimed',1)")
+                db.execute("INSERT INTO graph_stages VALUES('run','qa','passed','private-version',7)")
+                db.execute("INSERT INTO approval_waits VALUES('run','open_draft','qa','private-version',7,1)")
+                sample='workflow_stages{workflow="engineering",stage="open_draft",status="awaiting_approval"} 1'
+                self.assertIn(sample,prometheus_text(snapshot(db,now=10)))
+                self.assertNotIn(sample,prometheus_text(snapshot(db,now=20)))
+                db.execute("INSERT INTO claim_audit(schema_version,run,task_id,status,created) VALUES(1,'run','task','claimed',2)")
+                self.assertNotIn(sample,prometheus_text(snapshot(db,now=10)))
+                db.execute("UPDATE approval_waits SET claim_id=2 WHERE run='run'")
+                db.execute("UPDATE graph_stages SET revision=8 WHERE run='run' AND stage='qa'")
+                self.assertNotIn(sample,prometheus_text(snapshot(db,now=10)))
+                db.execute("UPDATE graph_stages SET revision=7 WHERE run='run' AND stage='qa'")
+                db.execute("INSERT INTO graph_stages VALUES('run','open_draft','passed','private-result',9)")
+                self.assertNotIn(sample,prometheus_text(snapshot(db,now=10)))
+            finally: service.close()
+
     def test_snapshot_aggregates_both_workflows_without_private_labels(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)

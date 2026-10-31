@@ -249,9 +249,11 @@ def main():
             while not stopping[0]: server.handle_request()
         finally: server.server_close()
     finally:
-        if control.auto_worker is not None: control.auto_worker.stop()
-        if service.lifecycle is not None and hasattr(service.lifecycle,'close'): service.lifecycle.close()
-        service.close()
+        try:
+            if control.auto_worker is not None: control.auto_worker.stop(service)
+        finally:
+            if service.lifecycle is not None and hasattr(service.lifecycle,'close'): service.lifecycle.close()
+            service.close()
 
 if __name__=='__main__':
     try: main()

@@ -35,6 +35,10 @@ render supervisor or independent media reviewer, so media remains blocked until
 those boundaries are supplied. See [OPENFILM.md](OPENFILM.md) for tested and
 untested behavior. Paid generation and publication are not automatic.
 
+When independently verified media-review evidence is available, the private
+review package includes the review response and its findings alongside the
+asset manifest. Blocked media does not become an approved channel asset.
+
 ## Remaining integration
 
 The default setup still requires private role skills and format rules, trusted

@@ -190,6 +190,15 @@ and keeps the attempt uncertain. A final review package rechecks the asset
 references, render termination, reviewer provenance, skill hashes, access receipt
 and report. No actual media-access authority is configured by default.
 
+When the configured local platform reviewer blocks a brief, the asset outcome
+retains its verified, source-bound reason and findings for the human-review
+package. A missing, stale or unverifiable platform review remains a generic
+block; its findings are not treated as authenticated evidence. A blocked review
+never authorizes rendering.
+If a platform check times out or is cancelled before its result is known, the
+worker fences the run and reports an uncertain outcome instead of recording a
+completed block. Inspect the worker and confirm termination before retrying.
+
 Instagram review depends on both its draft and terminal asset production. A
 passed asset review supplies version-bound media references and its independent
 review report to the channel reviewer; a blocked asset keeps Instagram blocked.

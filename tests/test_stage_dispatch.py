@@ -1,10 +1,23 @@
 import tempfile
 import unittest
+import json
 from runner.service import Service
 from runner.stage_dispatch import StageDispatcher, StageError
 from tests.source_fixture import outputs as fixture_outputs, verifier as fixture_verifier
 
 class StageDispatchTests(unittest.TestCase):
+    def test_source_only_review_block_does_not_request_draft_correction(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');claim=service.claim('r')
+                subject=service.artifacts.put(b'draft')
+                writer=service.artifacts.put(json.dumps({'outputs':[subject]}).encode())
+                review=service.artifacts.put(json.dumps({'findings':[{'severity':'blocking','resolution':'open','evidence':'source-proof'}]}).encode())
+                for stage,ref,status in [('intake',subject,'passed'),('brief',subject,'passed'),('canonical_draft',writer,'passed'),('canonical_review',review,'blocked')]:
+                    service.graph.finish('r',stage,service.graph.prepare('r',stage,claim),status,ref,claim)
+                self.assertEqual(StageDispatcher(service).next_stage('r',claim),'blocked')
+            finally:service.close()
     def test_first_quota_error_is_reported_and_persisted_through_control(self):
         import json
         from pathlib import Path
@@ -339,7 +352,10 @@ class StageDispatchTests(unittest.TestCase):
             service.required_skills={role:['role'] for role in roles}; dispatcher=StageDispatcher(service)
             for _ in range(4): dispatcher.step('r',queue['token'],claim)
             self.assertEqual(dispatcher.step('r',queue['token'],claim)['status'],'awaiting_approval')
+            from runner.metrics import snapshot, prometheus_text
+            self.assertIn('workflow_stages{workflow="marketing",stage="freeze",status="awaiting_approval"} 1',prometheus_text(snapshot(service.graph.db)))
             service.approve('r','freeze',service.graph.get('r','canonical_review')['version'],'operator')
+            self.assertNotIn('stage="freeze",status="awaiting_approval"',prometheus_text(snapshot(service.graph.db)))
             for _ in range(30):
                 result=dispatcher.step('r',queue['token'],claim)
                 if result.get('status')=='awaiting_review': break

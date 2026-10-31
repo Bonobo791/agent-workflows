@@ -6,6 +6,8 @@ import socketserver
 import stat
 from pathlib import Path
 
+MAX_CONTROL_RESPONSE=6*1024*1024+65536
+
 class ControlError(RuntimeError): pass
 
 class ControlPlane:
@@ -168,7 +170,9 @@ class _Handler(socketserver.StreamRequestHandler):
             result=self.server.control.handle(request.get('secret'),request.get('request'))
             response={'ok':True,'result':result}
         except Exception: response={'ok':False,'error':'request rejected'}
-        self.wfile.write(json.dumps(response,separators=(',',':')).encode()+b'\n')
+        encoded=json.dumps(response,separators=(',',':')).encode()+b'\n'
+        if len(encoded)>MAX_CONTROL_RESPONSE: encoded=b'{"ok":false,"error":"response too large"}\n'
+        self.wfile.write(encoded)
 
 class UnixControlServer(socketserver.UnixStreamServer):
     def __init__(self,path,control):

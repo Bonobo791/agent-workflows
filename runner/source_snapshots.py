@@ -3,7 +3,7 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from runner.source_fetch import SourceFetchError
+from runner.source_fetch import SourceFetchError, validate_content
 
 MAX_AGE=86400
 
@@ -28,8 +28,10 @@ class SourceSnapshots:
         items=[]; total=0; seen=set()
         for source in sources:
             if cancelled() or not isinstance(source,dict) or set(source)!={'id','url','evidence_id'} or any(not isinstance(source[k],str) or not source[k].strip() for k in source) or source['id'] in seen: raise SourceFetchError('source request invalid')
-            seen.add(source['id']); fetched=self.fetcher.fetch(source['url']); content=fetched['content'].encode('utf-8');total+=len(content)
-            if fetched['url']!=source['url'] or fetched['content_type'] not in ('text/html','text/plain','application/xhtml+xml') or not content or len(content)>self.fetcher.max_bytes or total>1048576 or hashlib.sha256(content).hexdigest()!=fetched['sha256']: raise SourceFetchError('source content invalid')
+            seen.add(source['id']); fetched=self.fetcher.fetch(source['url'],cancelled=cancelled); content=fetched['content'].encode('utf-8');total+=len(content)
+            try: validate_content(fetched['content_type'],content)
+            except (ValueError,UnicodeError): raise SourceFetchError('source content invalid') from None
+            if fetched['url']!=source['url'] or len(content)>self.fetcher.max_bytes or total>1048576 or hashlib.sha256(content).hexdigest()!=fetched['sha256']: raise SourceFetchError('source content invalid')
             items.append({**source,'content_type':fetched['content_type'],'content_ref':store.put(content)})
         if cancelled() or self._policy()!=self.policy_hash: raise SourceFetchError('source request cancelled or policy changed')
         graph._lease(run,claim)
@@ -47,10 +49,10 @@ class SourceSnapshots:
             if not isinstance(items,list) or len(items)!=len(sources) or not 1<=len(items)<=8: return False
             total=0
             for source,item in zip(sources,items):
-                if not isinstance(item,dict) or set(item)!={'id','url','evidence_id','content_type','content_ref'} or any(item[k]!=source[k] for k in ('id','url','evidence_id')) or item['content_type'] not in ('text/html','text/plain','application/xhtml+xml'): return False
+                if not isinstance(item,dict) or set(item)!={'id','url','evidence_id','content_type','content_ref'} or any(item[k]!=source[k] for k in ('id','url','evidence_id')): return False
                 content=store.get(item['content_ref']);total+=len(content)
                 if not content or len(content)>self.fetcher.max_bytes or total>1048576: return False
-                content.decode('utf-8','strict')
+                validate_content(item['content_type'],content)
             if draft_ref is not None: store.get(draft_ref)
             return True
         except Exception: return False

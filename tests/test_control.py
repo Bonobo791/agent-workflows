@@ -53,6 +53,24 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(control.handle('synthetic-secret',{'action':'artifact','reference':ref})['artifact']['review'],'synthetic')
             service.close()
 
+    def test_cli_reads_large_authenticated_artifact_over_socket(self):
+        import json, os, threading
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.cli import request_control
+        from runner.control import UnixControlServer
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); secret=Path(root)/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            content='\x7f'*(1048576-20)
+            ref=service.artifacts.put(json.dumps({'review':content},ensure_ascii=False).encode())
+            server=UnixControlServer(Path(root)/'control.sock',ControlPlane(service,'x'*40))
+            thread=threading.Thread(target=server.handle_request); thread.start()
+            try:
+                with patch.dict(os.environ,{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}):
+                    result=request_control({'action':'artifact','reference':ref})
+                self.assertEqual(result['result']['artifact']['review'],content)
+            finally: thread.join(5); server.server_close(); service.close()
+
     def test_cancel_job_fences_graph_writes(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root); control=ControlPlane(service,'synthetic-secret')

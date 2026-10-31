@@ -15,12 +15,100 @@ class Connection:
     def close(self): self.closed=True
 
 class SourceFetchTests(unittest.TestCase):
+    def test_already_cancelled_fetch_does_not_launch(self):
+        fetcher=SourceFetcher(['https://docs.example.com/'])
+        with patch('runner.source_fetch.subprocess.Popen') as launch:
+            with self.assertRaises(SourceFetchError): fetcher.fetch('https://docs.example.com/',cancelled=lambda:True)
+            launch.assert_not_called()
+    def test_dns_cannot_exceed_total_deadline(self):
+        import subprocess,sys,tempfile,time
+        from pathlib import Path
+        fetcher=SourceFetcher(['https://docs.example.com/'],timeout=1)
+        def slow_dns(*args,**kwargs): time.sleep(2); return []
+        code="""
+import pathlib,socket,sys,time
+from runner.source_fetch import SourceFetcher
+def slow(*args,**kwargs):
+ pathlib.Path(sys.argv[1]).write_text('resolving'); time.sleep(2); return []
+socket.getaddrinfo=slow
+SourceFetcher(['https://docs.example.com/'],timeout=1)._fetch_direct('https://docs.example.com/')
+"""
+        with tempfile.TemporaryDirectory() as root:
+            marker=Path(root)/'dns'; popen=subprocess.Popen; children=[]
+            def launch(*args,**kwargs):
+                child=popen([sys.executable,'-c',code,str(marker)],**kwargs); children.append(child); return child
+            started=time.monotonic()
+            with patch('runner.source_fetch.socket.getaddrinfo',side_effect=slow_dns), patch('runner.source_fetch.subprocess.Popen',side_effect=launch):
+                with self.assertRaises(SourceFetchError): fetcher.fetch('https://docs.example.com/')
+            self.assertLess(time.monotonic()-started,1.6)
+            self.assertTrue(marker.exists())
+            self.assertEqual(len(children),1); self.assertIsNotNone(children[0].poll())
+
+    def test_helper_enforces_deadline_without_parent_supervision(self):
+        import json,signal,subprocess,sys,time
+        from pathlib import Path
+        path=str(Path(__file__).parents[1]/'runner'/'source_fetch.py')
+        code="""
+import runpy,socket,sys,time
+def slow(*args,**kwargs): time.sleep(2); return []
+socket.getaddrinfo=slow
+sys.argv=[sys.argv[1],'--fetch']
+runpy.run_path(sys.argv[0],run_name='__main__')
+"""
+        started=time.monotonic()
+        result=subprocess.run([sys.executable,'-I','-c',code,path],input=json.dumps({'url':'https://docs.example.com/','max_bytes':1024,'timeout':1}),capture_output=True,text=True,timeout=4)
+        self.assertEqual(result.returncode,-signal.SIGALRM)
+        self.assertLess(time.monotonic()-started,1.6)
+
+    def test_slow_stream_respects_total_deadline_and_cancellation(self):
+        import subprocess,sys,tempfile,time
+        from pathlib import Path
+        code="""
+import http.client,pathlib,socket,sys,threading,time
+from unittest.mock import patch
+from runner.source_fetch import SourceFetcher
+class Connection:
+ def __init__(self): self.client,self.server=socket.socketpair(); self.client.settimeout(1)
+ def request(self,*args,**kwargs):
+  def send():
+   try:
+    self.server.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nContent-Length: 5\\r\\n\\r\\n')
+    self.server.sendall(b'h'); pathlib.Path(sys.argv[1]).write_text('streaming')
+    for value in b'ello': time.sleep(.6); self.server.sendall(bytes([value]))
+   except OSError: pass
+  threading.Thread(target=send,daemon=True).start()
+ def getresponse(self):
+  response=http.client.HTTPResponse(self.client); response.begin(); return response
+ def close(self): self.client.close(); self.server.close()
+f=SourceFetcher(['https://docs.example.com/'],timeout=1); f._connection=lambda *_:Connection()
+with patch('runner.source_fetch.socket.getaddrinfo',return_value=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('93.184.216.34',443))]): f._fetch_direct('https://docs.example.com/')
+"""
+        real_popen=subprocess.Popen
+        with tempfile.TemporaryDirectory() as root:
+            for cancel_after in (None,.4):
+                marker=Path(root)/str(cancel_after); fetcher=SourceFetcher(['https://docs.example.com/'],timeout=1); children=[]; started=time.monotonic()
+                def launch(*args,**kwargs):
+                    child=real_popen([sys.executable,'-c',code,str(marker)],**kwargs); children.append(child); return child
+                with self.subTest(cancel_after=cancel_after),patch('runner.source_fetch.subprocess.Popen',side_effect=launch):
+                    with self.assertRaises(SourceFetchError):
+                        fetcher.fetch('https://docs.example.com/',cancelled=lambda:cancel_after is not None and time.monotonic()-started>=cancel_after)
+                    self.assertLess(time.monotonic()-started,1.6)
+                    self.assertTrue(marker.exists())
+                    self.assertEqual(len(children),1); self.assertIsNotNone(children[0].poll())
+    def test_public_json_sources_must_be_valid_and_bounded(self):
+        fetcher=SourceFetcher(['https://docs.example.com/data'],max_bytes=32)
+        address=[(2,1,6,'',('93.184.216.34',443))]
+        for body,valid in ((b'{"rule":"9:16"}',True),(b'{bad',False),(b'{"n":NaN}',False)):
+            with self.subTest(body=body),patch('runner.source_fetch.socket.getaddrinfo',return_value=address),patch.object(fetcher,'_connection',return_value=Connection(Response(body=body,content_type='application/json'))):
+                if valid:self.assertEqual(fetcher._fetch_direct('https://docs.example.com/data')['content'],body.decode())
+                else:
+                    with self.assertRaises(SourceFetchError):fetcher._fetch_direct('https://docs.example.com/data')
     def test_fetch_uses_exact_approved_public_host_and_records_digest(self):
         import hashlib
         connection=Connection(Response()); fetcher=SourceFetcher(['https://docs.example.com/path?q=1'])
         addresses=[(2,1,6,'',('93.184.216.34',443))]
         with patch('runner.source_fetch.socket.getaddrinfo',return_value=addresses),patch.object(fetcher,'_connection',return_value=connection) as factory:
-            result=fetcher.fetch('https://docs.example.com/path?q=1')
+            result=fetcher._fetch_direct('https://docs.example.com/path?q=1')
         self.assertEqual(result['content'],'primary evidence')
         self.assertEqual(result['sha256'],hashlib.sha256(b'primary evidence').hexdigest())
         self.assertEqual(factory.call_args.args,('docs.example.com','93.184.216.34'))
@@ -29,14 +117,14 @@ class SourceFetchTests(unittest.TestCase):
     def test_rejects_unapproved_urls_and_private_dns_before_connecting(self):
         fetcher=SourceFetcher(['https://docs.example.com/'])
         for url in ('http://docs.example.com/','https://evil.example.com/','https://u:p@docs.example.com/','https://docs.example.com:444/','https://127.0.0.1/','https://docs.example.com/?private=data'):
-            with self.subTest(url=url),self.assertRaises(SourceFetchError): fetcher.fetch(url)
+            with self.subTest(url=url),self.assertRaises(SourceFetchError): fetcher._fetch_direct(url)
         for addresses in ([('127.0.0.1',443)],[('93.184.216.34',443),('10.0.0.1',443)]):
             entries=[(2,1,6,'',(ip,port)) for ip,port in addresses]
             with self.subTest(addresses=addresses),patch('runner.source_fetch.socket.getaddrinfo',return_value=entries),patch.object(fetcher,'_connection') as connect:
-                with self.assertRaises(SourceFetchError): fetcher.fetch('https://docs.example.com/')
+                with self.assertRaises(SourceFetchError): fetcher._fetch_direct('https://docs.example.com/')
                 connect.assert_not_called()
     def test_rejects_redirects_oversized_and_nontext_responses(self):
         fetcher=SourceFetcher(['https://docs.example.com/'],max_bytes=16)
         for response in (Response(302),Response(body=b'x'*17),Response(content_type='application/pdf'),Response(body=b'\xff'),Response(encoding='gzip')):
             with self.subTest(response=response),patch('runner.source_fetch.socket.getaddrinfo',return_value=[(2,1,6,'',('93.184.216.34',443))]),patch.object(fetcher,'_connection',return_value=Connection(response)):
-                with self.assertRaises(SourceFetchError): fetcher.fetch('https://docs.example.com/')
+                with self.assertRaises(SourceFetchError): fetcher._fetch_direct('https://docs.example.com/')
