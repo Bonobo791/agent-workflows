@@ -5,7 +5,7 @@ After=agent-workflows-metrics-http.service agent-workflows-alertmanager.service
 [Service]
 Type=simple
 KillMode=mixed
-ExecStart=/usr/bin/podman run --rm --pull=never --name=agent-workflows-prometheus --network=host --userns=keep-id --user=%U:%G --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp -v %h/.config/agent-workflows/prometheus:/config:ro,Z -v %h/.local/share/agent-workflows-monitor/prometheus:/store:rw,Z docker.io/prom/prometheus@sha256:2c937b95147c9aaf349447df2ba88066977461815e2c6c91e4011d05871ca2ac --config.file=/config/prometheus.yml --storage.tsdb.path=/store --storage.tsdb.retention.time=15d --storage.tsdb.retention.size=2GB --web.config.file=/config/web.yml --web.listen-address=127.0.0.1:19090
+ExecStart=/usr/bin/podman run --rm --pull=never --name=agent-workflows-prometheus --network=host --userns=keep-id --user=%U:%G --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp -v %h/.config/agent-workflows/prometheus:/config:ro,Z -v %h/.local/share/agent-workflows-monitor/prometheus:/store:rw,Z docker.io/prom/prometheus@sha256:d445d1806b38f85b5c394a1b87f94113fde0473b45245922c2e8b1bd41fa68ae --config.file=/config/prometheus.yml --storage.tsdb.path=/store --storage.tsdb.retention.time=15d --storage.tsdb.retention.size=2GB --web.config.file=/config/web.yml --web.listen-address=127.0.0.1:19090
 Restart=on-failure
 RestartSec=10s
 UMask=0077

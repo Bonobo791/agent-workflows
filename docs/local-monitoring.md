@@ -84,6 +84,29 @@ for 120 hours. The container names are fixed; if a previous container remains,
 inspect it rather than removing it blindly. These units are not installed or
 started by this repository.
 
+The optional `agent-workflows-grafana.service` listens on `127.0.0.1:13000`.
+It expects private directories `~/.config/agent-workflows/grafana` and
+`~/.local/share/agent-workflows-monitor/grafana`. In the configuration
+directory, create owner-only `admin-password` and `secret-key` files containing
+distinct strong values. Preserve the secret key with protected backups: changing
+it makes stored encrypted datasource credentials unreadable. The initial
+administrator is `workflow`; the password file is used when the database is
+first initialized, not to rotate an existing account.
+
+Copy `observability/dashboard.json` into `grafana/dashboards/` and copy
+`observability/local/grafana/dashboards.yml` into
+`grafana/provisioning/dashboards/`. Create a private
+`grafana/provisioning/datasources/workflow.yml` from
+`observability/local/grafana/datasource.yml.example`, replacing its placeholder
+with the Prometheus API password and matching the API username. Use a password
+without `$` to avoid Grafana provisioning's environment substitution. The
+datasource file contains a secret: use mode 0600 and never commit it. Protect
+the Grafana database and its backups. The service disables anonymous access,
+signup, automatic plugin installation and plugin administration. It does not
+activate Grafana alerts. Confirm the API refuses unauthenticated access before
+using it, and configure HTTPS or another protected transport if access leaves
+the local host.
+
 The combined opt-in integration test uses the example configurations with
 shortened timing, isolated temporary storage, and synthetic credentials. It
 checks that both APIs reject unauthenticated requests, and that a worker outage
@@ -92,15 +115,22 @@ restarts both containers with temporary persistent directories and verifies
 Prometheus retains an earlier snapshot. It does not verify Alertmanager's
 deduplication history, a real desktop notification, or production alert wait
 times.
+With `WORKFLOW_GRAFANA_TEST=1`, it also starts the pinned Grafana service,
+provisions the dashboard and authenticated datasource with synthetic secrets,
+queries every panel expression, and checks the dashboard after restart. This
+is API-level validation, not a visual or accessibility review.
 
-To exercise the optional local integrations, first make the existing
-Prometheus v3.4.2 and Alertmanager v0.28.1 container images available locally:
+To exercise the optional local integrations, make the Prometheus v3.4.2 and
+Alertmanager v0.28.1 images available for the first two tests, and the pinned
+Prometheus v3.15.1, Alertmanager v0.34.2 and Grafana v13.3.0 images from the
+unit definitions available for the combined tests:
 
 ```sh
 WORKFLOW_METRICS_HTTP_TEST=1 python -m unittest tests.test_metrics_http_integration
 WORKFLOW_DESKTOP_ALERT_TEST=1 python -m unittest tests.test_desktop_alert_receiver_integration
 WORKFLOW_LOCAL_MONITORING_TEST=1 python -m unittest tests.test_local_monitoring_integration
 WORKFLOW_LOCAL_MONITORING_TEST=1 WORKFLOW_MONITOR_SYSTEMD_TEST=1 python -m unittest tests.test_local_monitoring_integration
+WORKFLOW_LOCAL_MONITORING_TEST=1 WORKFLOW_MONITOR_SYSTEMD_TEST=1 WORKFLOW_GRAFANA_TEST=1 python -m unittest tests.test_local_monitoring_integration
 ```
 
 These tests use temporary synthetic credentials and loopback containers. The

@@ -148,14 +148,100 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             worker = start_worker()
             exporter = subprocess.Popen([sys.executable, '-m', 'runner.metrics_http'], env=env,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            alert_name = launch('alertmanager', 'docker.io/prom/alertmanager:v0.28.1',
+            alert_name = launch('alertmanager', 'docker.io/prom/alertmanager:v0.34.2',
                    '--config.file=/config/alertmanager.yml', '--storage.path=/store',
                    '--cluster.listen-address=', '--web.config.file=/config/web.yml',
                    f'--web.listen-address=127.0.0.1:{alert_port}', store=alert_store)
-            prom_name = launch('prometheus', 'docker.io/prom/prometheus:v3.4.2',
+            prom_name = launch('prometheus', 'docker.io/prom/prometheus:v3.15.1',
                    '--config.file=/config/prometheus.yml', '--storage.tsdb.path=/store',
                    '--web.config.file=/config/web.yml', f'--web.listen-address=127.0.0.1:{prom_port}', store=prom_store)
             wait_up('1')
+            if os.environ.get('WORKFLOW_GRAFANA_TEST') == '1':
+                grafana_port = port()
+                grafana_name = 'workflow-monitor-' + uuid.uuid4().hex + '-grafana'
+                names.append(grafana_name)
+                grafana_store = root / 'grafana-store'
+                grafana_store.mkdir(mode=0o700)
+                grafana_config = root / 'grafana-config'
+                (grafana_config / 'dashboards').mkdir(parents=True, mode=0o700)
+                for folder in ('dashboards', 'datasources', 'plugins', 'alerting', 'notifiers'):
+                    (grafana_config / 'provisioning' / folder).mkdir(parents=True, mode=0o700)
+                (grafana_config / 'admin-password').write_text('fixture-password')
+                (grafana_config / 'secret-key').write_text('q' * 40)
+                shutil.copyfile(observability / 'dashboard.json', grafana_config / 'dashboards' / 'dashboard.json')
+                shutil.copyfile(observability / 'local' / 'grafana' / 'dashboards.yml', grafana_config / 'provisioning' / 'dashboards' / 'workflow.yml')
+                datasource = (observability / 'local' / 'grafana' / 'datasource.yml.example').read_text()
+                datasource = datasource.replace('127.0.0.1:19090', f'127.0.0.1:{prom_port}')
+                datasource = datasource.replace('workflow-reader', 'workflow').replace('REPLACE_IN_PRIVATE_COPY', 'fixture-password')
+                (grafana_config / 'provisioning' / 'datasources' / 'workflow.yml').write_text(datasource)
+                lines = (observability / 'systemd' / 'agent-workflows-grafana.service').read_text().splitlines()
+                command = next(line[10:] for line in lines if line.startswith('ExecStart='))
+                command = command.replace('%h/.config/agent-workflows/grafana', str(grafana_config))
+                command = command.replace('%h/.local/share/agent-workflows-monitor/grafana', str(grafana_store))
+                command = command.replace('%U', str(os.getuid())).replace('%G', str(os.getgid()))
+                command = command.replace('--name=agent-workflows-grafana', '--name=' + grafana_name)
+                command = command.replace('GF_SERVER_HTTP_PORT=13000', 'GF_SERVER_HTTP_PORT=' + str(grafana_port))
+                args = shlex.split(command)
+                if systemd_mode:
+                    properties = ['--property=' + line for line in lines
+                                  if line.startswith(('NoNewPrivileges=', 'UMask=', 'KillMode='))]
+                    self.assertEqual(len(properties), 3)
+                    args = ['systemd-run', '--user', '--unit=' + grafana_name, *properties, *args]
+                else:
+                    args.insert(2, '-d')
+                subprocess.run(args, check=True, capture_output=True, timeout=30)
+
+                def grafana(path, data=None, authorized=True):
+                    headers = {'Authorization': auth} if authorized else {}
+                    if data is not None:
+                        headers['Content-Type'] = 'application/json'
+                        data = json.dumps(data).encode()
+                    req = urllib.request.Request(f'http://127.0.0.1:{grafana_port}' + path, data=data, headers=headers)
+                    with opener.open(req, timeout=5) as response:
+                        return json.load(response)
+
+                def wait_grafana():
+                    deadline = time.monotonic() + 45
+                    while True:
+                        try:
+                            grafana('/api/health', authorized=False)
+                            return
+                        except (OSError, ValueError):
+                            if time.monotonic() >= deadline:
+                                self.fail('Grafana did not become ready')
+                            time.sleep(.2)
+
+                wait_grafana()
+                with self.assertRaises(urllib.error.HTTPError) as denied:
+                    grafana('/api/datasources', authorized=False)
+                self.assertEqual(denied.exception.code, 401)
+                denied.exception.close()
+                dashboard = json.loads((observability / 'dashboard.json').read_text())
+                loaded = grafana('/api/dashboards/uid/' + dashboard['uid'])['dashboard']
+                self.assertEqual(len(loaded['panels']), len(dashboard['panels']))
+                frames = 0
+                for panel in loaded['panels']:
+                    for target in panel.get('targets', []):
+                        now = int(time.time() * 1000)
+                        result = grafana('/api/ds/query', {'from': str(now - 300000), 'to': str(now),
+                            'queries': [{'refId': 'A', 'expr': target['expr'], 'intervalMs': 1000,
+                                         'maxDataPoints': 100, 'datasource': {'type': 'prometheus', 'uid': 'workflow'}}]})
+                        query = result['results']['A']
+                        self.assertNotIn('error', query)
+                        frames += len(query.get('frames', []))
+                self.assertGreater(frames, 0, 'Grafana did not return any dashboard data')
+                restart = ['systemctl', '--user', 'restart', grafana_name] if systemd_mode else ['podman', 'restart', grafana_name]
+                subprocess.run(restart, check=True, capture_output=True, timeout=30)
+                wait_grafana()
+                self.assertEqual(grafana('/api/dashboards/uid/' + dashboard['uid'])['dashboard']['uid'], dashboard['uid'])
+                now = int(time.time() * 1000)
+                after_restart = grafana('/api/ds/query', {'from': str(now - 300000), 'to': str(now),
+                    'queries': [{'refId': 'A', 'expr': 'workflow_expired_leases', 'intervalMs': 1000,
+                                 'maxDataPoints': 100, 'datasource': {'type': 'prometheus', 'uid': 'workflow'}}]})['results']['A']
+                self.assertNotIn('error', after_restart)
+                self.assertTrue(after_restart.get('frames'))
+                plugins = grafana_store / 'plugins'
+                self.assertFalse(plugins.exists() and any(plugins.iterdir()), 'Grafana installed unrequested plugins')
             for url in (f'http://127.0.0.1:{prom_port}/api/v1/status/config',
                         f'http://127.0.0.1:{alert_port}/api/v2/status'):
                 with self.assertRaises(urllib.error.HTTPError) as caught:
