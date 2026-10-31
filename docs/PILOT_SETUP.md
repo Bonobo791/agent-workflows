@@ -235,6 +235,12 @@ quiescent.
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.
+If the stop response includes `local_workspace`, the owner can call
+`release_local_workspace` with the exact `run`, `assignment`, and `unit` after
+the bound local scope is recorded as terminated. The run must remain fenced;
+this only releases that workspace claim and does not confirm worker termination
+or reconcile a remote outcome. A null unit means the claim has no recorded local
+scope binding and cannot be released through this control.
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
 engineering workspace claim. Operator stop confirmation still requires the exact
 incarnation and termination attestation.
