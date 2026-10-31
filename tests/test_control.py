@@ -4,6 +4,60 @@ from runner.control import ControlPlane, ControlError
 from runner.service import Service
 
 class ControlTests(unittest.TestCase):
+    def test_lost_admission_response_is_uncertain(self):
+        import os, socket, threading
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.cli import AdmissionUncertain, request_control
+        with tempfile.TemporaryDirectory() as root:
+            secret=Path(root)/'secret';secret.write_text('x'*40);secret.chmod(0o600)
+            listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);listener.bind(str(Path(root)/'control.sock'));listener.listen()
+            def respond():
+                with listener.accept()[0] as client:
+                    client.recv(65536);client.sendall(b'not-json\n')
+            thread=threading.Thread(target=respond);thread.start()
+            try:
+                with patch.dict(os.environ,{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}):
+                    with self.assertRaises(AdmissionUncertain):request_control({'action':'submit_configured'})
+            finally:thread.join(2);listener.close()
+
+    def test_admission_timeout_reports_uncertain_outcome(self):
+        import os, threading, time
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.cli import AdmissionUncertain, request_control
+        from runner.control import UnixControlServer
+        class Intake:
+            def submit_configured(self): time.sleep(.25); return {'submitted':True}
+        class Dummy: task_intake=Intake()
+        with tempfile.TemporaryDirectory() as root:
+            secret=Path(root)/'secret';secret.write_text('x'*40);secret.chmod(0o600)
+            server=UnixControlServer(Path(root)/'control.sock',ControlPlane(Dummy(),'x'*40));server.handle_error=lambda *_:None
+            thread=threading.Thread(target=server.handle_request);thread.start()
+            try:
+                with patch.dict(os.environ,{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}),patch('runner.cli.ADMISSION_RESPONSE_TIMEOUT',.05):
+                    with self.assertRaises(AdmissionUncertain):request_control({'action':'submit_configured'})
+            finally:thread.join(2);server.server_close()
+
+    def test_cli_waits_for_slow_configured_admission(self):
+        import os, threading, time
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.cli import request_control
+        from runner.control import UnixControlServer
+        class Intake:
+            def submit_configured(self): time.sleep(5.2); return {'submitted':True}
+        class Dummy: task_intake=Intake()
+        with tempfile.TemporaryDirectory() as root:
+            secret=Path(root)/'secret';secret.write_text('x'*40);secret.chmod(0o600)
+            server=UnixControlServer(Path(root)/'control.sock',ControlPlane(Dummy(),'x'*40))
+            thread=threading.Thread(target=server.handle_request);thread.start()
+            try:
+                with patch.dict(os.environ,{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}):
+                    result=request_control({'action':'submit_configured'})
+                self.assertEqual(result,{'ok':True,'result':{'submitted':True}})
+            finally:thread.join(10);server.server_close()
+
     def test_metrics_are_authenticated_and_failure_does_not_change_workflow(self):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as root:

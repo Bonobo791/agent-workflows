@@ -50,6 +50,9 @@ must not contain private skills, credentials, user data or session histories.
   and activity through the existing sign-in.
   The app-server tool-call interface is experimental; revalidate it when the
   pinned Codex executable or connected account changes.
+  The CLI waits up to 180 seconds for a task-admission response. A timeout or
+  lost response after sending means the outcome is unknown: allow the worker
+  to finish and inspect the configured run before retrying.
   `project` accepts either a project key such as `MC` or a team-qualified
   reference such as `moderaty.MC`; the exact configured reference is sent to
   It's a Plan without rewriting it.

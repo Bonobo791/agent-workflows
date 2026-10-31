@@ -40,11 +40,14 @@ class CodexAppsPlan:
         except Exception: raise PlanGatewayError('tracker gateway unavailable') from None
         finally:
             if process is not None:
+                cleanup_failed=False
                 try: os.killpg(process.pid,signal.SIGKILL)
                 except ProcessLookupError: pass
-                cleanup_failed=False
+                except OSError: cleanup_failed=True
                 try: process.wait(timeout=2)
                 except subprocess.TimeoutExpired: cleanup_failed=True
                 for stream in (process.stdin,process.stdout):
-                    if stream is not None: stream.close()
+                    try:
+                        if stream is not None: stream.close()
+                    except OSError: cleanup_failed=True
                 if cleanup_failed: raise PlanGatewayError('tracker gateway cleanup unresolved')

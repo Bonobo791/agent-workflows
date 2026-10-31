@@ -13,11 +13,16 @@ from runner.plan_codex import CodexAppsPlan, PlanGatewayError
 class CodexPlanTests(unittest.TestCase):
     def test_unverified_cleanup_cannot_return_a_successful_snapshot(self):
         with tempfile.TemporaryDirectory() as root:
-            process=MagicMock(); process.pid=123; process.wait.side_effect=subprocess.TimeoutExpired('codex',2)
-            server=MagicMock(); server._request.side_effect=[{}, {'thread':{'id':'thread'}}, {'isError':False,'structuredContent':{'ok':True,'data':{}}}]
-            client=CodexAppsPlan('/usr/bin/codex',{'HOME':root},lambda:True,root)
-            with patch('runner.plan_codex.subprocess.Popen',return_value=process), patch('runner.plan_codex.ProcessTransport'), patch('runner.plan_codex.AppServer',return_value=server), patch('runner.plan_codex.os.killpg'):
-                with self.assertRaises(PlanGatewayError): client.get_issue('TOOLS',36)
+            for failure in ('wait','signal','close'):
+                with self.subTest(failure=failure):
+                    process=MagicMock(); process.pid=123
+                    if failure=='wait': process.wait.side_effect=subprocess.TimeoutExpired('codex',2)
+                    if failure=='close': process.stdout.close.side_effect=OSError('close failed')
+                    server=MagicMock(); server._request.side_effect=[{}, {'thread':{'id':'thread'}}, {'isError':False,'structuredContent':{'ok':True,'data':{}}}]
+                    client=CodexAppsPlan('/usr/bin/codex',{'HOME':root},lambda:True,root)
+                    with patch('runner.plan_codex.subprocess.Popen',return_value=process), patch('runner.plan_codex.ProcessTransport'), patch('runner.plan_codex.AppServer',return_value=server), patch('runner.plan_codex.os.killpg',side_effect=PermissionError() if failure=='signal' else None):
+                        with self.assertRaises(PlanGatewayError): client.get_issue('TOOLS',36)
+                    process.stdin.close.assert_called_once(); process.stdout.close.assert_called_once()
 
     @unittest.skipUnless(os.environ.get('WORKFLOW_PLAN_LIVE_PROJECT') and os.environ.get('WORKFLOW_PLAN_LIVE_NUMBER'),'live read-only tracker test not configured')
     def test_signed_in_gateway_reads_issue_attachments_and_activity(self):
