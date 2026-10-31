@@ -161,6 +161,13 @@ Recovery is bound to the exact backup generation; legacy interrupted backups
 without a generation remain fenced for inspection.
 No production verifier or control endpoint for that recovery is configured.
 
+The controller image provides a `/data` directory owned by UID/GID 10001 with
+mode 0700. Fresh Podman named volumes copy those permissions from the image;
+existing volumes retain their prior ownership and must be provisioned privately
+for that UID before startup. The control secret must also be an owner-only file
+owned by the worker's mapped UID. Other runtimes and volume drivers require
+independent verification of their copy-up and UID-mapping behavior.
+
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.
