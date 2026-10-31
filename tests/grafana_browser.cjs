@@ -1,5 +1,5 @@
 // Synthetic browser acceptance for the disposable local monitoring stack.
-const { chromium } = require('/app/node_modules/playwright-core');
+const { chromium } = require('playwright-core');
 
 (async () => {
   const base = process.argv[2];
@@ -17,16 +17,12 @@ const { chromium } = require('/app/node_modules/playwright-core');
     await page.locator('input[name="password"]').fill('fixture-password');
     await page.locator('button[type="submit"]').click();
     await page.waitForURL(url => !url.pathname.startsWith('/login'), { timeout: 30000 });
-    await page.goto(base + '/d/agent-workflows-state?from=now-1m&to=now', { waitUntil: 'domcontentloaded' });
+    await page.goto(base + '/d/agent-workflows-state?from=now-1m&to=now&refresh=5s', { waitUntil: 'domcontentloaded' });
     await page.getByText('Jobs by state', { exact: true }).first().waitFor({ timeout: 30000 });
     await page.getByText('Evidence gaps', { exact: true }).first().waitFor({ timeout: 30000 });
     await page.getByText('Expired leases and quota pauses', { exact: true }).first().waitFor({ timeout: 30000 });
     const queued = page.getByText('queued', { exact: true }).first();
-    for (let attempt = 0; attempt < 6 && !(await queued.isVisible()); attempt++) {
-      await page.waitForTimeout(3000);
-      await page.reload({ waitUntil: 'domcontentloaded' });
-    }
-    await queued.waitFor({ timeout: 10000 });
+    await queued.waitFor({ timeout: 30000 });
     await page.waitForTimeout(3000);
     const errors = page.getByText(/data source not found|failed to fetch|error querying/i);
     if (await errors.count()) throw new Error('dashboard reports a datasource error');

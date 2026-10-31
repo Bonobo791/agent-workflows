@@ -15,7 +15,9 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup();self.connection.settimeout(5)
 
-    def log_message(self,*args): pass
+    def log_message(self,*args):
+        # Keep authenticated request details out of logs.
+        pass
 
     def do_GET(self):
         if self.path!='/metrics': return self.respond(404)

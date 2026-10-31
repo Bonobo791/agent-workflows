@@ -19,6 +19,7 @@ import urllib.request
 import uuid
 
 from runner.desktop_alert_receiver import build_server
+from tests.monitoring_cleanup import cleanup_monitoring
 
 
 @unittest.skipUnless(os.environ.get('WORKFLOW_LOCAL_MONITORING_TEST') == '1',
@@ -46,7 +47,7 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             with opener.open(urllib.request.Request(url, headers=headers), timeout=3) as response:
                 return response.read()
 
-        temporary = tempfile.TemporaryDirectory(prefix='workflow-monitor-e2e-')
+        temporary = tempfile.TemporaryDirectory(prefix='workflow-monitor-e2e-', delete=False)
         try:
             directory = temporary.name
             root = Path(directory)
@@ -248,6 +249,7 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                         '--userns=keep-id', '--user', f'{os.getuid()}:{os.getgid()}', '--read-only',
                         '--cap-drop=ALL', '--security-opt=no-new-privileges', '--tmpfs', '/tmp',
                         '-e', 'HOME=/tmp', '-e', 'XDG_CONFIG_HOME=/tmp', '-e', 'XDG_CACHE_HOME=/tmp',
+                        '-e', 'NODE_PATH=/app/node_modules',
                         '--shm-size=256m', '-v', str(fixture_dir) + ':/fixture:ro,Z',
                         '-v', str(output) + ':/output:rw,Z', '--entrypoint', '/usr/bin/node',
                         'dbebc6c0a0f3d3137cab34190d5cf5b73051aae7d2a8b79963413d6f30b894fe',
@@ -292,19 +294,4 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             wait_up('1')
             expect(True)
         finally:
-            for name in reversed(names):
-                if systemd_mode:
-                    subprocess.run(['systemctl', '--user', 'stop', name], stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=30)
-                    subprocess.run(['systemctl', '--user', 'reset-failed', name], stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=30)
-                subprocess.run(['podman', 'rm', '-f', name], stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=30)
-            for process in (exporter, worker):
-                if process is not None and process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=10)
-            receiver.shutdown()
-            thread.join()
-            receiver.server_close()
-            temporary.cleanup()
+            cleanup_monitoring(names, (exporter, worker), receiver, thread, temporary, systemd=systemd_mode)

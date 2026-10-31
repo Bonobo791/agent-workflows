@@ -82,6 +82,36 @@ class DesktopAlertReceiverTests(unittest.TestCase):
         payload={'alerts':[{'status':'firing','labels':{'alertname':'WorkflowExpiredLease'}}]}
         self.assertEqual(self.request(payload),503)
 
+    def test_partial_delivery_requests_retry_without_silently_dropping_alerts(self):
+        calls=[]
+        def notify(title,body):
+            if len(calls)==1:
+                calls.append('failed');raise OSError('temporary failure')
+            calls.append((title,body))
+        self.server.notify=notify
+        payload={'alerts':[{'status':'firing','labels':{'alertname':'WorkflowExpiredLease'}},
+                           {'status':'firing','labels':{'alertname':'WorkflowQuotaPaused'}}]}
+        self.assertEqual(self.request(payload),503)
+        self.assertEqual(self.request(payload),204)
+        self.assertEqual(calls[0],calls[2])
+        self.assertIn('quota',calls[3][1].lower())
+
+    def test_ambiguous_request_framing_is_rejected_without_notification(self):
+        for headers in ((('Content-Length','2'),('Content-Length','2')),
+                        (('Content-Length','2'),('Transfer-Encoding','chunked')),
+                        (('Content-Length','+2'),)):
+            with self.subTest(headers=headers):
+                connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+                try:
+                    connection.putrequest('POST','/alerts')
+                    connection.putheader('Authorization','Bearer '+'x'*40)
+                    connection.putheader('Content-Type','application/json')
+                    for name,value in headers:connection.putheader(name,value)
+                    connection.endheaders(b'{}')
+                    response=connection.getresponse();self.assertEqual(response.status,400);response.read()
+                finally:connection.close()
+        self.assertEqual(self.received,[])
+
     def test_truncated_batch_is_rejected(self):
         payload={'truncatedAlerts':1,'alerts':[{'status':'firing','labels':{'alertname':'WorkflowExpiredLease'}}]}
         self.assertEqual(self.request(payload),400)

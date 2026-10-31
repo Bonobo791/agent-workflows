@@ -30,6 +30,16 @@ class MetricsHttpTests(unittest.TestCase):
         self.assertEqual(self.request(path='/other')[0],404)
         self.assertEqual(self.calls,[])
 
+    def test_duplicate_authorization_does_not_collect(self):
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        try:
+            connection.putrequest('GET','/metrics')
+            for _ in range(2):connection.putheader('Authorization','Bearer '+'x'*40)
+            connection.endheaders()
+            response=connection.getresponse();self.assertEqual(response.status,403);response.read()
+        finally:connection.close()
+        self.assertEqual(self.calls,[])
+
     def test_collection_failure_does_not_publish_stale_or_private_data(self):
         def fail():raise RuntimeError('private fixture')
         self.server.collect=fail

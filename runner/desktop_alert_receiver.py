@@ -26,11 +26,26 @@ def desktop_notify(title,body):
     subprocess.run(['/usr/bin/notify-send','--app-name=Agent Workflows','--',title,body],check=True,timeout=5,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env)
 
 
+def _alert_messages(payload):
+    if not isinstance(payload,dict) or type(payload.get('truncatedAlerts',0)) is not int or payload.get('truncatedAlerts',0)!=0: raise ValueError
+    alerts=payload.get('alerts')
+    if not isinstance(alerts,list) or not 1<=len(alerts)<=32: raise ValueError
+    messages=[]
+    for alert in alerts:
+        if not isinstance(alert,dict) or not isinstance(alert.get('labels'),dict): raise ValueError
+        name=alert['labels'].get('alertname');status=alert.get('status')
+        if not isinstance(name,str) or name not in ALERTS or status not in ('firing','resolved'): raise ValueError
+        messages.append(('Agent Workflows alert' if status=='firing' else 'Agent Workflows alert resolved',ALERTS[name]))
+    return messages
+
+
 class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup();self.connection.settimeout(5)
 
-    def log_message(self,*args): pass
+    def log_message(self,*args):
+        # Keep authenticated request details out of logs.
+        pass
 
     def do_POST(self):
         try:
@@ -38,25 +53,17 @@ class Handler(BaseHTTPRequestHandler):
             auth=self.headers.get_all('Authorization',[])
             if len(auth)!=1 or not hmac.compare_digest(auth[0].encode('utf-8'),('Bearer '+self.server.secret).encode('utf-8')): return self.respond(403)
             lengths=self.headers.get_all('Content-Length',[])
-            if len(lengths)!=1 or not re.fullmatch(r'[0-9]{1,6}',lengths[0]) or self.headers.get('Transfer-Encoding') is not None: return self.respond(400)
+            if len(lengths)!=1 or not re.fullmatch(r'\d{1,6}',lengths[0],flags=re.ASCII) or self.headers.get('Transfer-Encoding') is not None: return self.respond(400)
             length=int(lengths[0])
             if not 1<=length<=MAX_BODY: return self.respond(413)
             if self.headers.get_content_type()!='application/json': return self.respond(415)
             payload=json.loads(self.rfile.read(length))
-            if not isinstance(payload,dict) or type(payload.get('truncatedAlerts',0)) is not int or payload.get('truncatedAlerts',0)!=0: return self.respond(400)
-            alerts=payload.get('alerts')
-            if not isinstance(alerts,list) or not 1<=len(alerts)<=32: return self.respond(400)
-            messages=[]
-            for alert in alerts:
-                if not isinstance(alert,dict) or not isinstance(alert.get('labels'),dict): return self.respond(400)
-                name=alert['labels'].get('alertname');status=alert.get('status')
-                if not isinstance(name,str) or name not in ALERTS or status not in ('firing','resolved'): return self.respond(400)
-                messages.append(('Agent Workflows alert' if status=='firing' else 'Agent Workflows alert resolved',ALERTS[name]))
+            messages=_alert_messages(payload)
             try:
                 for title,body in messages:self.server.notify(title,body)
             except Exception: return self.respond(503)
             return self.respond(204)
-        except (OSError,ValueError,UnicodeError): return self.respond(400)
+        except (OSError,ValueError): return self.respond(400)
 
     def respond(self,status):
         self.send_response(status);self.send_header('Content-Length','0');self.end_headers()
