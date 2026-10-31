@@ -40,6 +40,35 @@ class DockerControllerTests(unittest.TestCase):
         with self.assertRaises(DockerError): DockerController(Engine(), {}).stop('run-1')
 
 class UnixTransportTests(unittest.TestCase):
+    def test_wait_deadline_bounds_trickling_response(self):
+        import http.server, os, socketserver, tempfile, threading, time
+        from runner.docker_controller import UnixEngine
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                try:
+                    if self.server.slow_header:
+                        payload=b'HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\n'
+                    else:
+                        self.send_response(200); self.send_header('Content-Length','16'); self.end_headers()
+                        payload=b'{"StatusCode":0}'
+                    for byte in payload:
+                        self.wfile.write(bytes([byte])); self.wfile.flush(); time.sleep(.08)
+                except (BrokenPipeError, ConnectionResetError): pass
+            def log_message(self,*args): pass
+        class Server(socketserver.ThreadingUnixStreamServer): daemon_threads=True
+        with tempfile.TemporaryDirectory() as root:
+            path=os.path.join(root,'engine.sock'); server=Server(path,Handler)
+            thread=threading.Thread(target=server.serve_forever); thread.start()
+            try:
+                for slow_header in (False,True):
+                    with self.subTest(slow_header=slow_header):
+                        server.slow_header=slow_header
+                        started=time.monotonic()
+                        with self.assertRaises(DockerError):
+                            UnixEngine(path).request('POST','/containers/'+ID+'/wait?condition=not-running',timeout=.25)
+                        self.assertLess(time.monotonic()-started,.8)
+            finally: server.shutdown(); thread.join(); server.server_close()
+
     def test_render_wait_uses_its_own_bounded_timeout(self):
         import http.server, json, os, socketserver, tempfile, threading, time
         from runner.docker_controller import UnixEngine
