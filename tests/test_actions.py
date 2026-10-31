@@ -13,6 +13,28 @@ class ActionTests(unittest.TestCase):
         with self.assertRaises(ActionConflict): self.ledger.reserve('run', 'push', 'sha-b')
         self.ledger.reserve('run', 'push', 'sha-a')
         with self.assertRaises(ActionConflict): self.ledger.reserve('run', 'push', 'sha-a')
+    def test_freeze_withdrawal_is_exact_audited_and_cannot_cancel_started_work(self):
+        self.ledger.approve('run','freeze','v1','human')
+        with self.assertRaises(ActionConflict):self.ledger.revoke_freeze('run','wrong')
+        self.ledger.revoke_freeze('run','v1')
+        with self.assertRaises(ActionConflict):self.ledger.reserve('run','freeze','v1')
+        self.ledger.approve('run','freeze','v1','human')
+        self.ledger.reserve('run','freeze','v1')
+        with self.assertRaises(ActionConflict):self.ledger.revoke_freeze('run','v1')
+        self.assertEqual(self.ledger.db.execute('SELECT status FROM action_audit ORDER BY id').fetchall(),[('approved',),('revoked',),('approved',),('uncertain',)])
+
+    def test_withdrawal_rolls_back_if_audit_fails(self):
+        self.ledger.approve('run','freeze','v1','human')
+        self.ledger.db.execute("CREATE TRIGGER reject_action_audit BEFORE INSERT ON action_audit BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+        with self.assertRaises(sqlite3.IntegrityError):self.ledger.revoke_freeze('run','v1')
+        self.assertEqual(self.ledger.db.execute("SELECT status FROM external_actions WHERE run='run'").fetchone(),('approved',))
+
+    def test_withdrawal_fails_closed_when_audit_trigger_is_missing(self):
+        self.ledger.approve('run','freeze','v1','human')
+        self.ledger.db.execute('DROP TRIGGER action_audit_update')
+        with self.assertRaises(ActionConflict):self.ledger.revoke_freeze('run','v1')
+        self.assertEqual(self.ledger.db.execute("SELECT status FROM external_actions WHERE run='run'").fetchone(),('approved',))
+
     def test_action_audit_persists_and_failure_prevents_reservation(self):
         self.ledger.approve('run','push','sha','human')
         self.ledger.reserve('run','push','sha')

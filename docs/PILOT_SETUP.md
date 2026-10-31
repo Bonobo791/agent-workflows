@@ -236,6 +236,39 @@ whether its request was cancelled. Do not remove a legacy socket
 without independently verifying that the previous worker and its work are
 quiescent.
 
+For a planned local worker restart, use `automatic_status` to check that the
+worker reports `checkpoint_available`, then send `checkpoint_configured_auto`
+with the exact `run`. Wait for `automatic_status` to report `checkpointed`.
+Its `last_checkpoint` also reports whether the request is pending, completed,
+rejected, or requires inspection; rejection retains the existing claims.
+The checkpoint releases the queue and graph claims only when the run has no
+unresolved local work, remote outcomes, required follow-ups, or unconsumed
+approvals. The owner may
+withdraw an unused freeze approval with `revoke_freeze_approval`, specifying its
+exact `run` and `version`; a started or uncertain action cannot be withdrawn.
+For an unused GitHub proposal approval, submit `pr_withdraw` with the exact
+proposal and current claims (or through `automatic_control`). Both records are
+withdrawn atomically; uncertain actions still require reconciliation. Approval
+and proposal state now commit together. The same control can withdraw a legacy
+orphaned approval while its proposal is still pending, only when the exact target
+binding matches and no other operation is active or uncertain. If the
+withdrawal response is lost, inspect the private approval records before retrying.
+If a checkpoint
+response is lost, inspect status before retrying; do not infer success from a
+transport error.
+
+While the original control process is still running, send the owner-only action
+`register_checkpoint_replacement` with `run`, `old_incarnation`, and a distinct,
+never-used `new_incarnation`. The replacement is registered only if the run is
+still quiescent. The private state database records each replacement with its
+run, target, and old and new incarnations; exported checkpoint events omit
+those raw identities. Inspect `lifecycle_status` if the response is lost. Stop the
+original worker process, set `MANUAL_WORKER_INCARNATION` to the new value, then
+start the replacement against the same private state directory. Its worker lock
+prevents concurrent processes, and it obtains fresh queue and graph claims. A
+checkpoint does not recover a crash or authorize replay of uncertain work; use
+the recovery procedure below for those cases.
+
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.

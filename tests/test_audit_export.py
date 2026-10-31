@@ -18,6 +18,43 @@ from runner.otel_audit import OpenTelemetryAuditExporter, OpenTelemetryAuditTrac
 
 
 class AuditExportTests(unittest.TestCase):
+    def test_checkpoint_delivery_replays_without_exposing_worker_identities(self):
+        import sqlite3
+        from types import SimpleNamespace
+        from runner.checkpoint import checkpoint
+        from runner.local_scope import LocalScopes
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.service import Service
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root);service.lifecycle=ManualLifecycle(root+'/state.db','private-target','private-old')
+            cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None)
+            try:
+                scopes=LocalScopes(root+'/state.db',Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                service.model_supervisor=SimpleNamespace(db=root+'/state.db')
+                service.create('private-run','marketing','task');service.enqueue('private-run')
+                queue=service.lifecycle.claim()['token'];claim=service.claim('private-run')
+                checkpoint(service,'private-run',queue,claim)
+                service.lifecycle.register_checkpoint_replacement('private-run','private-old','private-new')
+                failed=[];delivered=[]
+                def reject(events):failed.extend(events);return False
+                def accept(events):delivered.extend(events);return True
+                args=(service.graph.db,cursor,'destination','checkpoint_audit',10,b'x'*32)
+                self.assertEqual(deliver_page(*args,reject),{'status':'unavailable','cursor':0})
+                self.assertEqual(deliver_page(*args,accept),{'status':'exported','cursor':2})
+                self.assertEqual(failed,delivered)
+                self.assertEqual([event['status'] for event in delivered],['checkpointed','replacement_registered'])
+                self.assertNotIn('private',str(delivered))
+                self.assertEqual(deliver_page(*args,accept)['status'],'empty')
+            finally:cursor.close();service.lifecycle.close();service.close()
+
+    def test_revoked_approval_projects_as_revoked_without_private_fields(self):
+        from runner.otel_audit import _attributes
+        event=project_event('action_audit',{'id':1,'schema_version':1,'run':'private-run','action':'private-action','version':'private-version','actor':'private-owner','status':'revoked','created':1},b'x'*32)
+        self.assertEqual(event['status'],'revoked')
+        self.assertEqual(_attributes(event)['status'],'revoked')
+        self.assertNotIn('private',str(event))
     def test_workspace_scope_binding_projection_correlates_without_raw_ids(self):
         from runner.otel_audit import _attributes
         row={'id':1,'schema_version':1,'run':'private-run','assignment':'private-assignment','unit':'private-unit','status':'bound','created':1}

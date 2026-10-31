@@ -353,7 +353,31 @@ class StageDispatchTests(unittest.TestCase):
             for _ in range(4): dispatcher.step('r',queue['token'],claim)
             self.assertEqual(dispatcher.step('r',queue['token'],claim)['status'],'awaiting_approval')
             from runner.metrics import snapshot, prometheus_text
-            self.assertIn('workflow_stages{workflow="marketing",stage="freeze",status="awaiting_approval"} 1',prometheus_text(snapshot(service.graph.db)))
+            wait_metric='workflow_stages{workflow="marketing",stage="freeze",status="awaiting_approval"} 1'
+            self.assertIn(wait_metric,prometheus_text(snapshot(service.graph.db)))
+            from types import SimpleNamespace
+            from runner.checkpoint import checkpoint
+            from runner.local_scope import LocalScopes
+            from tests.test_local_scope import Backend
+            scopes=LocalScopes(root+'/state.db',Backend());scopes.close()
+            service.graph.db.execute('CREATE TABLE local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+            service.model_supervisor=SimpleNamespace(db=root+'/state.db')
+            review_version=service.graph.get('r','canonical_review')['version']
+            service.approve('r','freeze',review_version,'operator')
+            from runner.control import ControlPlane
+            control=ControlPlane(service,'secret')
+            self.assertTrue(control.handle('secret',{'action':'revoke_freeze_approval','run':'r','version':review_version})['revoked'])
+            old_queue,old_claim=queue['token'],claim
+            checkpoint(service,'r',old_queue,old_claim)
+            with self.assertRaises(StageError): dispatcher.step('r',old_queue,old_claim)
+            self.assertNotIn(wait_metric,prometheus_text(snapshot(service.graph.db)))
+            service.lifecycle.register_checkpoint_replacement('r','inc','inc-next')
+            service.lifecycle.close();service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc-next')
+            queue=service.lifecycle.claim();claim=service.claim('r');service.model_supervisor=None
+            from runner.graph import GraphError
+            with self.assertRaises(GraphError): dispatcher.step('r',queue['token'],old_claim)
+            self.assertEqual(dispatcher.step('r',queue['token'],claim)['status'],'awaiting_approval')
+            self.assertIn(wait_metric,prometheus_text(snapshot(service.graph.db)))
             service.approve('r','freeze',service.graph.get('r','canonical_review')['version'],'operator')
             self.assertNotIn('stage="freeze",status="awaiting_approval"',prometheus_text(snapshot(service.graph.db)))
             for _ in range(30):
