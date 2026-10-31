@@ -1,0 +1,13 @@
+route:
+  receiver: desktop
+  group_wait: 10s
+  group_interval: 5m
+  repeat_interval: 4h
+receivers:
+  - name: desktop
+    webhook_configs:
+      - url: http://127.0.0.1:19192/alerts
+        send_resolved: true
+        http_config:
+          authorization:
+            credentials_file: /config/alert-token
