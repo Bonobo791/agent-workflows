@@ -73,10 +73,17 @@ class WorkerProcessTests(unittest.TestCase):
     def test_sigkill_can_be_fenced_and_scope_stopped_after_restart(self):
         self._exercise_interrupted_worker(True)
 
-    def _exercise_interrupted_worker(self,hard_crash):
-        import sqlite3
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_sigkill_recovers_active_scope_with_unbound_identity(self):
+        self._exercise_interrupted_worker(True,unbound=True)
+
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_late_scope_launch_after_worker_crash_stays_fenced(self):
+        self._exercise_interrupted_worker(True,unbound=True,late=True)
+
+    def _exercise_interrupted_worker(self,hard_crash,unbound=False,late=False):
         code="""
-import os, subprocess, time
+import os, subprocess, sys, time
 from pathlib import Path
 from runner.control import ControlPlane
 from runner.service import Service
@@ -114,13 +121,28 @@ def fixture_control(root, secret, **kwargs):
                 from runner.local_scope import LocalScopes, SystemdScopes, ScopeError
                 scopes=LocalScopes(str(Path(root)/'state.db'),SystemdScopes(os.environ))
                 unit=scopes.reserve('r')
-                subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                argv=([sys.executable,os.environ['WORKFLOW_TEST_LAUNCHER'],str(root),unit] if os.environ.get('WORKFLOW_TEST_LATE')=='1' else ['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'])
+                launcher=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                 deadline=time.monotonic()+10
-                while True:
-                    try: scopes.bind('r',unit); break
-                    except ScopeError:
-                        if time.monotonic()>=deadline: raise
-                        time.sleep(.05)
+                try:
+                    while True:
+                        if launcher.poll() is not None: raise RuntimeError('scope launcher exited before activation')
+                        try:
+                            if os.environ.get('WORKFLOW_TEST_LATE')=='1':
+                                if not (Path(root)/'launcher-ready').exists(): raise ScopeError('launcher not ready')
+                            elif os.environ.get('WORKFLOW_TEST_UNBOUND')=='1':
+                                if scopes.backend.inspect(unit)['active']!='active': raise ScopeError('not active')
+                            else: scopes.bind('r',unit)
+                            break
+                        except ScopeError:
+                            if time.monotonic()>=deadline: raise
+                            time.sleep(.05)
+                except BaseException:
+                    try:
+                        if launcher.poll() is None: launcher.kill()
+                    except ProcessLookupError: pass
+                    launcher.wait(timeout=5)
+                    raise
                 scopes.close()
             else:
                 service.graph.db.execute('CREATE TABLE local_scopes(run TEXT,state TEXT)')
@@ -139,10 +161,18 @@ worker.main()
 """
         with tempfile.TemporaryDirectory() as root:
             root=Path(root); secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            launcher_fd=None
+            if late:
+                launcher_script=root/'delayed-launcher.py'
+                launcher_script.write_text("import os,sys,time\nfrom pathlib import Path\nroot=Path(sys.argv[1]); unit=sys.argv[2]\n(root/'launcher-ready').write_text(str(os.getpid()))\ndeadline=time.monotonic()+30\nwhile not (root/'launcher-release').exists():\n if time.monotonic()>deadline: sys.exit(1)\n time.sleep(.02)\nos.execv('/usr/bin/systemd-run',['systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'])\n")
             for name,value in (('task',{'run':'r'}),('roles',{}),('runtime',{})):
                 path=root/(name+'.json'); path.write_text(json.dumps(value)); path.chmod(0o600)
             env=os.environ.copy()
+            env.pop('WORKFLOW_TEST_UNBOUND',None)
+            env.pop('WORKFLOW_TEST_LATE',None)
             env.update(CONTROL_SECRET_FILE=str(secret),WORKFLOW_DATA_DIR=str(root),WORKFLOW_EXECUTION_MODE='disabled',WORKFLOW_LIFECYCLE_MODE='manual',MANUAL_WORKER_TARGET='fixture',MANUAL_WORKER_INCARNATION='one',WORKFLOW_TASK_CONFIG_FILE=str(root/'task.json'),WORKFLOW_ROLE_CONFIG_FILE=str(root/'roles.json'),DOCKER_RUNTIME_CONFIG_FILE=str(root/'runtime.json'))
+            if unbound: env['WORKFLOW_TEST_UNBOUND']='1'; env.pop('WORKFLOW_TEST_CODEX',None)
+            if late: env.update(WORKFLOW_TEST_LATE='1',WORKFLOW_TEST_LAUNCHER=str(launcher_script))
             if hard_crash: env['WORKFLOW_CONTROL_DIR']=str(root/'first-control')
             process=subprocess.Popen([sys.executable,'-c',code],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             try:
@@ -153,88 +183,141 @@ worker.main()
                     client.settimeout(3); client.connect(str(path))
                     client.sendall(json.dumps({'secret':'x'*40,'request':{'action':'start_configured_auto'}}).encode()+b'\n')
                     with client.makefile('rb') as stream: self.assertTrue(json.loads(stream.readline())['ok'])
-                deadline=time.monotonic()+(100 if os.environ.get('WORKFLOW_TEST_CODEX') else 10)
-                while not (root/'stage-entered').exists() and not (root/'stage-error').exists() and process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
-                failure=(root/'stage-error').read_text() if (root/'stage-error').exists() else 'no stage result'
-                self.assertTrue((root/'stage-entered').exists(),failure)
+                self._wait_for_dispatched_stage(root,process)
+                if late: launcher_fd=os.pidfd_open(int((root/'launcher-ready').read_text()))
                 if hard_crash: process.kill()
                 else: process.terminate()
                 stdout,stderr=process.communicate(timeout=10)
                 self.assertEqual(process.returncode,-9 if hard_crash else 0,stderr.decode())
                 self.assertNotIn(b'x'*40,stdout+stderr)
                 if hard_crash:
-                    recovered_env={**env,'WORKFLOW_CONTROL_DIR':str(root/'second-control')}
-                    recovered=subprocess.Popen([sys.executable,'-c',code],env=recovered_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-                    try:
-                        control=root/'second-control'/'control.sock'; deadline=time.monotonic()+10
-                        while not control.exists() and recovered.poll() is None and time.monotonic()<deadline: time.sleep(.02)
-                        self.assertTrue(control.is_socket())
-                        def action(request):
-                            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-                                client.settimeout(15); client.connect(str(control))
-                                client.sendall(json.dumps({'secret':'x'*40,'request':request}).encode()+b'\n')
-                                with client.makefile('rb') as stream: return json.loads(stream.readline())
-                        result=action({'action':'manual_stop','run':'r'})
-                        self.assertTrue(result['ok'],result)
-                        unit=result['result']['local_scopes'][0]['unit']
-                        result=action({'action':'stop_local_scope','run':'r','unit':unit})
-                        self.assertEqual(result['result'],{'unit':unit,'state':'terminated'})
-                        result=action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})
-                        self.assertTrue(result['ok'],result)
-                    finally:
-                        recovered.terminate(); recovered.communicate(timeout=10)
+                    self._recover_crashed_worker(root,env,code,unbound,late)
                     return
-                with sqlite3.connect(root/'state.db') as db:
-                    self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('cancelled',))
-                    self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
-                    self.assertEqual(db.execute("SELECT state FROM manual_assignments WHERE run='r'").fetchone(),('pending',))
-                    self.assertIsNone(db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
-                self.assertFalse(path.exists())
-                from runner.manual_lifecycle import ManualLifecycle, ManualLifecycleError
-                lifecycle=ManualLifecycle(str(root/'state.db'),'fixture','one')
-                try:
-                    with self.assertRaises(ManualLifecycleError): lifecycle.claim()
-                    with self.assertRaises(ManualLifecycleError): lifecycle.confirm_operator_stop('r','one','terminated_and_fenced')
-                    self.assertEqual(lifecycle.status('r')['status'],'pending')
-                    if os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1':
-                        from runner.local_scope import LocalScopes, SystemdScopes, ScopeError
-                        backend=SystemdScopes(os.environ); scopes=LocalScopes(str(root/'state.db'),backend)
-                        try:
-                            unit=scopes.db.execute("SELECT unit FROM local_scopes WHERE run='r'").fetchone()[0]
-                            try: active=scopes.assert_active('r',unit)
-                            except ScopeError:
-                                if not os.environ.get('WORKFLOW_TEST_CODEX'): raise
-                                observed=backend.inspect(unit)
-                                self.assertEqual(observed['id'],unit)
-                                self.assertEqual(observed['active'],'inactive')
-                                self.assertIn(observed['load'],('loaded','not-found'))
-                                active=False
-                            if active:
-                                from types import SimpleNamespace
-                                from runner.control import ControlPlane
-                                from runner.service import Service
-                                service=Service(root,lifecycle=lifecycle)
-                                service.model_supervisor=SimpleNamespace(backend=backend)
-                                try:
-                                    control=ControlPlane(service,'x'*40)
-                                    result=control.handle('x'*40,{'action':'stop_local_scope','run':'r','unit':unit})
-                                    self.assertEqual(result,{'unit':unit,'state':'terminated'})
-                                finally: service.close()
-                                self.assertEqual(scopes.state('r',unit),'terminated')
-                            if os.environ.get('WORKFLOW_TEST_CODEX'): print('Codex scope active after worker shutdown:',active)
-                        finally: scopes.close()
-                        if active: self.assertEqual(lifecycle.confirm_operator_stop('r','one','terminated_and_fenced')['status'],'stopped')
-                finally: lifecycle.close()
+                self._assert_shutdown_fenced(root,path)
             finally:
-                if process.poll() is None: process.kill(); process.communicate(timeout=5)
-                if os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1' and (root/'state.db').exists():
-                    import re
-                    with sqlite3.connect(root/'state.db') as db:
-                        try: rows=db.execute("SELECT unit FROM local_scopes WHERE run='r'").fetchall()
-                        except sqlite3.OperationalError: rows=[]
-                    for (unit,) in rows:
-                        if re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit):
-                            subprocess.run(['/usr/bin/systemctl','--user','stop',unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
+                self._cleanup_worker_scope(root,process,launcher_fd)
+
+    def _wait_for_dispatched_stage(self,root,process):
+        deadline=time.monotonic()+(100 if os.environ.get('WORKFLOW_TEST_CODEX') else 10)
+        while not (root/'stage-entered').exists() and not (root/'stage-error').exists() and process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
+        failure=(root/'stage-error').read_text() if (root/'stage-error').exists() else 'no stage result'
+        self.assertTrue((root/'stage-entered').exists(),failure)
+
+    def _recover_crashed_worker(self,root,env,code,unbound,late):
+        import sqlite3
+        if unbound:
+            with sqlite3.connect(root/'state.db') as db:
+                row=db.execute("SELECT unit,state,invocation,cgroup FROM local_scopes WHERE run='r'").fetchone()
+                self.assertEqual(row[1:],('starting',None,None))
+            from runner.local_scope import SystemdScopes
+            backend=SystemdScopes(os.environ); observed=backend.inspect(row[0])
+            if late: self.assertEqual(observed['active'],'inactive')
+            else:
+                self.assertEqual((observed['id'],observed['load'],observed['active']),(row[0],'loaded','active'))
+                self.assertTrue(observed['cgroup']); self.assertTrue(observed['invocation'])
+        recovered_env={**env,'WORKFLOW_CONTROL_DIR':str(root/'second-control')}
+        recovered=subprocess.Popen([sys.executable,'-c',code],env=recovered_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            control=root/'second-control'/'control.sock'; deadline=time.monotonic()+10
+            while not control.exists() and recovered.poll() is None and time.monotonic()<deadline: time.sleep(.02)
+            self.assertTrue(control.is_socket())
+            def action(request):
+                with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+                    client.settimeout(15); client.connect(str(control))
+                    client.sendall(json.dumps({'secret':'x'*40,'request':request}).encode()+b'\n')
+                    with client.makefile('rb') as stream: return json.loads(stream.readline())
+            result=action({'action':'manual_stop','run':'r'})
+            self.assertTrue(result['ok'],result)
+            self.assertEqual(len(result['result']['local_scopes']),1,result)
+            unit=result['result']['local_scopes'][0]['unit']
+            if unbound:
+                self.assertEqual(result['result']['local_scopes'][0]['state'],'starting')
+                premature=action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})
+                self.assertFalse(premature['ok'])
+            if late:
+                self.assertFalse(action({'action':'stop_local_scope','run':'r','unit':unit})['ok'])
+                self.assertFalse(action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})['ok'])
+                with sqlite3.connect(root/'state.db') as db:
+                    self.assertEqual(db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('starting',))
+                (root/'launcher-release').write_text('go')
+                deadline=time.monotonic()+10
+                while time.monotonic()<deadline:
+                    observed=backend.inspect(unit)
+                    if observed['active']=='active': break
+                    time.sleep(.05)
+                self.assertEqual(observed['active'],'active')
+                self.assertTrue(observed['cgroup']); self.assertTrue(observed['invocation'])
+            result=action({'action':'stop_local_scope','run':'r','unit':unit})
+            self.assertEqual(result['result'],{'unit':unit,'state':'terminated'})
+            if unbound:
+                self.assertEqual(unit,row[0])
+                self.assertEqual(backend.inspect(unit)['active'],'inactive')
+                self.assertTrue(backend.empty_cgroup(observed['cgroup']))
+            result=action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})
+            self.assertTrue(result['ok'],result)
+        finally:
+            recovered.terminate(); recovered.communicate(timeout=10)
+
+    def _assert_shutdown_fenced(self,root,path):
+        import sqlite3
+        with sqlite3.connect(root/'state.db') as db:
+            self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('cancelled',))
+            self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
+            self.assertEqual(db.execute("SELECT state FROM manual_assignments WHERE run='r'").fetchone(),('pending',))
+            self.assertIsNone(db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
+        self.assertFalse(path.exists())
+        from runner.manual_lifecycle import ManualLifecycle, ManualLifecycleError
+        lifecycle=ManualLifecycle(str(root/'state.db'),'fixture','one')
+        try:
+            with self.assertRaises(ManualLifecycleError): lifecycle.claim()
+            with self.assertRaises(ManualLifecycleError): lifecycle.confirm_operator_stop('r','one','terminated_and_fenced')
+            self.assertEqual(lifecycle.status('r')['status'],'pending')
+            if os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1':
+                from runner.local_scope import LocalScopes, SystemdScopes, ScopeError
+                backend=SystemdScopes(os.environ); scopes=LocalScopes(str(root/'state.db'),backend)
+                try:
+                    unit=scopes.db.execute("SELECT unit FROM local_scopes WHERE run='r'").fetchone()[0]
+                    try: active=scopes.assert_active('r',unit)
+                    except ScopeError:
+                        if not os.environ.get('WORKFLOW_TEST_CODEX'): raise
+                        observed=backend.inspect(unit)
+                        self.assertEqual(observed['id'],unit)
+                        self.assertEqual(observed['active'],'inactive')
+                        self.assertIn(observed['load'],('loaded','not-found'))
+                        active=False
+                    if active:
+                        from types import SimpleNamespace
+                        from runner.control import ControlPlane
+                        from runner.service import Service
+                        service=Service(root,lifecycle=lifecycle)
+                        service.model_supervisor=SimpleNamespace(backend=backend)
+                        try:
+                            control=ControlPlane(service,'x'*40)
+                            result=control.handle('x'*40,{'action':'stop_local_scope','run':'r','unit':unit})
+                            self.assertEqual(result,{'unit':unit,'state':'terminated'})
+                        finally: service.close()
+                        self.assertEqual(scopes.state('r',unit),'terminated')
+                    if os.environ.get('WORKFLOW_TEST_CODEX'): print('Codex scope active after worker shutdown:',active)
+                finally: scopes.close()
+                if active: self.assertEqual(lifecycle.confirm_operator_stop('r','one','terminated_and_fenced')['status'],'stopped')
+        finally: lifecycle.close()
+
+    def _cleanup_worker_scope(self,root,process,launcher_fd):
+        import sqlite3
+        if process.poll() is None: process.kill(); process.communicate(timeout=5)
+        if launcher_fd is not None:
+            import signal
+            try: signal.pidfd_send_signal(launcher_fd,signal.SIGKILL)
+            except ProcessLookupError: pass
+            os.close(launcher_fd)
+        if os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1' and (root/'state.db').exists():
+            import re
+            with sqlite3.connect(root/'state.db') as db:
+                try: rows=db.execute("SELECT unit FROM local_scopes WHERE run='r'").fetchall()
+                except sqlite3.OperationalError: rows=[]
+            for (unit,) in rows:
+                if re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit):
+                    subprocess.run(['/usr/bin/systemctl','--user','stop',unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
 
     @unittest.skipUnless(os.environ.get('CODEX_TEST_EXECUTABLE'),'real local Codex executable not configured')
     def test_inspected_local_config_starts_and_restarts_worker(self):
