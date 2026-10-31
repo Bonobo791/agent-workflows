@@ -46,7 +46,7 @@ class ObserverTests(EngineeringWorkspaceTests):
         LocalPushTransport(service,'run-1',queue['token'],claim,None)
         scopes=LocalScopes(str(self.root/'state.db'),engine);self.addCleanup(scopes.close)
         service.graph.db.execute("INSERT INTO local_push_attempts VALUES(?,?,?,?,?,'reserved')",(assignment,'run-1',action,scope,head))
-        for kind in ('bundle','push'):
+        for kind in ('push','bundle'):
             unit=scopes.reserve('run-1');service.graph.db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,'run-1',action,scope,kind));engine.unit=unit;engine.state='active';scopes.bind('run-1',unit);scopes.stop('run-1',unit)
             if kind=='bundle':service.graph.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',('run-1',assignment,unit))
         class HTTP:

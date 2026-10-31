@@ -7,7 +7,7 @@ class AudioRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             paths=[]
             for name in ('runtime','python','model'):
-                path=Path(root)/name;path.mkdir(mode=0o700);(path/'data').write_text(name);paths.append(str(path))
+                path=Path(root)/name;path.mkdir(mode=0o700);(path/'data').write_text(name);(path/'data').chmod(0o600);paths.append(str(path))
             first=fingerprint(paths);self.assertEqual(first,fingerprint(paths))
             (Path(paths[2])/'data').write_text('changed');self.assertNotEqual(first,fingerprint(paths))
             (Path(paths[1])/'data').chmod(0o666)
