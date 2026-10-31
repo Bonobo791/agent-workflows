@@ -13,6 +13,25 @@ from runner.metrics_textfile import publish
 
 
 class MetricsTextfileTests(unittest.TestCase):
+    def test_restrictive_umask_does_not_remove_collector_read_permission(self):
+        with tempfile.TemporaryDirectory() as root:
+            previous=os.umask(0o777)
+            try:
+                with patch('runner.metrics_textfile.read_metrics',return_value='metric 1\n'):
+                    publish(root)
+            finally: os.umask(previous)
+            target=Path(root)/'workflow.prom'
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode),0o600)
+            self.assertEqual(target.read_text(),'metric 1\n')
+
+    def test_permission_failure_preserves_last_snapshot_and_cleans_up(self):
+        with tempfile.TemporaryDirectory() as root:
+            target=Path(root)/'workflow.prom'; target.write_text('old 1\n')
+            with patch('runner.metrics_textfile.read_metrics',return_value='new 1\n'), patch('runner.metrics_textfile.os.fchmod',side_effect=OSError('permission failure')):
+                with self.assertRaises(OSError): publish(root)
+            self.assertEqual(target.read_text(),'old 1\n')
+            self.assertEqual({p.name for p in Path(root).iterdir()},{'workflow.prom'})
+
     def test_fdopen_failure_closes_descriptor_and_removes_temporary_file(self):
         with tempfile.TemporaryDirectory() as root:
             descriptors=[]

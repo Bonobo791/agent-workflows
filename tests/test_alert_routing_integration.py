@@ -67,8 +67,9 @@ class AlertRoutingTests(unittest.TestCase):
                         name=prefix+'-'+suffix; names.append(name)
                         podman('run','-d','--pull=never','--name',name,'--network=host','--userns=keep-id','--user',f'{os.getuid()}:{os.getgid()}','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges','--tmpfs','/tmp','-v',volume,image,*args)
                     launch('node','quay.io/prometheus/node-exporter:v1.9.1','--collector.disable-defaults','--collector.textfile','--collector.textfile.directory=/collector',f'--web.listen-address=127.0.0.1:{nodeport}',volume=str(metrics)+':/collector:ro,Z')
-                    launch('alertmanager','docker.io/prom/alertmanager:v0.28.1','--config.file=/config/alertmanager.yml','--storage.path=/tmp/alertmanager','--cluster.listen-address=',f'--web.listen-address=127.0.0.1:{amport}',volume=str(config)+':/config:ro,Z')
-                    launch('prometheus','docker.io/prom/prometheus:v3.4.2','--config.file=/config/prometheus.yml','--storage.tsdb.path=/tmp/prometheus',f'--web.listen-address=127.0.0.1:{promport}',volume=str(config)+':/config:ro,Z')
+                    launch('alertmanager','docker.io/prom/alertmanager:v0.28.1','--config.file=/config/alertmanager.yml','--storage.path=/tmp/alertmanager','--cluster.listen-address=',f'--web.listen-address=127.0.0.1:{amport}',volume=str(config)+':/config:ro,z')
+                    launch('prometheus','docker.io/prom/prometheus:v3.4.2','--config.file=/config/prometheus.yml','--storage.tsdb.path=/tmp/prometheus',f'--web.listen-address=127.0.0.1:{promport}',volume=str(config)+':/config:ro,z')
+                    self.assertIn('receiver: local',podman('exec',prefix+'-alertmanager','cat','/config/alertmanager.yml').stdout)
                     def expect(name,status,since=0):
                         deadline=time.monotonic()+70
                         while time.monotonic()<deadline:

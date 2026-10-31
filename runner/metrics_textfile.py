@@ -31,6 +31,7 @@ def publish(directory):
         except BaseException:
             os.close(output); raise
         with stream:
+            os.fchmod(stream.fileno(),0o600)
             stream.write(content); stream.flush(); os.fsync(stream.fileno())
         os.replace(temporary,'workflow.prom',src_dir_fd=fd,dst_dir_fd=fd)
         temporary=None
