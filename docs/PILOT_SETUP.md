@@ -235,6 +235,8 @@ quiescent.
 For a planned local worker restart, use `automatic_status` to check that the
 worker reports `checkpoint_available`, then send `checkpoint_configured_auto`
 with the exact `run`. Wait for `automatic_status` to report `checkpointed`.
+Its `last_checkpoint` also reports whether the request is pending, completed,
+rejected, or requires inspection; rejection retains the existing claims.
 The checkpoint releases the queue and graph claims only when the run has no
 unresolved local work, remote outcomes, or unconsumed approvals. If a checkpoint
 response is lost, inspect status before retrying; do not infer success from a

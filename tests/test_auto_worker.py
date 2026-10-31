@@ -34,6 +34,7 @@ class AutoWorkerTests(unittest.TestCase):
                 self.assertTrue(first.request_checkpoint('r')['pending'])
                 first.thread.join(timeout=5);self.assertFalse(first.thread.is_alive())
                 self.assertEqual(first.status()['status'],'checkpointed')
+                self.assertEqual(first.status()['last_checkpoint'],{'status':'completed'})
                 owner=ManualLifecycle(str(root/'state.db'),'worker','inc')
                 try:owner.register_checkpoint_replacement('r','inc','inc-next')
                 finally:owner.close()
@@ -137,9 +138,45 @@ class AutoWorkerTests(unittest.TestCase):
                 worker.request_checkpoint('r');deadline=time.monotonic()+5
                 while len(claims)<2 and time.monotonic()<deadline:time.sleep(.01)
                 self.assertGreaterEqual(len(claims),2);self.assertEqual(claims[0],claims[1])
+                self.assertEqual(worker.status()['last_checkpoint'],{'status':'rejected','reason':'work remains active or unresolved'})
                 db=sqlite3.connect(root/'state.db')
                 try:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
                 finally:db.close()
+            finally:
+                worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
+    def test_checkpoint_storage_failure_requires_inspection(self):
+        from types import SimpleNamespace
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root)
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
+                db=service.graph.db
+                db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                db.execute('CREATE TABLE IF NOT EXISTS checkpoint_audit(id INTEGER PRIMARY KEY,schema_version INTEGER NOT NULL,run TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
+                db.execute("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON checkpoint_audit BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):return {'status':'blocked'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();deadline=time.monotonic()+5
+                while not worker.status().get('checkpoint_available') and time.monotonic()<deadline:time.sleep(.01)
+                self.assertTrue(worker.status()['checkpoint_available']);worker.request_checkpoint('r')
+                worker.thread.join(timeout=5)
+                self.assertFalse(worker.thread.is_alive())
+                self.assertEqual(worker.status()['status'],'inspection_required')
+                self.assertEqual(worker.status()['last_checkpoint'],{'status':'inspection_required'})
+                with sqlite3.connect(root/'state.db') as db:
+                    self.assertNotEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('queued',))
             finally:
                 worker.stop()
                 if worker.thread:worker.thread.join(timeout=5)

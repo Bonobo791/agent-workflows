@@ -26,9 +26,9 @@ def renew_leases(path,run,queue_claim,graph_claim,ttl=60):
 
 class AutoWorker:
     def __init__(self,factory,root):
-        self.factory=factory; self.db_path=str(root/'state.db'); self.stop_event=threading.Event(); self.guard=threading.Lock(); self.thread=None; self.claimed_run=None; self.state={'status':'idle'}; self.pending_decision=None; self.pending_action=None; self.last_action=None; self.checkpoint_pending=False; self.at_gate=False; self.checkpoint_capable=False; self.wake=threading.Event()
+        self.factory=factory; self.db_path=str(root/'state.db'); self.stop_event=threading.Event(); self.guard=threading.Lock(); self.thread=None; self.claimed_run=None; self.state={'status':'idle'}; self.pending_decision=None; self.pending_action=None; self.last_action=None; self.last_checkpoint=None; self.checkpoint_pending=False; self.at_gate=False; self.checkpoint_capable=False; self.wake=threading.Event()
     def status(self):
-        with self.guard: return {**self.state,'last_action':self.last_action,'checkpoint_available':self.checkpoint_capable and self.at_gate and not self.stop_event.is_set() and not self.checkpoint_pending and self.pending_action is None and self.pending_decision is None}
+        with self.guard: return {**self.state,'last_action':self.last_action,'last_checkpoint':self.last_checkpoint,'checkpoint_available':self.checkpoint_capable and self.at_gate and not self.stop_event.is_set() and not self.checkpoint_pending and self.pending_action is None and self.pending_decision is None}
     def _set(self,**value):
         with self.guard: self.state=value
     def start(self):
@@ -52,7 +52,7 @@ class AutoWorker:
     def request_checkpoint(self,run):
         with self.guard:
             if not self.checkpoint_capable or not self.at_gate or self.state.get('run')!=run or self.checkpoint_pending or self.pending_action is not None or self.pending_decision is not None or self.stop_event.is_set(): raise AutoWorkerError('checkpoint unavailable')
-            self.checkpoint_pending=True; self.wake.set()
+            self.checkpoint_pending=True; self.last_checkpoint={'status':'pending'}; self.wake.set()
         return {'pending':True}
     def stop(self,service=None):
         with self.guard:
@@ -95,9 +95,11 @@ class AutoWorker:
                         try: checkpoint(service,run,queue['token'],claim)
                         except CheckpointError:
                             self.checkpoint_pending=False; self.at_gate=False
+                            self.last_checkpoint={'status':'rejected','reason':'work remains active or unresolved'}
                             self.state={**self.state,'reason':'checkpoint unavailable; work remains active or unresolved'}
                         else:
                             self.claimed_run=None;self.at_gate=False;self.checkpoint_pending=False
+                            self.last_checkpoint={'status':'completed'}
                             self.state={'status':'checkpointed','run':run};return
                     self.at_gate=False
                     pending_action=self.pending_action; self.pending_action=None
@@ -139,6 +141,8 @@ class AutoWorker:
             if failed.is_set(): raise AutoWorkerError('lease renewal failed; inspection required')
             if self.stop_event.is_set(): raise AutoWorkerError('automatic worker stopped; inspection required')
         except Exception:
+            with self.guard:
+                if self.checkpoint_pending: self.last_checkpoint={'status':'inspection_required'};self.checkpoint_pending=False
             if service is not None and queue is not None:
                 with self.guard:
                     try: service.fence_execution(run)
