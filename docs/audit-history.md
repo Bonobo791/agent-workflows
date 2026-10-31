@@ -147,8 +147,9 @@ adapter with `deliver_page` and separate private cursor storage; constructing it
 does not start a worker or send data. Its strict acknowledgement and privacy
 behavior have been tested with in-memory and loopback HTTP fixtures, not with an
 Opik server or a verified access-control and retention configuration. The
-loopback fixture checks serialized spans, partial acknowledgements, and cursor
-retry over a real local HTTP socket; it does not verify an Opik backend.
+loopback fixtures check serialized spans, partial acknowledgements, receiver
+unavailability, and replay after reopening the cursor database. Replayed spans
+retain their trace and span identifiers. They do not verify an Opik backend.
 `OpenTelemetryAuditTraceExporter` can also send a bounded projected batch as
 synthetic snapshot traces, grouped by keyed run ID. Each trace has a root and
 zero-duration child spans at the recorded event timestamps. These are audit
@@ -193,8 +194,34 @@ response contains the Prometheus text and is capped at the control client's
 response limit. `python -m runner.metrics_cli` uses the same `CONTROL_SECRET_FILE`
 and `WORKFLOW_DATA_DIR` as the existing control CLI and writes only the snapshot
 to stdout. A failed request writes no metrics and exits nonzero; callers must
-avoid leaving a stale snapshot in their collector. A failed snapshot fails that
-request only. `observability/alerts.yml` is a
+detect stale snapshots rather than treating them as current. A failed snapshot
+fails that request only.
+
+For a private node-exporter textfile collector, an operator can create an
+owner-only directory and explicitly run `python -m runner.metrics_textfile DIR`
+with the same control environment. Supply an absolute directory path without
+dot components or symlinks. The publisher opens each path component without
+following symlinks, writes `workflow.prom` atomically with mode 0600, and
+rejects concurrent publishers. The collector must
+run as the same user and read that directory; choose a private listener and
+restrict access to it separately. If collection or writing fails before the
+atomic replacement, the last snapshot retains its original timestamp so the
+existing stale-snapshot alert can fire. A failure after replacement may leave
+the new snapshot with uncertain durability. Schedule refreshes more frequently
+than the stale threshold and monitor publication failures. One disposable
+rootless node-exporter test on loopback scraped an actual local worker snapshot.
+This does not configure a collector,
+listener authentication, notification routing, or production deployment.
+A separate opt-in integration test runs disposable Prometheus and Alertmanager
+instances with a synthetic loopback webhook. It verified firing and resolution
+of all six shipped alerts using their expressions with waits shortened to one
+second for the test. It does not verify a real notification destination.
+To rerun it, make node-exporter v1.9.1, Prometheus v3.4.2 and
+Alertmanager v0.28.1 images available locally, then explicitly run
+`WORKFLOW_ALERT_ROUTING_TEST=1 python -m unittest tests.test_alert_routing_integration`.
+The test uses loopback listeners and removes its temporary containers and data.
+
+`observability/alerts.yml` is a
 non-activated Prometheus rule file. Alertmanager deduplication and routing are
 deployment configuration and have not been configured or verified here.
 `observability/dashboard.json` is an importable Grafana dashboard definition

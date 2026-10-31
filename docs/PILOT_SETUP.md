@@ -40,6 +40,19 @@ must not contain private skills, credentials, user data or session histories.
   `blocker_direction`, `plan_endpoint`, `github_owner`, `github_repo` and
   `github_branch`; marketing also requires `task_format`. The Plan and GitHub
   credential belongs in an owner-only file referenced by `PLAN_TOKEN_FILE`.
+  `project` accepts either a project key such as `MC` or a team-qualified
+  reference such as `moderaty.MC`; the exact configured reference is sent to
+  It's a Plan without rewriting it.
+  Task intake requires owner fields to be null or nonempty strings and dates
+  to be null or canonical `YYYY-MM-DD`; malformed values block admission.
+  The returned issue identifier and blocker IDs must match the requested
+  records, and status IDs must be positive integers rather than booleans.
+  Durable task and claim identities use `plan:<internal issue ID>`, so matching
+  display identifiers in different teams remain distinct and qualified/unqualified
+  aliases of one issue cannot be admitted twice. The snapshot's `identifier` and
+  admission response retain the tracker display identifier. Use one tracker
+  instance per state directory. Older display-only admissions and snapshots stay
+  fenced for inspection; this change does not rewrite existing runs or approvals.
   In local mode, omit `GITHUB_TOKEN_FILE` to use the existing `gh` sign-in for
   read-only GitHub access; an explicit token file remains supported. Do not put
   credentials in the task JSON, model input or images. When the local worker uses

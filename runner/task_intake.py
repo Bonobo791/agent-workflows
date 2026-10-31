@@ -39,7 +39,8 @@ class SingleTaskIntake:
         db=self.service.graph.db; definition=self.service.graph.definitions[workflow]
         db.execute('BEGIN IMMEDIATE')
         try:
-            if db.execute('SELECT 1 FROM graph_runs WHERE task_id=?',(task['task_id'],)).fetchone():
+            # Legacy display-only admissions cannot be safely assigned to a team.
+            if db.execute('SELECT 1 FROM graph_runs WHERE task_id IN (?,?)',(task['task_id'],task['identifier'])).fetchone():
                 db.execute('INSERT INTO task_admission_audit(schema_version,run,task_id,status,reasons,created) VALUES(1,?,?,?,?,?)',(run,task['task_id'],'rejected',json.dumps(['task already admitted']),time.time()))
                 db.execute('COMMIT'); raise IntakeError('task already admitted')
             db.execute('INSERT INTO graph_runs VALUES(?,?,?,?,?)',(run,workflow,definition.fingerprint(),task['task_id'],'active'))
@@ -51,4 +52,4 @@ class SingleTaskIntake:
         except Exception:
             if db.in_transaction: db.execute('ROLLBACK')
             raise
-        return {'run':run,'task':task['task_id'],'source_version':task['source_version'],'artifact_ref':ref}
+        return {'run':run,'task':task['identifier'],'source_version':task['source_version'],'artifact_ref':ref}

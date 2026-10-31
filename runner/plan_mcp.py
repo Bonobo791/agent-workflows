@@ -98,5 +98,5 @@ class PlanMCP:
         if not isinstance(structured,dict) or structured.get('ok') is not True: raise MCPError('invalid tool result')
         return structured
     def get_issue(self,project_key,number):
-        if not isinstance(project_key,str) or not re.fullmatch(r'[A-Za-z0-9_-]+',project_key) or type(number) is not int or number<1: raise MCPError('invalid issue identifier')
+        if not isinstance(project_key,str) or not re.fullmatch(r'[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?',project_key) or type(number) is not int or number<1: raise MCPError('invalid issue identifier')
         return self.call('get_issue_by_number',{'projectKey':project_key,'sequenceNumber':number})

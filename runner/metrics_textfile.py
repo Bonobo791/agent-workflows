@@ -1,0 +1,55 @@
+"""Publish a private, atomic Prometheus textfile on explicit invocation."""
+import os
+import fcntl
+import secrets
+import sys
+from runner.metrics_cli import read_metrics
+from runner.worker import ConfigurationError
+
+
+def publish(directory):
+    path=os.fspath(directory)
+    if not isinstance(path,str) or not os.path.isabs(path) or '\x00' in path: raise ValueError('absolute metrics directory required')
+    parts=[part for part in path.split('/') if part]
+    if any(part in ('.','..') for part in parts): raise ValueError('canonical metrics directory required')
+    fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for part in parts:
+            child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd); fd=child
+    except OSError:
+        os.close(fd); raise ValueError('metrics directory unavailable') from None
+    temporary=None
+    try:
+        info=os.fstat(fd)
+        if info.st_uid!=os.geteuid() or info.st_mode&0o077: raise ValueError('private metrics directory required')
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        content=read_metrics().encode('utf-8')
+        temporary='.workflow-'+secrets.token_hex(16)+'.tmp'
+        output=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
+        try: stream=os.fdopen(output,'wb')
+        except BaseException:
+            os.close(output); raise
+        with stream:
+            os.fchmod(stream.fileno(),0o600)
+            stream.write(content); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary,'workflow.prom',src_dir_fd=fd,dst_dir_fd=fd)
+        temporary=None
+        os.fsync(fd)
+    finally:
+        if temporary is not None:
+            try: os.unlink(temporary,dir_fd=fd)
+            except FileNotFoundError: pass
+        os.close(fd)
+
+
+def main():
+    if len(sys.argv)!=2: raise ValueError('private metrics directory required')
+    publish(sys.argv[1])
+
+
+if __name__=='__main__':
+    try: main()
+    except (OSError,ValueError,ConfigurationError):
+        print('Metrics publication failed.',file=sys.stderr)
+        sys.exit(1)

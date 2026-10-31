@@ -57,7 +57,9 @@ class MCPTests(unittest.TestCase):
             def log_message(self,*args): pass
         with tempfile.TemporaryDirectory() as root:
             cert=os.path.join(root,'cert.pem'); key=os.path.join(root,'key.pem')
-            subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',cert,'-days','1','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            config=Path(root)/'openssl.cnf'
+            config.write_text('[req]\ndistinguished_name=dn\nx509_extensions=extensions\n[dn]\n[extensions]\nsubjectAltName=DNS:localhost\nbasicConstraints=critical,CA:TRUE\nsubjectKeyIdentifier=hash\n')
+            subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',cert,'-days','1','-subj','/CN=localhost','-config',str(config)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
             context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.load_cert_chain(cert,key); server.socket=context.wrap_socket(server.socket,server_side=True)
             thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
@@ -74,6 +76,19 @@ class MCPTests(unittest.TestCase):
                     result=subprocess.run([sys.executable,'-I',str(child)],input=json.dumps(data).encode(),capture_output=True,timeout=2)
                     self.assertEqual(result.returncode,-signal.SIGALRM)
             finally: server.shutdown(); server.server_close(); thread.join()
+
+    def test_team_scoped_project_key_is_sent_without_rewriting(self):
+        transport=FakeTransport(); client=PlanMCP(transport)
+        client.get_issue('moderaty.MC',32)
+        params=transport.calls[-1][0]['params']
+        self.assertEqual(params['name'],'get_issue_by_number')
+        self.assertEqual(params['arguments'],{'projectKey':'moderaty.MC','sequenceNumber':32})
+
+    def test_malformed_project_keys_do_not_reach_transport(self):
+        for key in ('team..MC','.MC','team.','team.MC.extra','team/MC'):
+            transport=FakeTransport(); client=PlanMCP(transport)
+            with self.subTest(key=key),self.assertRaises(MCPError): client.get_issue(key,1)
+            self.assertEqual(transport.calls,[])
 
     def test_handshake_and_read_only_tool_call(self):
         transport=FakeTransport(); client=PlanMCP(transport)

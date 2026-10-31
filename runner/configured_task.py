@@ -11,6 +11,7 @@ class ConfiguredTask:
     def __init__(self,service,config,plan,github):
         if not isinstance(config,dict) or not self.FIELDS <= set(config) or set(config)-self.FIELDS-{'task_format','github_base'}: raise ConfiguredTaskError('exact task configuration required')
         if not all(isinstance(config[k],str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',config[k]) for k in ('run','project','github_owner','github_repo')) or config['workflow'] not in ('marketing','engineering') or type(config['number']) is not int or config['number']<1: raise ConfiguredTaskError('invalid task reference')
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)?',config['project']): raise ConfiguredTaskError('invalid task reference')
         if not all(isinstance(config[k],list) and config[k] and all(type(x) is int for x in config[k]) for k in ('ready_columns','completed_columns')) or config['blocker_direction'] not in ('inward','outward'): raise ConfiguredTaskError('task readiness policy required')
         if config['workflow']=='marketing' and (not isinstance(config.get('task_format'),str) or not config['task_format'].strip()): raise ConfiguredTaskError('marketing task format required')
         GitHub._branch(config['github_branch'])
