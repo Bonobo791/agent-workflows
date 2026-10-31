@@ -73,7 +73,11 @@ class WorkerProcessTests(unittest.TestCase):
     def test_sigkill_can_be_fenced_and_scope_stopped_after_restart(self):
         self._exercise_interrupted_worker(True)
 
-    def _exercise_interrupted_worker(self,hard_crash):
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_sigkill_recovers_active_scope_with_unbound_identity(self):
+        self._exercise_interrupted_worker(True,unbound=True)
+
+    def _exercise_interrupted_worker(self,hard_crash,unbound=False):
         import sqlite3
         code="""
 import os, subprocess, time
@@ -117,7 +121,11 @@ def fixture_control(root, secret, **kwargs):
                 subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                 deadline=time.monotonic()+10
                 while True:
-                    try: scopes.bind('r',unit); break
+                    try:
+                        if os.environ.get('WORKFLOW_TEST_UNBOUND')=='1':
+                            if scopes.backend.inspect(unit)['active']!='active': raise ScopeError('not active')
+                        else: scopes.bind('r',unit)
+                        break
                     except ScopeError:
                         if time.monotonic()>=deadline: raise
                         time.sleep(.05)
@@ -142,7 +150,9 @@ worker.main()
             for name,value in (('task',{'run':'r'}),('roles',{}),('runtime',{})):
                 path=root/(name+'.json'); path.write_text(json.dumps(value)); path.chmod(0o600)
             env=os.environ.copy()
+            env.pop('WORKFLOW_TEST_UNBOUND',None)
             env.update(CONTROL_SECRET_FILE=str(secret),WORKFLOW_DATA_DIR=str(root),WORKFLOW_EXECUTION_MODE='disabled',WORKFLOW_LIFECYCLE_MODE='manual',MANUAL_WORKER_TARGET='fixture',MANUAL_WORKER_INCARNATION='one',WORKFLOW_TASK_CONFIG_FILE=str(root/'task.json'),WORKFLOW_ROLE_CONFIG_FILE=str(root/'roles.json'),DOCKER_RUNTIME_CONFIG_FILE=str(root/'runtime.json'))
+            if unbound: env['WORKFLOW_TEST_UNBOUND']='1'; env.pop('WORKFLOW_TEST_CODEX',None)
             if hard_crash: env['WORKFLOW_CONTROL_DIR']=str(root/'first-control')
             process=subprocess.Popen([sys.executable,'-c',code],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             try:
@@ -163,6 +173,9 @@ worker.main()
                 self.assertEqual(process.returncode,-9 if hard_crash else 0,stderr.decode())
                 self.assertNotIn(b'x'*40,stdout+stderr)
                 if hard_crash:
+                    if unbound:
+                        with sqlite3.connect(root/'state.db') as db:
+                            self.assertEqual(db.execute("SELECT state,invocation,cgroup FROM local_scopes WHERE run='r'").fetchone(),('starting',None,None))
                     recovered_env={**env,'WORKFLOW_CONTROL_DIR':str(root/'second-control')}
                     recovered=subprocess.Popen([sys.executable,'-c',code],env=recovered_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                     try:
@@ -177,6 +190,10 @@ worker.main()
                         result=action({'action':'manual_stop','run':'r'})
                         self.assertTrue(result['ok'],result)
                         unit=result['result']['local_scopes'][0]['unit']
+                        if unbound:
+                            self.assertEqual(result['result']['local_scopes'][0]['state'],'starting')
+                            premature=action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})
+                            self.assertFalse(premature['ok'])
                         result=action({'action':'stop_local_scope','run':'r','unit':unit})
                         self.assertEqual(result['result'],{'unit':unit,'state':'terminated'})
                         result=action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})
