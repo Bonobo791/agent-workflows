@@ -1,4 +1,5 @@
 import json
+import errno
 import os
 import select
 import shutil
@@ -24,6 +25,20 @@ def _group_members(group):
 
 
 class CodexPlanTests(unittest.TestCase):
+    def test_missing_pidfd_skips_before_spawning_fixture(self):
+        with patch('os.pidfd_open',side_effect=OSError(errno.ENOSYS,'unavailable'),create=True),patch('subprocess.Popen') as launch:
+            with self.assertRaises(unittest.SkipTest):self._exercise_gateway_crash(False)
+            launch.assert_not_called()
+
+    def _require_pidfd(self):
+        if not hasattr(os,'pidfd_open') or not hasattr(signal,'pidfd_send_signal'):
+            self.skipTest('pidfd support required for safe process cleanup')
+        try: fd=os.pidfd_open(os.getpid())
+        except OSError as error:
+            if error.errno in (errno.ENOSYS,errno.EINVAL,errno.EPERM,errno.EACCES): self.skipTest('pidfd unavailable in this environment')
+            raise
+        os.close(fd)
+
     def test_launcher_refuses_to_start_without_parent_death_fence(self):
         from runner import plan_codex_launcher
         libc=MagicMock();libc.prctl.return_value=-1
@@ -42,7 +57,7 @@ class CodexPlanTests(unittest.TestCase):
             marker=Path(root)/'started'; executable=Path(root)/'codex'
             executable.write_text('#!/usr/bin/python3\nfrom pathlib import Path\nPath(%r).write_text("started")\n' % str(marker)); executable.chmod(0o700)
             launcher=Path(__file__).resolve().parents[1]/'runner'/'plan_codex_launcher.py'
-            process=subprocess.Popen([sys.executable,'-I',str(launcher),'1',str(executable)],start_new_session=True)
+            process=subprocess.Popen([sys.executable,'-I',str(launcher),str(os.getpid()+1),str(executable)],start_new_session=True)
             self.assertEqual(process.wait(timeout=5),-signal.SIGKILL)
             self.assertFalse(marker.exists())
 
@@ -53,6 +68,7 @@ class CodexPlanTests(unittest.TestCase):
         self._exercise_gateway_crash(True)
 
     def _exercise_gateway_crash(self,block_signal):
+        self._require_pidfd()
         with tempfile.TemporaryDirectory() as root:
             root=Path(root); executable=root/'codex'
             executable.write_text('''#!/usr/bin/python3
@@ -107,8 +123,9 @@ gateway.CodexAppsPlan(str(Path(root)/'codex'),{'HOME':root},lambda:True,root).ge
 
     @unittest.skipUnless(os.environ.get('WORKFLOW_PLAN_LIVE_PROJECT') and os.environ.get('WORKFLOW_PLAN_LIVE_NUMBER'),'live read-only tracker test not configured')
     def test_signed_in_gateway_process_group_exits_after_caller_crash(self):
+        self._require_pidfd()
         code='''
-import os,shutil,sys
+import os,shutil,sys,time
 from pathlib import Path
 from runner.local_config import local_supervisor_factory
 from runner.local_config_inspect import inspect_config
@@ -125,7 +142,8 @@ gateway.subprocess.Popen=start
 original_send=gateway.ProcessTransport.send
 def send(self,message):
  original_send(self,message)
- if message.get('method')=='mcpServer/tool/call': (Path(root)/'call-started').write_text('started')
+ if message.get('method')=='mcpServer/tool/call':
+  (Path(root)/'call-started').write_text('started'); time.sleep(30)
 gateway.ProcessTransport.send=send
 client.get_issue(os.environ['WORKFLOW_PLAN_LIVE_PROJECT'],int(os.environ['WORKFLOW_PLAN_LIVE_NUMBER']))
 '''
@@ -190,9 +208,11 @@ client.get_issue(os.environ['WORKFLOW_PLAN_LIVE_PROJECT'],int(os.environ['WORKFL
             client=CodexAppsPlan(supervisor.executable,supervisor.environment,supervisor.verify_policy,root)
             issue=client.get_issue(project,number)['data']
             self.assertEqual(issue['identifier'].upper(),project.rsplit('.',1)[-1].upper()+'-'+str(number))
+            self.assertIs(type(issue['id']),int);self.assertGreater(issue['id'],0)
             self.assertIsInstance(client.call('list_attachments',{'issueId':issue['id']})['data'],list)
             activity=client.call('list_issue_activity',{'issueId':issue['id'],'filter':'comments','limit':100,'order':'asc'})['data']
             self.assertIsInstance(activity['items'],list)
+            self.assertTrue(all(isinstance(item,dict) and type(item.get('id')) is int and item.get('issueId')==issue['id'] and isinstance(item.get('body'),str) for item in activity['items']))
 
     def test_gateway_errors_and_server_requests_fail_closed(self):
         with tempfile.TemporaryDirectory() as root:
