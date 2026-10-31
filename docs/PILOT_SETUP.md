@@ -308,6 +308,11 @@ recovery state.
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
 engineering workspace claim. Operator stop confirmation still requires the exact
 incarnation and termination attestation.
+If a previously bound scope exits and systemd forgets the unit before the stop
+control runs, the recorded scope stays unresolved even when inspection shows an
+empty cgroup. The current control cannot establish that its launch request is
+quiescent; do not treat the empty observation as permission to confirm the stop
+or replay work. A trusted quiescence verifier and recovery control remain needed.
 
 Marketing source review requires either the configured local snapshot authority
 or an independently authenticated source-tool authority. Missing, stale or

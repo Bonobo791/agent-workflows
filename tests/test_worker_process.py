@@ -5,11 +5,40 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 
+def connect_control(path, timeout):
+    deadline=time.monotonic()+10
+    while True:
+        client=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+        client.settimeout(timeout)
+        try:
+            client.connect(str(path))
+            return client
+        except (ConnectionRefusedError,FileNotFoundError):
+            client.close()
+            if time.monotonic()>=deadline: raise
+            time.sleep(.02)
+
 class WorkerProcessTests(unittest.TestCase):
+    def test_connect_control_waits_until_bound_socket_is_listening(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'control.sock'
+            server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+            server.bind(str(path))
+            def listen():
+                time.sleep(.1)
+                server.listen(1)
+            thread=threading.Thread(target=listen);thread.start()
+            try:
+                with connect_control(path,1) as client:
+                    accepted,_=server.accept();accepted.close()
+            finally:
+                thread.join();server.close()
+
     def test_worker_rejects_symlinked_state_lock(self):
         with tempfile.TemporaryDirectory() as root:
             root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
@@ -81,7 +110,11 @@ class WorkerProcessTests(unittest.TestCase):
     def test_late_scope_launch_after_worker_crash_stays_fenced(self):
         self._exercise_interrupted_worker(True,unbound=True,late=True)
 
-    def _exercise_interrupted_worker(self,hard_crash,unbound=False,late=False):
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_crash_with_externally_stopped_bound_scope_remains_fenced(self):
+        self._exercise_interrupted_worker(True,externally_stopped=True)
+
+    def _exercise_interrupted_worker(self,hard_crash,unbound=False,late=False,externally_stopped=False):
         code="""
 import os, subprocess, sys, time
 from pathlib import Path
@@ -179,8 +212,7 @@ worker.main()
                 path=(root/'first-control' if hard_crash else root)/'control.sock'; deadline=time.monotonic()+10
                 while not path.exists() and process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
                 self.assertTrue(path.is_socket())
-                with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-                    client.settimeout(3); client.connect(str(path))
+                with connect_control(path,3) as client:
                     client.sendall(json.dumps({'secret':'x'*40,'request':{'action':'start_configured_auto'}}).encode()+b'\n')
                     with client.makefile('rb') as stream: self.assertTrue(json.loads(stream.readline())['ok'])
                 self._wait_for_dispatched_stage(root,process)
@@ -191,7 +223,7 @@ worker.main()
                 self.assertEqual(process.returncode,-9 if hard_crash else 0,stderr.decode())
                 self.assertNotIn(b'x'*40,stdout+stderr)
                 if hard_crash:
-                    self._recover_crashed_worker(root,env,code,unbound,late)
+                    self._recover_crashed_worker(root,env,code,unbound,late,externally_stopped)
                     return
                 self._assert_shutdown_fenced(root,path)
             finally:
@@ -203,8 +235,24 @@ worker.main()
         failure=(root/'stage-error').read_text() if (root/'stage-error').exists() else 'no stage result'
         self.assertTrue((root/'stage-entered').exists(),failure)
 
-    def _recover_crashed_worker(self,root,env,code,unbound,late):
+    def _recover_crashed_worker(self,root,env,code,unbound,late,externally_stopped=False):
         import sqlite3
+        if externally_stopped:
+            from runner.local_scope import SystemdScopes, valid_scope_identity
+            backend=SystemdScopes(os.environ)
+            with sqlite3.connect(root/'state.db') as db:
+                unit,invocation,cgroup,state=db.execute("SELECT unit,invocation,cgroup,state FROM local_scopes WHERE run='r'").fetchone()
+            self.assertEqual(state,'running')
+            self.assertTrue(valid_scope_identity(unit,invocation,cgroup))
+            observed=backend.inspect(unit)
+            if observed['active']=='active': backend.stop(unit)
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                observed=backend.inspect(unit)
+                if observed['active']=='inactive' and backend.empty_cgroup(cgroup): break
+                time.sleep(.05)
+            self.assertEqual(observed['active'],'inactive')
+            self.assertTrue(backend.empty_cgroup(cgroup))
         if unbound:
             with sqlite3.connect(root/'state.db') as db:
                 row=db.execute("SELECT unit,state,invocation,cgroup FROM local_scopes WHERE run='r'").fetchone()
@@ -222,8 +270,7 @@ worker.main()
             while not control.exists() and recovered.poll() is None and time.monotonic()<deadline: time.sleep(.02)
             self.assertTrue(control.is_socket())
             def action(request):
-                with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-                    client.settimeout(15); client.connect(str(control))
+                with connect_control(control,15) as client:
                     client.sendall(json.dumps({'secret':'x'*40,'request':request}).encode()+b'\n')
                     with client.makefile('rb') as stream: return json.loads(stream.readline())
             result=action({'action':'manual_stop','run':'r'})
@@ -248,6 +295,17 @@ worker.main()
                 self.assertEqual(observed['active'],'active')
                 self.assertTrue(observed['cgroup']); self.assertTrue(observed['invocation'])
             result=action({'action':'stop_local_scope','run':'r','unit':unit})
+            if externally_stopped:
+                self.assertFalse(result['ok'],result)
+                self.assertFalse(action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})['ok'])
+                with sqlite3.connect(root/'state.db') as db:
+                    self.assertEqual(db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('running',))
+                return
+            if not result['ok']:
+                observed=action({'action':'inspect_local_scope','run':'r','unit':unit})
+                with sqlite3.connect(root/'state.db') as db:
+                    stored=db.execute('SELECT state,invocation,cgroup FROM local_scopes WHERE unit=?',(unit,)).fetchone()
+                self.fail(f'scope stop rejected: {result}, recorded={stored}, inspection={observed}')
             self.assertEqual(result['result'],{'unit':unit,'state':'terminated'})
             if unbound:
                 self.assertEqual(unit,row[0])
