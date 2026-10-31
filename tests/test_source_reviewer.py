@@ -37,10 +37,12 @@ class SourceReviewerTests(unittest.TestCase):
                 service.skill_resolver=SkillResolver([skill.parent]);service.required_skills={'source_review':['role']}
                 service.create('r','marketing','task');claim=service.claim('r')
                 register=service.artifacts.put(json.dumps(REGISTER).encode());draft=service.artifacts.put(b'current draft')
-                service.source_snapshots=SourceSnapshots(service,Fetcher())
+                fetcher=Fetcher();service.source_snapshots=SourceSnapshots(service,fetcher)
                 service.graph.db.execute('CREATE TABLE completed_turn_outputs(run TEXT,role TEXT,session TEXT,turn TEXT,input_versions TEXT,output_refs TEXT)')
                 class Executor:
+                    counter=0
                     def review(self,**kw):
+                        self.counter+=1;session="session-"+str(self.counter)
                         assert 'retrieved primary evidence' in kw['prompt']
                         assert 'supported and primary are booleans' in kw['prompt']
                         assert 'Each finding evidence must exactly match one SHA-256 string in input_versions' in kw['prompt']
@@ -49,20 +51,28 @@ class SourceReviewerTests(unittest.TestCase):
                         judgment=verifier(REGISTER,register);judgment.update(draft_ref=draft,omitted_claims=[],coverage_complete=True)
                         result_ref=service.artifacts.put(json.dumps(judgment).encode())
                         response=json.dumps({'stage':'source_review','status':'passed','input_versions':kw['input_versions'],'outputs':[result_ref],'findings':[]}).encode();response_ref=service.artifacts.put(response)
-                        service.provenance.bind('r','source_review','session',kw['skills'],claim,fresh=True,subject=register)
-                        service.provenance.mark_completed('r','source_review','session',claim,hashlib.sha256(response).hexdigest())
-                        service.graph.db.execute('INSERT INTO completed_turn_outputs VALUES(?,?,?,?,?,?)',('r','source_review','session','turn',json.dumps(kw['input_versions']),json.dumps([result_ref])))
-                        proof={'run':'r','reviewer_role':'source_review','reviewer_session':'session','subject_hash':register,'skills':kw['skills'],'review_output_ref':response_ref}
-                        events={'run':'r','role':'source_review','session':'session','turn':'turn','items':[]}
-                        return {'outputs':[result_ref],'session_id':'session','turn_id':'turn','response_ref':response_ref,'evidence_ref':service.artifacts.put(json.dumps(proof).encode()),'tool_evidence_ref':service.artifacts.put(json.dumps(events).encode())}
+                        service.provenance.bind('r','source_review',session,kw['skills'],claim,fresh=True,subject=register)
+                        service.provenance.mark_completed('r','source_review',session,claim,hashlib.sha256(response).hexdigest())
+                        service.graph.db.execute('INSERT INTO completed_turn_outputs VALUES(?,?,?,?,?,?)',('r','source_review',session,'turn',json.dumps(kw['input_versions']),json.dumps([result_ref])))
+                        proof={'run':'r','reviewer_role':'source_review','reviewer_session':session,'subject_hash':register,'skills':kw['skills'],'review_output_ref':response_ref}
+                        events={'run':'r','role':'source_review','session':session,'turn':'turn','items':[]}
+                        return {'outputs':[result_ref],'session_id':session,'turn_id':'turn','response_ref':response_ref,'evidence_ref':service.artifacts.put(json.dumps(proof).encode()),'tool_evidence_ref':service.artifacts.put(json.dumps(events).encode())}
                 service.docker_executor=Executor();reviewer=SourceReviewer(service)
                 evidence=reviewer.verify('r',claim,register,draft_ref=draft,model='fixture',cancelled=lambda:False)
                 self.assertTrue(validate_evidence(service,'r',register,evidence,draft))
+                fetcher.urls={*fetcher.urls,'https://other.invalid/additional'}
+                service.source_snapshots=SourceSnapshots(service,fetcher)
+                with self.assertRaises(SourceError): validate_evidence(service,'r',register,evidence,draft)
+                refreshed=reviewer.verify('r',claim,register,draft_ref=draft,model='fixture',cancelled=lambda:False)
+                self.assertNotEqual(refreshed,evidence)
+                self.assertEqual(service.docker_executor.counter,2)
+                self.assertTrue(validate_evidence(service,'r',register,refreshed,draft))
+                with self.assertRaises(SourceError): validate_evidence(service,'r',register,evidence,draft)
                 from runner.stage_dispatch import _source_snapshot_inputs
                 # Brief source evidence has no draft; draft-bound evidence cannot substitute for it.
-                with self.assertRaises(SourceError): _source_snapshot_inputs(service,'r',{'outputs':['brief',register],'_source_review':evidence})
+                with self.assertRaises(SourceError): _source_snapshot_inputs(service,'r',{'outputs':['brief',register],'_source_review':refreshed})
                 service.graph.db.execute("UPDATE completed_turn_outputs SET input_versions='[]'")
-                with self.assertRaises(SourceError): validate_evidence(service,'r',register,evidence,draft)
+                with self.assertRaises(SourceError): validate_evidence(service,'r',register,refreshed,draft)
             finally:service.close()
     def test_rejects_missing_unsupported_stale_and_omitted_evidence(self):
         with tempfile.TemporaryDirectory() as root:
