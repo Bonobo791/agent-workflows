@@ -5,29 +5,49 @@ construction. Result data is untrusted and readiness still requires policy and
 repository checks. The client never calls write tools.
 """
 import json
+import base64
 import re
+import subprocess
+import sys
+import time
 import urllib.parse
-import urllib.request
-from runner.oauth_transport import _NoRedirect
+from pathlib import Path
 
 class MCPError(RuntimeError): pass
 
+def _stop_helper(process):
+    if process is None or process.poll() is not None: return
+    try:
+        try: process.kill()
+        except ProcessLookupError: pass
+        process.communicate(timeout=1)
+    except (OSError,subprocess.TimeoutExpired):
+        for stream in (process.stdin,process.stdout):
+            try:
+                if stream is not None: stream.close()
+            except OSError: pass
+
 class HTTPSMCP:
+    TIMEOUT=30
     def __init__(self,endpoint,token):
         parsed=urllib.parse.urlsplit(endpoint)
-        if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path.rstrip('/')!='/mcp': raise MCPError('HTTPS MCP endpoint required')
+        if parsed.scheme!='https' or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment or parsed.path.rstrip('/')!='/mcp': raise MCPError('HTTPS MCP endpoint required')
         if not isinstance(token,str) or not token or '\n' in token or '\r' in token: raise MCPError('credential required')
         self.endpoint,self.token=endpoint,token
-        self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),_NoRedirect())
     def post(self,message,headers):
+        process=None
         try:
-            payload=json.dumps(message,separators=(',',':')).encode()
-            request=urllib.request.Request(self.endpoint,data=payload,method='POST',headers={**headers,'Authorization':'Bearer '+self.token,'Content-Type':'application/json','Accept':'application/json, text/event-stream'})
-            with self.opener.open(request,timeout=30) as response:
-                body=response.read(2097153)
-                if len(body)>2097152: raise MCPError('response too large')
-                return response.status,response.headers,body
+            deadline=time.monotonic()+self.TIMEOUT
+            request=json.dumps({'endpoint':self.endpoint,'token':self.token,'message':message,'headers':headers,'timeout':self.TIMEOUT},separators=(',',':')).encode()
+            process=subprocess.Popen([sys.executable,'-I',str(Path(__file__).with_name('plan_mcp_child.py'))],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            output,_=process.communicate(request,timeout=max(0,deadline-time.monotonic()))
+            if process.returncode or time.monotonic()>deadline or len(output)>3000000: raise ValueError()
+            result=json.loads(output)
+            body=base64.b64decode(result['body'],validate=True)
+            if len(body)>2097152: raise ValueError()
+            return result['status'],result['headers'],body
         except Exception: raise MCPError('MCP request failed') from None
+        finally: _stop_helper(process)
 
 class PlanMCP:
     ALLOWED={'get_issue_by_number','get_issue','list_attachments','list_issues','list_issue_activity'}
