@@ -7,6 +7,7 @@ from runner.worker import read_secret, ConfigurationError, build_control
 
 class WorkerTests(unittest.TestCase):
     def test_local_task_can_use_signed_in_tracker_gateway_without_token(self):
+        """Accept either read-only GitHub credentials path and reject mixed tracker credentials."""
         from runner.local_supervisor import LocalSupervisor
         from runner.local_scope import SystemdScopes
         from runner.manual_lifecycle import ManualLifecycle
@@ -22,8 +23,13 @@ class WorkerTests(unittest.TestCase):
             finally:service.lifecycle.close();service.close()
             with self.assertRaises(ConfigurationError):build_control(root,'x'*40,**{**options,'plan_token':'unexpected'})
             with self.assertRaises(ConfigurationError):build_control(root,'x'*40,task_config=task,github_token='fixture')
+            token_options={key:value for key,value in options.items() if key!='github_http'}
+            service,_=build_control(root,'x'*40,**token_options,github_token='fixture')
+            try:self.assertIsInstance(service.task_intake.intake.client,CodexAppsPlan)
+            finally:service.lifecycle.close();service.close()
 
     def test_gateway_rejects_token_file_before_reading_it(self):
+        """Reject a tracker token file before any secret is read in gateway mode."""
         from unittest.mock import patch
         from runner.worker import run_worker
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ,{'WORKFLOW_TASK_CONFIG_FILE':'task','PLAN_TOKEN_FILE':'secret'},clear=True), patch('runner.worker.read_runtime_config',return_value={'plan_endpoint':'codex-apps'}), patch('runner.worker.read_secret') as read:

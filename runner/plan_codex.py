@@ -14,6 +14,7 @@ from runner.protocol import AppServer
 class PlanGatewayError(RuntimeError): pass
 
 def _stop_gateway(process):
+    """Reject the snapshot if terminating or closing its gateway is uncertain."""
     if process is None: return
     cleanup_failed=False
     try: os.killpg(process.pid,signal.SIGKILL)
@@ -30,6 +31,7 @@ def _stop_gateway(process):
 class CodexAppsPlan:
     TIMEOUT=30
     def __init__(self,executable,environment,verify_policy,workspace):
+        """Bind a pinned executable and policy to the minimal signed-in environment."""
         if not isinstance(executable,str) or not os.path.isabs(executable) or not callable(verify_policy) or not isinstance(workspace,str) or not os.path.isabs(workspace): raise PlanGatewayError('trusted Codex executable required')
         self.executable=executable; self.verify_policy=verify_policy; self.workspace=workspace
         self.environment={key:environment[key] for key in ('HOME','CODEX_HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if key in environment}
@@ -38,9 +40,11 @@ class CodexAppsPlan:
         if not os.path.isabs(self.auth_home): raise PlanGatewayError('private Codex home required')
         self.environment['PATH']='/usr/bin:/bin'
     def get_issue(self,project_key,number):
+        """Read one exact project-scoped issue through an allowed tool."""
         if not isinstance(project_key,str) or not re.fullmatch(r'[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?',project_key) or type(number) is not int or number<1: raise PlanGatewayError('invalid issue identifier')
         return self.call('get_issue_by_number',{'projectKey':project_key,'sequenceNumber':number})
     def call(self,name,arguments):
+        """Return a verified read-only snapshot only after gateway cleanup succeeds."""
         if name not in PlanMCP.ALLOWED or not isinstance(arguments,dict): raise PlanGatewayError('tool unavailable')
         process=None; home=None
         try:

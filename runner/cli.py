@@ -11,6 +11,7 @@ ADMISSION_RESPONSE_TIMEOUT=180
 class AdmissionUncertain(ConfigurationError): pass
 
 def request_control(request):
+    """Send a private request and distinguish uncertain task-admission outcomes."""
     secret_path=os.environ.get('CONTROL_SECRET_FILE')
     if not secret_path: raise ConfigurationError('CONTROL_SECRET_FILE required')
     secret=read_secret(secret_path)

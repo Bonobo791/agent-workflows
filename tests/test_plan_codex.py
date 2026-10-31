@@ -1,3 +1,4 @@
+import inspect
 import json
 import errno
 import os
@@ -15,6 +16,7 @@ from unittest.mock import MagicMock, patch
 from runner.plan_codex import CodexAppsPlan, PlanGatewayError
 
 def _group_members(group):
+    """Observe live members of only the original gateway process group."""
     result=[]
     for path in Path('/proc').glob('[0-9]*/stat'):
         try:
@@ -23,6 +25,27 @@ def _group_members(group):
         except (OSError,ValueError,IndexError): pass
     return result
 
+def _close_gateway_process(pid,fd):
+    """Kill a still-live gateway by its held process identity and close the pidfd."""
+    if fd is not None:
+        try:
+            if not select.select([fd],[],[],0)[0]:
+                if os.getpgid(pid)==pid: os.killpg(pid,signal.SIGKILL)
+                else: signal.pidfd_send_signal(fd,signal.SIGKILL)
+        except ProcessLookupError: pass
+        finally: os.close(fd)
+
+def _cleanup_crash_probe(worker,pid,fd,before):
+    """Stop the disposable caller and recorded gateway processes after a probe."""
+    if worker.poll() is None: worker.kill(); worker.wait(timeout=5)
+    _close_gateway_process(pid,fd)
+    for child,start in _group_members(pid) if pid is not None else []:
+        if (child,start) in before:
+            try:
+                child_fd=os.pidfd_open(child)
+                try: signal.pidfd_send_signal(child_fd,signal.SIGKILL)
+                finally: os.close(child_fd)
+            except ProcessLookupError: pass
 
 class CodexPlanTests(unittest.TestCase):
     def test_missing_pidfd_skips_before_spawning_fixture(self):
@@ -123,6 +146,7 @@ gateway.CodexAppsPlan(str(Path(root)/'codex'),{'HOME':root},lambda:True,root).ge
 
     @unittest.skipUnless(os.environ.get('WORKFLOW_PLAN_LIVE_PROJECT') and os.environ.get('WORKFLOW_PLAN_LIVE_NUMBER'),'live read-only tracker test not configured')
     def test_signed_in_gateway_process_group_exits_after_caller_crash(self):
+        """Verify a real read-only gateway exits when its disposable caller crashes."""
         self._require_pidfd()
         code='''
 import os,shutil,sys,time
@@ -152,39 +176,32 @@ client.get_issue(os.environ['WORKFLOW_PLAN_LIVE_PROJECT'],int(os.environ['WORKFL
             worker=subprocess.Popen([sys.executable,'-c',code,root],cwd=str(cwd),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             fd=None; pid=None; before=[]
             try:
-                marker=Path(root)/'gateway-pid'; deadline=time.monotonic()+20
-                while time.monotonic()<deadline and not marker.exists() and worker.poll() is None: time.sleep(.02)
-                self.assertTrue(marker.exists(),'gateway did not launch')
-                pid=int(marker.read_text()); fd=os.pidfd_open(pid)
-                marker=Path(root)/'call-started'; deadline=time.monotonic()+30
-                while time.monotonic()<deadline and not marker.exists() and worker.poll() is None: time.sleep(.02)
-                self.assertTrue(marker.exists(),'tracker call did not start')
+                pid=int(self._wait_for_gateway_marker(root,'gateway-pid',worker,20).read_text()); fd=os.pidfd_open(pid)
+                self._wait_for_gateway_marker(root,'call-started',worker,30)
                 self.assertFalse(select.select([fd],[],[],0)[0],'gateway exited before crash')
                 before=_group_members(pid); self.assertTrue(before)
                 worker.kill(); worker.wait(timeout=5)
                 self.assertEqual(worker.returncode,-signal.SIGKILL)
-                self.assertTrue(select.select([fd],[],[],8)[0],'gateway survived caller crash')
-                deadline=time.monotonic()+8
-                while time.monotonic()<deadline and _group_members(pid): time.sleep(.05)
-                self.assertEqual(_group_members(pid),[],'gateway process group survived caller crash')
+                self._assert_gateway_exits(pid,fd)
             finally:
-                if worker.poll() is None: worker.kill(); worker.wait(timeout=5)
-                if fd is not None:
-                    try:
-                        if not select.select([fd],[],[],0)[0]:
-                            if os.getpgid(pid)==pid: os.killpg(pid,signal.SIGKILL)
-                            else: signal.pidfd_send_signal(fd,signal.SIGKILL)
-                    except ProcessLookupError: pass
-                    finally: os.close(fd)
-                for child,start in _group_members(pid) if pid is not None else []:
-                    if (child,start) in before:
-                        try:
-                            child_fd=os.pidfd_open(child)
-                            try: signal.pidfd_send_signal(child_fd,signal.SIGKILL)
-                            finally: os.close(child_fd)
-                        except ProcessLookupError: pass
+                _cleanup_crash_probe(worker,pid,fd,before)
+
+    def _wait_for_gateway_marker(self,root,name,worker,timeout):
+        """Wait for a crash-probe phase while its disposable caller is alive."""
+        marker=Path(root)/name; deadline=time.monotonic()+timeout
+        while time.monotonic()<deadline and not marker.exists() and worker.poll() is None: time.sleep(.02)
+        self.assertTrue(marker.exists(),name+' did not appear')
+        return marker
+
+    def _assert_gateway_exits(self,pid,fd):
+        """Require the gateway and its original process group to exit after a crash."""
+        self.assertTrue(select.select([fd],[],[],8)[0],'gateway survived caller crash')
+        deadline=time.monotonic()+8
+        while time.monotonic()<deadline and _group_members(pid): time.sleep(.05)
+        self.assertEqual(_group_members(pid),[],'gateway process group survived caller crash')
 
     def test_unverified_cleanup_cannot_return_a_successful_snapshot(self):
+        """Prevent successful reads from hiding signal, wait, or pipe-close failures."""
         with tempfile.TemporaryDirectory() as root:
             for failure in ('wait','signal','close'):
                 with self.subTest(failure=failure):
@@ -197,8 +214,26 @@ client.get_issue(os.environ['WORKFLOW_PLAN_LIVE_PROJECT'],int(os.environ['WORKFL
                         with self.assertRaises(PlanGatewayError): client.get_issue('TOOLS',36)
                     process.stdin.close.assert_called_once(); process.stdout.close.assert_called_once()
 
+    def test_live_read_assertions_detect_missing_expected_records(self):
+        """Prove live-read assertions reject missing IDs without requiring populated issues."""
+        live_read=inspect.unwrap(type(self).test_signed_in_gateway_reads_issue_attachments_and_activity)
+        environment={'WORKFLOW_PLAN_LIVE_PROJECT':'team.DEMO','WORKFLOW_PLAN_LIVE_NUMBER':'1','WORKFLOW_PLAN_LIVE_ATTACHMENT_ID':'7','WORKFLOW_PLAN_LIVE_COMMENT_ID':'8'}
+        with patch.dict(os.environ,environment,clear=True), patch('runner.local_config_inspect.inspect_config',return_value={}), patch('runner.local_config.local_supervisor_factory'), patch(__name__+'.CodexAppsPlan') as gateway:
+            client=gateway.return_value
+            client.get_issue.return_value={'data':{'id':1,'identifier':'DEMO-1'}}
+            for attachments,comments in (([],[{'id':8,'issueId':1,'body':'expected comment'}]),([{'id':7}],[]),([{'id':9}],[{'id':8,'issueId':1,'body':'expected comment'}]),([{'id':7}],[{'id':9,'issueId':1,'body':'other comment'}])):
+                with self.subTest(attachments=attachments,comments=comments):
+                    client.call.side_effect=[{'data':attachments},{'data':{'items':comments}}]
+                    with self.assertRaises(AssertionError): live_read(self)
+            client.call.side_effect=[{'data':[{'id':7}]},{'data':{'items':[{'id':8,'issueId':1,'body':'expected comment'}]}}]
+            live_read(self)
+            del os.environ['WORKFLOW_PLAN_LIVE_ATTACHMENT_ID']; del os.environ['WORKFLOW_PLAN_LIVE_COMMENT_ID']
+            client.call.side_effect=[{'data':[]},{'data':{'items':[]}}]
+            live_read(self)
+
     @unittest.skipUnless(os.environ.get('WORKFLOW_PLAN_LIVE_PROJECT') and os.environ.get('WORKFLOW_PLAN_LIVE_NUMBER'),'live read-only tracker test not configured')
     def test_signed_in_gateway_reads_issue_attachments_and_activity(self):
+        """Read a real issue and verify any operator-supplied attachment and comment IDs."""
         from runner.local_config import local_supervisor_factory
         from runner.local_config_inspect import inspect_config
         project=os.environ['WORKFLOW_PLAN_LIVE_PROJECT']; number=int(os.environ['WORKFLOW_PLAN_LIVE_NUMBER'])
@@ -209,12 +244,18 @@ client.get_issue(os.environ['WORKFLOW_PLAN_LIVE_PROJECT'],int(os.environ['WORKFL
             issue=client.get_issue(project,number)['data']
             self.assertEqual(issue['identifier'].upper(),project.rsplit('.',1)[-1].upper()+'-'+str(number))
             self.assertIs(type(issue['id']),int);self.assertGreater(issue['id'],0)
-            self.assertIsInstance(client.call('list_attachments',{'issueId':issue['id']})['data'],list)
+            attachments=client.call('list_attachments',{'issueId':issue['id']})['data']
+            self.assertIsInstance(attachments,list)
+            expected=os.environ.get('WORKFLOW_PLAN_LIVE_ATTACHMENT_ID')
+            if expected: self.assertIn(expected,[str(item['id']) for item in attachments])
             activity=client.call('list_issue_activity',{'issueId':issue['id'],'filter':'comments','limit':100,'order':'asc'})['data']
             self.assertIsInstance(activity['items'],list)
+            expected=os.environ.get('WORKFLOW_PLAN_LIVE_COMMENT_ID')
+            if expected: self.assertIn(expected,[str(item['id']) for item in activity['items']])
             self.assertTrue(all(isinstance(item,dict) and type(item.get('id')) is int and item.get('issueId')==issue['id'] and isinstance(item.get('body'),str) for item in activity['items']))
 
     def test_gateway_errors_and_server_requests_fail_closed(self):
+        """Reject tool failures and unexpected server-initiated actions."""
         with tempfile.TemporaryDirectory() as root:
             executable=Path(root)/'codex'
             for output in ("{'id':m['id'],'result':{'isError':True,'structuredContent':{'ok':True}}}","{'id':99,'method':'approval/request','params':{}}"):
@@ -233,6 +274,7 @@ for line in sys.stdin:
                 with self.assertRaises(PlanGatewayError): client.get_issue('TOOLS',36)
 
     def test_hung_gateway_times_out_and_invalid_policy_never_launches(self):
+        """Enforce the read deadline and reject an invalid policy before launch."""
         with tempfile.TemporaryDirectory() as root:
             executable=Path(root)/'codex'; executable.write_text('#!/usr/bin/python3\nimport time\ntime.sleep(30)\n'); executable.chmod(0o700)
             client=CodexAppsPlan(str(executable),{'HOME':root},lambda:True,root)
@@ -244,6 +286,7 @@ for line in sys.stdin:
                 launch.assert_not_called()
 
     def test_read_only_gateway_calls_bound_tool_without_inheriting_secrets(self):
+        """Verify exact tool routing, credential filtering, and the read-only allowlist."""
         with tempfile.TemporaryDirectory() as root:
             log=Path(root)/'calls'; executable=Path(root)/'codex'
             executable.write_text('''#!/usr/bin/python3
@@ -273,4 +316,3 @@ for line in sys.stdin:
             self.assertEqual(record['params']['arguments'],{'projectKey':'TOOLS','sequenceNumber':36})
             with self.assertRaises(PlanGatewayError): client.call('update_issue',{})
             with self.assertRaises(PlanGatewayError): client.get_issue('bad..project',1)
-

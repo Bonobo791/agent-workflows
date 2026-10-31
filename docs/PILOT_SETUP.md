@@ -53,6 +53,9 @@ must not contain private skills, credentials, user data or session histories.
   `WORKFLOW_PLAN_LIVE_PROJECT=team.PROJECT WORKFLOW_PLAN_LIVE_NUMBER=1 python -m unittest tests.test_plan_codex.CodexPlanTests.test_signed_in_gateway_reads_issue_attachments_and_activity`
   with an accessible project and issue number. This reads the issue, attachments
   and activity through the existing sign-in.
+  For an issue with known records, also set `WORKFLOW_PLAN_LIVE_ATTACHMENT_ID`
+  and/or `WORKFLOW_PLAN_LIVE_COMMENT_ID` to require those exact IDs in the
+  returned lists. Without these expectations, empty lists are valid.
   The optional `test_signed_in_gateway_process_group_exits_after_caller_crash`
   uses the same variables, kills a disposable caller after it sends a tracker
   request, and checks the original gateway process group for live processes.

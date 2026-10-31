@@ -5,6 +5,7 @@ from runner.service import Service
 
 class ControlTests(unittest.TestCase):
     def test_lost_admission_response_is_uncertain(self):
+        """Treat an invalid post-transmission admission reply as an unknown outcome."""
         import os, socket, threading
         from pathlib import Path
         from unittest.mock import patch
@@ -22,6 +23,7 @@ class ControlTests(unittest.TestCase):
             finally:thread.join(2);listener.close()
 
     def test_admission_timeout_reports_uncertain_outcome(self):
+        """Preserve uncertainty when the worker outlasts the admission response budget."""
         import os, threading, time
         from pathlib import Path
         from unittest.mock import patch
@@ -40,6 +42,7 @@ class ControlTests(unittest.TestCase):
             finally:thread.join(2);server.server_close()
 
     def test_cli_waits_for_slow_configured_admission(self):
+        """Allow configured admission to exceed the former five-second socket timeout."""
         import os, threading, time
         from pathlib import Path
         from unittest.mock import patch
@@ -55,6 +58,26 @@ class ControlTests(unittest.TestCase):
             try:
                 with patch.dict(os.environ,{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}):
                     result=request_control({'action':'submit_configured'})
+                self.assertEqual(result,{'ok':True,'result':{'submitted':True}})
+            finally:thread.join(10);server.server_close()
+
+    def test_cli_waits_for_slow_explicit_admission(self):
+        """Allow explicit task admission to exceed the former five-second socket timeout."""
+        import os, threading, time
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.cli import request_control
+        from runner.control import UnixControlServer
+        class Intake:
+            def submit(self,run,workflow,project,number): time.sleep(5.2); return {'submitted':True}
+        class Dummy: task_intake=Intake()
+        with tempfile.TemporaryDirectory() as root:
+            secret=Path(root)/'secret';secret.write_text('x'*40);secret.chmod(0o600)
+            server=UnixControlServer(Path(root)/'control.sock',ControlPlane(Dummy(),'x'*40))
+            thread=threading.Thread(target=server.handle_request);thread.start()
+            try:
+                with patch.dict(os.environ,{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}):
+                    result=request_control({'action':'submit_task','run':'run','workflow':'engineering','project':'DEMO','number':1})
                 self.assertEqual(result,{'ok':True,'result':{'submitted':True}})
             finally:thread.join(10);server.server_close()
 
