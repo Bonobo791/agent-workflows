@@ -4,11 +4,15 @@ from runner.cli import request_control
 from runner.worker import ConfigurationError
 
 
-def main():
+def read_metrics():
     response=request_control({'action':'metrics'})
     result=response.get('result')
     if response['ok'] is not True or not isinstance(result,dict) or set(result)!={'metrics'} or not isinstance(result['metrics'],str): raise ConfigurationError('metrics unavailable')
-    sys.stdout.write(result['metrics'])
+    return result['metrics']
+
+
+def main():
+    sys.stdout.write(read_metrics())
     return 0
 
 
