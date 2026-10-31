@@ -34,6 +34,16 @@ Run credential-free local tests with:
 python -m unittest discover -s tests
 ```
 
+To exercise clean writer-session resume with the installed, signed-in Codex and
+temporary user systemd scopes, explicitly opt in with:
+
+```sh
+CODEX_TEST_EXECUTABLE="$(command -v codex)" python -m unittest tests.test_local_session_live
+```
+
+This sends two short model turns and checks clean scope termination. It does not
+verify recovery from a crash or an interrupted provider request.
+
 The media verification tests require `ffmpeg` and `ffprobe` on `PATH`.
 Signed-token tests additionally require `requirements-auth.txt`. The full
 synthetic suite may require local Unix sockets. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
