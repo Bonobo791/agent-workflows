@@ -256,6 +256,13 @@ terminated scope to have a valid invocation ID and matching cgroup path.
 An invalid terminal identity is reported as `unverified` and also blocks a new
 scope reservation, session resume, mutation and correction recovery.
 
+The owner-only control action `inspect_local_scope` takes that exact `run` and
+`unit` and returns the recorded state, invocation and cgroup alongside the
+current systemd observation and whether the recorded cgroup is empty. A null
+observation means systemd inspection failed; a null empty result means no cgroup
+was recorded or systemd inspection failed. These observations are not atomic
+and do not prove a launch or stop request is quiescent; inspection changes no
+recovery state.
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
 engineering workspace claim. Operator stop confirmation still requires the exact
 incarnation and termination attestation.
