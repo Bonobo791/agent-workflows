@@ -105,11 +105,12 @@ class Service:
         if isinstance(self.lifecycle,ManualLifecycle) and self.docker_supervisor is not None:
             rows=self.graph.db.execute("SELECT m.assignment,a.container_id,COALESCE(a.state,'unresolved') FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated') ORDER BY m.assignment",(run,)).fetchall()
             result['docker_assignments']=[{'assignment':row[0],'container_id':row[1],'state':row[2]} for row in rows]
-        if isinstance(self.lifecycle,ManualLifecycle) and self.model_supervisor is not None:
-            rows=self.graph.db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state!='terminated' ORDER BY unit",(run,)).fetchall()
-            result['local_scopes']=[{'unit':row[0],'state':row[1]} for row in rows]
-            tables={row[0] for row in self.graph.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('engineering_workspaces','engineering_local_scopes')")}
-            if tables=={'engineering_workspaces','engineering_local_scopes'}:
+        if isinstance(self.lifecycle,ManualLifecycle):
+            tables={row[0] for row in self.graph.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('local_scopes','engineering_workspaces','engineering_local_scopes')")}
+            if 'local_scopes' in tables:
+                rows=self.graph.db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state!='terminated' ORDER BY unit",(run,)).fetchall()
+                result['local_scopes']=[{'unit':row[0],'state':row[1]} for row in rows]
+            if {'engineering_workspaces','engineering_local_scopes'}<=tables:
                 workspace=self.graph.db.execute('SELECT w.assignment,m.unit FROM engineering_workspaces w LEFT JOIN engineering_local_scopes m ON m.run=w.run AND m.assignment=w.assignment WHERE w.run=? AND w.assignment IS NOT NULL',(run,)).fetchone()
                 if workspace: result['local_workspace']={'assignment':workspace[0],'unit':workspace[1]}
         return result
@@ -133,7 +134,7 @@ class Service:
         return self.lifecycle.status(run)
     def _require_fenced_local(self,run):
         from runner.manual_lifecycle import ManualLifecycle
-        if not isinstance(self.lifecycle,ManualLifecycle) or self.model_supervisor is None: raise ServiceError('local manual supervisor unavailable')
+        if not isinstance(self.lifecycle,ManualLifecycle): raise ServiceError('local manual supervisor unavailable')
         lifecycle_db=self.lifecycle.db.execute('PRAGMA database_list').fetchone()[2]
         graph_db=self.graph.db.execute('PRAGMA database_list').fetchone()[2]
         if not lifecycle_db or not graph_db or Path(lifecycle_db).resolve()!=Path(graph_db).resolve(): raise ServiceError('lifecycle and queue must share durable state')
@@ -144,15 +145,16 @@ class Service:
     def release_local_workspace(self,run,assignment,unit):
         from runner.engineering_workspace import EngineeringWorkspace
         self._require_fenced_local(run)
-        root=Path(self.model_supervisor.engineering_root)
-        if (root/'state.db').resolve()!=Path(self.graph.db.execute('PRAGMA database_list').fetchone()[2]).resolve(): raise ServiceError('workspace and queue must share durable state')
-        registry=EngineeringWorkspace(root)
+        dbpath=Path(self.graph.db.execute('PRAGMA database_list').fetchone()[2]).resolve()
+        if dbpath.name!='state.db': raise ServiceError('workspace and queue must share durable state')
+        registry=EngineeringWorkspace(dbpath.parent)
         try: registry.release_local(run,assignment,unit,fenced=(self.lifecycle.target['manual_target'],self.lifecycle.incarnation))
         finally: registry.close()
         return {'released':True}
     def stop_local_scope(self,run,unit):
         from runner.local_scope import LocalScopes
         self._require_fenced_local(run)
+        if self.model_supervisor is None: raise ServiceError('local manual supervisor unavailable')
         scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
         try:
             if scopes.state(run,unit)=='starting': scopes.bind(run,unit)

@@ -242,6 +242,9 @@ the bound local scope is recorded as terminated. The run must remain fenced;
 this only releases that workspace claim and does not confirm worker termination
 or reconcile a remote outcome. A null unit means the claim has no recorded local
 scope binding and cannot be released through this control.
+The recorded claim can be inspected and a terminated bound claim released
+after restart without a local model supervisor. Stopping an active scope still
+requires the configured local supervisor and its systemd backend.
 
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
 engineering workspace claim. Operator stop confirmation still requires the exact

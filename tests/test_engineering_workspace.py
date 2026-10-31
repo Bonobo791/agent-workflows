@@ -84,9 +84,6 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.registry.db.execute("UPDATE jobs SET status='cancelling' WHERE run='run-1'")
             for field,value in (('assignment','job-'+'b'*48),('unit','other.scope')):
                 with self.subTest(field=field),self.assertRaises(ControlError): self.control.handle('x'*40,{**request,field:value})
-            service.model_supervisor.engineering_root=str(self.root/'other')
-            with self.assertRaises(ControlError): self.control.handle('x'*40,request)
-            service.model_supervisor.engineering_root=str(self.root)
             self.registry.db.execute('DELETE FROM engineering_local_scopes WHERE assignment=?',(assignment,))
             with self.assertRaises(ControlError): self.control.handle('x'*40,request)
             self.registry.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',('run-1',assignment,unit))
@@ -108,6 +105,41 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.assertNotIn(assignment,str(events));self.assertNotIn(unit,str(events))
             with self.assertRaises(ControlError): self.control.handle('x'*40,request)
         finally: scopes.close()
+
+    def test_recover_terminated_workspace_without_local_supervisor(self):
+        from types import SimpleNamespace
+        from runner.control import ControlError, ControlPlane
+        from runner.local_scope import LocalScopes
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.service import Service
+        from tests.test_local_scope import Backend
+        service=self.service;service.create('run-1','engineering','task');service.enqueue('run-1')
+        self.control.handle('x'*40,{'action':'manual_claim'})
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args));assignment='job-'+'d'*48
+        self.registry.claim('run-1',assignment,self.policy)
+        backend=Backend();service.model_supervisor=SimpleNamespace(backend=backend,engineering_root=str(self.root))
+        scopes=LocalScopes(str(self.root/'state.db'),backend)
+        try:
+            unit=scopes.reserve('run-1');backend.unit=unit;scopes.bind('run-1',unit)
+            self.registry.bind_local_scope('run-1',assignment,unit)
+            self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
+            restarted=Service(self.root);lifecycle=ManualLifecycle(str(self.root/'state.db'),'worker','inc');restarted.lifecycle=lifecycle
+            try:
+                control=ControlPlane(restarted,'x'*40)
+                stop=control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
+                self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
+                with self.assertRaises(ControlError): control.handle('x'*40,{'action':'stop_local_scope','run':'run-1','unit':unit})
+                release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
+                with self.assertRaises(ControlError): control.handle('x'*40,release)
+                self.assertTrue(scopes.stop('run-1',unit))
+                foreign=ManualLifecycle(str(self.root/'other.db'),'worker','inc');restarted.lifecycle=foreign
+                try:
+                    with self.assertRaises(ControlError): control.handle('x'*40,release)
+                finally: restarted.lifecycle=lifecycle;foreign.close()
+                self.assertEqual(control.handle('x'*40,release),{'released':True})
+                self.assertEqual(control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run-1','incarnation':'inc','attestation':'terminated_and_fenced'})['status'],'stopped')
+            finally:restarted.close();lifecycle.close()
+        finally:scopes.close()
 
     @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
     def test_fenced_workspace_recovery_with_real_scope(self):
