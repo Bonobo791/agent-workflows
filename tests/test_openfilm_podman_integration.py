@@ -1,5 +1,6 @@
 """Opt-in real rootless Podman render; uses only synthetic project content."""
 import concurrent.futures
+from contextlib import closing
 import hashlib
 import io
 import json
@@ -13,33 +14,62 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-def _remove_render_containers(assignments):
-    """Remove only recorded fixture containers and always close their connection."""
-    try:
-        if assignments:
-            error=None
-            for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
-                try:
-                    subprocess.run(['podman','rm','-f',cid],check=True,stdout=subprocess.DEVNULL,timeout=30)
-                except (OSError,subprocess.SubprocessError) as failure:
-                    if error is None: error=failure
-            if error is not None: raise error
-    finally:
-        if assignments: assignments.close()
+def _render_fixture():
+    from tests.test_openfilm_stage import OpenFilmStageTests
+    fixture=OpenFilmStageTests('test_production_ingests_actual_output_but_requires_review')
+    directory=tempfile.TemporaryDirectory
+    with patch('tests.test_openfilm_stage.tempfile.TemporaryDirectory',side_effect=lambda:directory(delete=False)):
+        fixture.setUp()
+    return fixture
+
+
+def _remove_render_containers(assignments,removed):
+    """Remove exact recorded IDs once, continuing after individual failures."""
+    if not assignments: return
+    error=None
+    for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
+        if cid in removed: continue
+        try:
+            subprocess.run(['podman','rm','-f',cid],check=True,stdout=subprocess.DEVNULL,timeout=30)
+            removed.add(cid)
+        except (OSError,subprocess.SubprocessError) as failure:
+            if error is None: error=failure
+    return error
+
+
+def _drain_render_worker(pool,future):
+    """Return whether the submitted worker is quiescent within its cleanup budget."""
+    pending={future} if future is not None else set()
+    if pool:
+        try:
+            pending=concurrent.futures.wait([future],timeout=5).not_done if future is not None else set()
+        finally: pool.shutdown(wait=not pending,cancel_futures=True)
+    return not pending
 
 
 def _cleanup_render_fixture(fixture,assignments,pool=None,future=None):
-    """Remove containers before a bounded worker drain and unconditional teardown."""
+    """Fence launches, drain the worker and sweep late IDs before deleting state."""
+    supervisor=fixture.service.docker_supervisor
+    if supervisor is not None: supervisor.fence_ready=lambda _:False
+    removed=set();retain=True
     try:
-        _remove_render_containers(assignments)
+        error=_remove_render_containers(assignments,removed)
+        if not _drain_render_worker(pool,future): raise AssertionError('render worker cleanup unresolved; retained state: '+str(fixture.root))
+        if future is not None:
+            late_error=_remove_render_containers(assignments,removed)
+            if error is None: error=late_error
+        if error is not None:
+            error.add_note('retained fixture state: '+str(fixture.root))
+            raise error
+        retain=False
     finally:
-        fixture.service.docker_supervisor=None
         try:
-            if pool:
-                pending=concurrent.futures.wait([future],timeout=5).not_done if future is not None else set()
-                pool.shutdown(wait=not pending,cancel_futures=True)
-                if pending: raise AssertionError('render worker cleanup unresolved')
-        finally: fixture.tearDown()
+            if assignments: assignments.close()
+        finally:
+            fixture.service.docker_supervisor=None
+            if retain:
+                with patch.object(fixture.tmp,'cleanup'): fixture.tearDown()
+            else: fixture.tearDown()
 
 
 class RenderFixtureCleanupTests(unittest.TestCase):
@@ -48,7 +78,9 @@ class RenderFixtureCleanupTests(unittest.TestCase):
         from unittest.mock import MagicMock
         assignments=MagicMock()
         assignments.db.execute.return_value=[('a'*64,),('b'*64,)]
-        fixture=SimpleNamespace(service=SimpleNamespace(docker_supervisor=object()),tearDown=MagicMock())
+        directory=tempfile.TemporaryDirectory(delete=False);self.addCleanup(directory.cleanup)
+        fixture=SimpleNamespace(service=SimpleNamespace(docker_supervisor=SimpleNamespace(fence_ready=lambda _:True)),tmp=directory,root=Path(directory.name))
+        fixture.tearDown=MagicMock(side_effect=lambda:fixture.tmp.cleanup())
         return fixture,assignments
 
     def test_removes_containers_before_waiting_for_worker(self):
@@ -87,6 +119,44 @@ class RenderFixtureCleanupTests(unittest.TestCase):
         wait.assert_called_once_with([future],timeout=5)
         pool.shutdown.assert_called_once_with(wait=False,cancel_futures=True)
         assignments.close.assert_called_once();fixture.tearDown.assert_called_once()
+        self.assertTrue(fixture.root.exists(),'pending worker evidence was deleted')
+
+    def test_delayed_create_is_fenced_and_swept_after_worker_exits(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        fixture,assignments=self._fixture();supervisor=fixture.service.docker_supervisor
+        rows=[];removed=[];future=concurrent.futures.Future();pool=MagicMock()
+        assignments.db.execute.side_effect=lambda *_:list(rows)
+        def finish_create(*args,**kwargs):
+            self.assertFalse(supervisor.fence_ready('run'))
+            assignments.close.assert_not_called()
+            rows.append(('c'*64,));future.set_result(None)
+            return SimpleNamespace(not_done=set())
+        with patch(__name__+'.subprocess.run',side_effect=lambda argv,**_:removed.append(argv[-1])),patch(__name__+'.concurrent.futures.wait',side_effect=finish_create):
+            _cleanup_render_fixture(fixture,assignments,pool,future)
+        self.assertEqual(removed,['c'*64]);assignments.close.assert_called_once()
+        self.assertFalse(fixture.root.exists())
+
+
+    def test_pending_worker_keeps_real_state_database_for_late_response(self):
+        import sqlite3
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from runner.docker_controller import DockerAssignments
+        fixture=_render_fixture();self.addCleanup(fixture.tmp.cleanup);self.addCleanup(fixture.service.close);self.addCleanup(fixture.patch.stop)
+        path=str(fixture.root/'state'/'state.db');assignments=DockerAssignments(path,None,'sha256:'+'1'*64)
+        assignments.db.execute("INSERT INTO docker_assignments VALUES('late',NULL,'creating','fixture')")
+        pending=concurrent.futures.Future();pool=MagicMock()
+        with patch(__name__+'.concurrent.futures.wait',return_value=SimpleNamespace(not_done={pending})):
+            with self.assertRaisesRegex(AssertionError,'retained state:'):
+                _cleanup_render_fixture(fixture,assignments,pool,pending)
+        self.assertTrue(Path(path).is_file())
+        db=sqlite3.connect(path)
+        try:
+            db.execute("UPDATE docker_assignments SET container_id=?,state='created' WHERE run='late'",('c'*64,));db.commit()
+            self.assertEqual(db.execute("SELECT container_id FROM docker_assignments WHERE run='late'").fetchone(),('c'*64,))
+        finally: db.close()
+        pool.shutdown.assert_called_once_with(wait=False,cancel_futures=True)
 
 
 @unittest.skipUnless(os.environ.get('OPENFILM_PODMAN_IMAGE') and os.environ.get('OPENFILM_PODMAN_SOCKET'), 'rootless Podman render not configured')
@@ -169,10 +239,9 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
     def test_cancellation_stops_real_render_without_committing_result(self):
         import sqlite3
         import threading
-        from tests.test_openfilm_stage import OpenFilmStageTests
         from runner.docker_controller import DockerError, UnixEngine
-        fixture=OpenFilmStageTests('test_production_ingests_actual_output_but_requires_review')
-        fixture.setUp(); assignments=None; pool=None; future=None; attempt=None
+        fixture=_render_fixture()
+        assignments=None; pool=None; future=None; attempt=None
         try:
             started=threading.Event(); raw=UnixEngine(os.environ['OPENFILM_PODMAN_SOCKET'])
             class Engine:
@@ -187,7 +256,7 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
             pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future=pool.submit(backend.execute,run='run',attempt_id=attempt,brief_ref=fixture.brief_ref,brief=fixture.brief,canonical='Approved synthetic statement.',graph_claim=fixture.claim,queue_claim=fixture.queue)
             self.assertTrue(started.wait(20),'render did not reach the Engine wait')
-            with sqlite3.connect(supervisor.db_path) as db:
+            with closing(sqlite3.connect(supervisor.db_path)) as db:
                 row=db.execute('SELECT container_id,state FROM docker_assignments WHERE run=?',('of-'+attempt,)).fetchone()
             self.assertIsNotNone(row,'render assignment unavailable')
             cid,state=row
@@ -195,7 +264,7 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
             self.assertTrue(raw.request('GET','/containers/'+cid+'/json')[1]['State']['Running'])
             backend.cancel('run',attempt)
             with self.assertRaises(DockerError): future.result(timeout=30)
-            with sqlite3.connect(supervisor.db_path) as db:
+            with closing(sqlite3.connect(supervisor.db_path)) as db:
                 self.assertEqual(db.execute('SELECT state,result_ref FROM openfilm_render_jobs WHERE assignment=?',('of-'+attempt,)).fetchone(),('cancel_requested',None))
                 self.assertEqual(db.execute('SELECT state FROM docker_assignments WHERE run=?',('of-'+attempt,)).fetchone(),('terminated',))
                 self.assertEqual(db.execute("SELECT status FROM graph_attempts WHERE run='run' AND stage='asset_production'").fetchone(),('uncertain',))
@@ -205,11 +274,49 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
         finally:
             _cleanup_render_fixture(fixture,assignments,pool,future)
 
+    def test_cleanup_removes_container_created_after_initial_sweep(self):
+        import threading
+        from runner.docker_controller import DockerError, UnixEngine
+        fixture=_render_fixture();assignments=None;pool=None;future=None;cleaning=False
+        created=threading.Event();release=threading.Event();containers=[];starts=[]
+        raw=UnixEngine(os.environ['OPENFILM_PODMAN_SOCKET'])
+        class Engine:
+            path=raw.path
+            def request(self,method,path,body=None,*,timeout=None):
+                if path.endswith('/start'): starts.append(path)
+                result=raw.request(method,path,body,timeout=timeout)
+                if method=='POST' and path=='/containers/create':
+                    containers.append(result[1]['Id']);created.set()
+                    if not release.wait(10): raise DockerError('delayed create response was not released')
+                return result
+        try:
+            assignments,supervisor,backend=self._render_backend(fixture,Engine())
+            count=fixture.service.graph.begin_attempt('run','asset_production','late-create',fixture.claim,2)
+            attempt=hashlib.sha256(json.dumps(['run','asset_production','late-create',count],separators=(',',':')).encode()).hexdigest()
+            pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future=pool.submit(backend.execute,run='run',attempt_id=attempt,brief_ref=fixture.brief_ref,brief=fixture.brief,canonical='Approved synthetic statement.',graph_claim=fixture.claim,queue_claim=fixture.queue)
+            self.assertTrue(created.wait(20),'Engine did not create the fixture container')
+            self.assertEqual(assignments.db.execute('SELECT container_id,state FROM docker_assignments WHERE run=?',('of-'+attempt,)).fetchone(),(None,'creating'))
+            drain=_drain_render_worker
+            def resume_response(pool,future):
+                self.assertFalse(supervisor.fence_ready('run'))
+                release.set()
+                return drain(pool,future)
+            cleaning=True
+            with patch(__name__+'._drain_render_worker',side_effect=resume_response):
+                _cleanup_render_fixture(fixture,assignments,pool,future)
+            self.assertIsInstance(future.exception(),DockerError)
+            self.assertEqual(starts,[])
+            self.assertEqual(raw.request('GET','/containers/'+containers[0]+'/json')[0],404)
+            self.assertFalse(fixture.root.exists())
+        finally:
+            release.set()
+            if not cleaning: _cleanup_render_fixture(fixture,assignments,pool,future)
+
     def test_render_and_independent_terminal_verification(self):
-        from tests.test_openfilm_stage import OpenFilmStageTests
         from runner.docker_controller import UnixEngine
-        fixture=OpenFilmStageTests('test_production_ingests_actual_output_but_requires_review')
-        fixture.setUp(); assignments=None
+        fixture=_render_fixture()
+        assignments=None
         try:
             engine=UnixEngine(os.environ['OPENFILM_PODMAN_SOCKET'])
             assignments,supervisor,backend=self._render_backend(fixture,engine)
