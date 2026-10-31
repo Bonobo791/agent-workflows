@@ -1,4 +1,5 @@
 """Opt-in real rootless Podman render; uses only synthetic project content."""
+import concurrent.futures
 import hashlib
 import io
 import json
@@ -10,6 +11,82 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+
+
+def _remove_render_containers(assignments):
+    """Remove only recorded fixture containers and always close their connection."""
+    try:
+        if assignments:
+            error=None
+            for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
+                try:
+                    subprocess.run(['podman','rm','-f',cid],check=True,stdout=subprocess.DEVNULL,timeout=30)
+                except (OSError,subprocess.SubprocessError) as failure:
+                    if error is None: error=failure
+            if error is not None: raise error
+    finally:
+        if assignments: assignments.close()
+
+
+def _cleanup_render_fixture(fixture,assignments,pool=None,future=None):
+    """Remove containers before a bounded worker drain and unconditional teardown."""
+    try:
+        _remove_render_containers(assignments)
+    finally:
+        fixture.service.docker_supervisor=None
+        try:
+            if pool:
+                pending=concurrent.futures.wait([future],timeout=5).not_done if future is not None else set()
+                pool.shutdown(wait=not pending,cancel_futures=True)
+                if pending: raise AssertionError('render worker cleanup unresolved')
+        finally: fixture.tearDown()
+
+
+class RenderFixtureCleanupTests(unittest.TestCase):
+    def _fixture(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        assignments=MagicMock()
+        assignments.db.execute.return_value=[('a'*64,),('b'*64,)]
+        fixture=SimpleNamespace(service=SimpleNamespace(docker_supervisor=object()),tearDown=MagicMock())
+        return fixture,assignments
+
+    def test_removes_containers_before_waiting_for_worker(self):
+        from unittest.mock import MagicMock
+        fixture,assignments=self._fixture();future=concurrent.futures.Future();removed=[]
+        def remove(argv,**kwargs):
+            self.assertEqual(argv[:3],['podman','rm','-f']);removed.append(argv[-1])
+            if len(removed)==2: future.set_result(None)
+        pool=MagicMock()
+        def shutdown(**kwargs):
+            self.assertEqual(removed,['a'*64,'b'*64]);self.assertTrue(future.done())
+            self.assertEqual(kwargs,{'wait':True,'cancel_futures':True})
+        pool.shutdown.side_effect=shutdown
+        with patch(__name__+'.subprocess.run',side_effect=remove):
+            _cleanup_render_fixture(fixture,assignments,pool,future)
+        assignments.close.assert_called_once();fixture.tearDown.assert_called_once()
+        self.assertIsNone(fixture.service.docker_supervisor)
+
+    def test_removal_failure_still_attempts_remaining_containers_and_closes_fixture(self):
+        fixture,assignments=self._fixture();error=subprocess.TimeoutExpired('podman rm',30)
+        with patch(__name__+'.subprocess.run',side_effect=[error,None]) as remove:
+            with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                _cleanup_render_fixture(fixture,assignments)
+        self.assertIs(raised.exception,error);self.assertEqual(remove.call_count,2)
+        assignments.close.assert_called_once();fixture.tearDown.assert_called_once()
+        self.assertIsNone(fixture.service.docker_supervisor)
+
+    def test_worker_that_does_not_exit_is_reported_without_blocking_shutdown(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        fixture,assignments=self._fixture();pool=MagicMock();future=concurrent.futures.Future()
+        pending=SimpleNamespace(not_done={future})
+        with patch(__name__+'.subprocess.run'),patch(__name__+'.concurrent.futures.wait',return_value=pending) as wait:
+            with self.assertRaisesRegex(AssertionError,'render worker cleanup unresolved'):
+                _cleanup_render_fixture(fixture,assignments,pool,future)
+        wait.assert_called_once_with([future],timeout=5)
+        pool.shutdown.assert_called_once_with(wait=False,cancel_futures=True)
+        assignments.close.assert_called_once();fixture.tearDown.assert_called_once()
 
 
 @unittest.skipUnless(os.environ.get('OPENFILM_PODMAN_IMAGE') and os.environ.get('OPENFILM_PODMAN_SOCKET'), 'rootless Podman render not configured')
@@ -90,7 +167,6 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
             raise
 
     def test_cancellation_stops_real_render_without_committing_result(self):
-        import concurrent.futures
         import sqlite3
         import threading
         from tests.test_openfilm_stage import OpenFilmStageTests
@@ -127,23 +203,7 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
             self.assertEqual(status,200)
             self.assertFalse(details['State']['Running'])
         finally:
-            try:
-                if future and not future.done():
-                    try: backend.cancel('run',attempt)
-                    except DockerError: pass
-                if assignments:
-                    for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
-                        subprocess.run(['podman','stop','-t','0',cid],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
-            finally:
-                try:
-                    if pool: pool.shutdown(wait=True)
-                finally:
-                    try:
-                        if assignments:
-                            for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
-                                subprocess.run(['podman','rm','-f',cid],check=True,stdout=subprocess.DEVNULL,timeout=30)
-                            assignments.close();fixture.service.docker_supervisor=None
-                    finally: fixture.tearDown()
+            _cleanup_render_fixture(fixture,assignments,pool,future)
 
     def test_render_and_independent_terminal_verification(self):
         from tests.test_openfilm_stage import OpenFilmStageTests
@@ -162,8 +222,4 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
                 self.assertFalse(backend.verify_terminal('run',attempt,fixture.brief_ref,result))
             self.assertEqual(len(result['outputs']),1)
         finally:
-            if assignments:
-                for (cid,) in assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL'):
-                    subprocess.run(['podman','rm','-f',cid],check=True,stdout=subprocess.DEVNULL,timeout=30)
-                assignments.close(); fixture.service.docker_supervisor=None
-            fixture.tearDown()
+            _cleanup_render_fixture(fixture,assignments)
