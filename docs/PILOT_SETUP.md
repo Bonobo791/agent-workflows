@@ -161,6 +161,10 @@ On an SELinux-enforcing rootless Podman host, select `engine` as
 `keep-id` and private relabeling for the two job mounts; its terminal check
 requires the recorded image ID, namespace annotation and matching SELinux
 labels. An opt-in synthetic test exercised the actual adapter on this host.
+A separate opt-in cancellation test stops a running synthetic renderer and
+checks the container is terminated while the attempt remains uncertain and
+no result is committed. This does not reconcile an interrupted stop or
+establish full marketing workflow acceptance.
 The standard local worker constructs the renderer when the Podman runtime
 configuration is present. Its policy check verifies the socket owner and
 access, rootless Podman, seccomp, SELinux, the pinned image ID and the renderer
