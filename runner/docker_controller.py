@@ -109,19 +109,22 @@ class UnixEngine:
         except Exception: raise DockerError('container logs unavailable or incomplete') from None
         finally: connection.close()
 
-    def request(self,method,path,body=None):
+    def request(self,method,path,body=None,*,timeout=None):
         import http.client
         import json
+        import math
         import socket
         if not isinstance(path,str) or not ((method=='POST' and path=='/containers/create') or (method=='GET' and re.fullmatch(r'/containers/[0-9a-f]{64}/json',path)) or (method=='POST' and re.fullmatch(r'/containers/[0-9a-f]{64}/(?:stop\?t=10|kill\?signal=SIGKILL|wait\?condition=not-running|start)',path))):
             raise DockerError('unsupported Engine request')
         if (path=='/containers/create') != isinstance(body,dict): raise DockerError('invalid Engine request body')
+        if timeout is not None and (not path.endswith('/wait?condition=not-running') or type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=600): raise DockerError('invalid Engine wait timeout')
+        request_timeout=self.timeout if timeout is None else timeout
         class Connection(http.client.HTTPConnection):
             def connect(connection):
                 connection.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
-                connection.sock.settimeout(self.timeout)
+                connection.sock.settimeout(request_timeout)
                 connection.sock.connect(self.path)
-        connection=Connection('localhost',timeout=self.timeout)
+        connection=Connection('localhost',timeout=request_timeout)
         try:
             payload=json.dumps(body,separators=(',',':')).encode() if body is not None else (b'' if method=='POST' else None)
             connection.request(method,'/v1.49'+path,body=payload,headers={'Content-Type':'application/json'} if body is not None else {})

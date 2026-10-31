@@ -366,7 +366,7 @@ class OpenFilmStageTests(unittest.TestCase):
         test=self
         class Engine:
             def __init__(self): self.spec=None; self.state='created'; self.cid='a'*64; self.exit_code=0; self.cancel_on_start=False
-            def request(self,method,path,body=None):
+            def request(self,method,path,body=None,*,timeout=None):
                 if path=='/containers/create': self.spec=body; return 201,{'Id':self.cid}
                 if path.endswith('/json'):
                     host={**self.spec['HostConfig'],'Privileged':False,'CapAdd':None}
@@ -389,7 +389,9 @@ class OpenFilmStageTests(unittest.TestCase):
                     Path(output,'render-result.json').write_text(json.dumps({'outputs':[asset]}))
                     self.state='exited'; return 204,None
                 if '/stop?' in path: self.state='exited'; self.exit_code=137; return 204,None
-                if '/wait?' in path: return 200,{'StatusCode':self.exit_code}
+                if '/wait?' in path:
+                    test.assertEqual(timeout,10)
+                    return 200,{'StatusCode':self.exit_code}
                 raise AssertionError(path)
         class Builder:
             def ready(self): return True

@@ -40,6 +40,30 @@ class DockerControllerTests(unittest.TestCase):
         with self.assertRaises(DockerError): DockerController(Engine(), {}).stop('run-1')
 
 class UnixTransportTests(unittest.TestCase):
+    def test_render_wait_uses_its_own_bounded_timeout(self):
+        import http.server, json, os, socketserver, tempfile, threading, time
+        from runner.docker_controller import UnixEngine
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                time.sleep(.2); data=json.dumps({'StatusCode':0}).encode()
+                try:
+                    self.send_response(200); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
+                except BrokenPipeError: pass
+            def log_message(self,*args): pass
+        class Server(socketserver.ThreadingUnixStreamServer): daemon_threads=True
+        with tempfile.TemporaryDirectory() as root:
+            server=Server(os.path.join(root,'engine.sock'),Handler); thread=threading.Thread(target=server.serve_forever); thread.start()
+            try:
+                engine=UnixEngine(os.path.join(root,'engine.sock'),timeout=.05)
+                self.assertEqual(engine.request('POST','/containers/'+ID+'/wait?condition=not-running',timeout=1),(200,{'StatusCode':0}))
+                started=time.monotonic()
+                with self.assertRaises(DockerError): engine.request('POST','/containers/'+ID+'/wait?condition=not-running',timeout=.05)
+                self.assertLess(time.monotonic()-started,.6)
+                with self.assertRaises(DockerError): engine.request('GET','/containers/'+ID+'/json',timeout=1)
+                for timeout in (0,-1,601,True,float('nan'),float('inf')):
+                    with self.subTest(timeout=timeout),self.assertRaises(DockerError):
+                        engine.request('POST','/containers/'+ID+'/wait?condition=not-running',timeout=timeout)
+            finally: server.shutdown(); thread.join(); server.server_close()
     def test_http_over_unix_socket(self):
         import http.server
         import json

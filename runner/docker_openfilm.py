@@ -87,7 +87,7 @@ class DockerOpenFilmBackend:
                     try: self.supervisor.finish(assignment)
                     except Exception: pass
                     raise DockerError('render cancelled after start')
-                status,wait=self.supervisor.assignments.engine.request('POST','/containers/'+cid+'/wait?condition=not-running')
+                status,wait=self.supervisor.assignments.engine.request('POST','/containers/'+cid+'/wait?condition=not-running',timeout=self.timeout_seconds)
                 _,state=DockerController(self.supervisor.assignments.engine,{assignment:cid})._inspect(assignment)
                 if status!=200 or not isinstance(wait,dict) or type(wait.get('StatusCode')) is not int or wait.get('Error') or state['Running'] or state['Status']!='exited' or state.get('ExitCode')!=wait['StatusCode']: raise DockerError('render termination uncertain')
                 outputs=[]
