@@ -32,6 +32,8 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaises(LifecycleError): self.l.confirm_stopped('run','proof')
         self.observer.current=None; self.observer.stopped=True
         self.l.confirm_stopped('run','proof'); self.assertEqual(self.l.status('run')['status'],'stopped')
+        rows=self.l.db.execute('SELECT status,confirmation FROM lifecycle_audit WHERE run=? ORDER BY id',('run',)).fetchall()
+        self.assertEqual(rows[-1],('stopped','independently-verified'))
     def test_auto_is_disabled_until_exact_policy_approved_and_verified(self):
         with self.assertRaises(LifecycleError): self.l.automatic_stop('run')
         self.l.enable_auto(approved_policy=self.l.policy_hash,verify_policy=lambda value: value==self.l.policy_hash)
@@ -81,7 +83,9 @@ class LifecycleTests(unittest.TestCase):
             with self.assertRaises(LifecycleError): self.l.automatic_stop('run')
             self.assertEqual(self.l.status('run')['status'],'uncertain')
             with self.assertRaises(LifecycleError): self.l.automatic_stop('run')
-        finally: wait.set()
+        finally:
+            wait.set()
+            self.assertTrue(self.l.inflight['run'].wait(2))
 
     def test_same_physical_incarnation_cannot_use_another_policy(self):
         target={**self.l.target,'controller_id':'different-controller'}

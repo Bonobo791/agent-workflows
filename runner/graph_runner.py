@@ -54,7 +54,7 @@ class GraphRunner:
                 except Exception: changed=True
                 if changed:
                     snapshot=self.graph.prepare(run,parent,token)
-                    self.graph.invalidate(run,parent,snapshot,token)
+                    self.graph.invalidate(run,parent,snapshot,token,reason='upstream_unavailable')
                     raise ExecutionError('upstream skill inputs changed')
         visit(stage)
     def execute(self,run,stage,token,inputs,required_dependencies=None,correction_id=None):
@@ -69,7 +69,7 @@ class GraphRunner:
             if names and not self.skill_resolver: raise ExecutionError('required skill resolver unavailable')
             skills=self.skill_resolver.resolve(names) if names else {}
         except Exception:
-            if self.graph.get(run,stage): self.graph.invalidate(run,stage,snapshot,token)
+            if self.graph.get(run,stage): self.graph.invalidate(run,stage,snapshot,token,reason='skills_unavailable')
             raise ExecutionError('required skills unavailable') from None
         hashes={name:skill['sha256'] for name,skill in skills.items()}
         skill_fingerprint=hashlib.sha256(json.dumps(hashes,sort_keys=True).encode()).hexdigest()
@@ -83,16 +83,17 @@ class GraphRunner:
         if row and current and current['status'] in ('passed','blocked','unsuitable','awaiting_review') and current['version']==row[0]:
             try: cached=self._validate_artifact_graph(row[0])
             except Exception:
-                self.graph.invalidate(run,stage,snapshot,token)
+                self.graph.invalidate(run,stage,snapshot,token,reason='artifact_unavailable')
                 raise ExecutionError('cached artifact unavailable') from None
             decision=self.gate(stage,cached)
             cached_status='passed' if decision is True else decision
             if cached_status != current['status']:
-                self.graph.invalidate(run,stage,snapshot,token)
+                self.graph.invalidate(run,stage,snapshot,token,reason='gate_changed')
                 raise ExecutionError('cached stage no longer passes its gate')
+            self.graph.record_cache_reuse(run,stage,snapshot,token,input_hash,row[0],self.quota_scope)
             return row[0]
         if current and correction_id is None:
-            self.graph.invalidate(run,stage,snapshot,token)
+            self.graph.invalidate(run,stage,snapshot,token,reason='cache_miss')
             snapshot=self.graph.prepare(run,stage,token)
         self.graph.begin_attempt(run,stage,input_hash,token,self.max_attempts,correction_id=correction_id)
         try:

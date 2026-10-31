@@ -19,7 +19,14 @@ class ManualLifecycle:
             target TEXT PRIMARY KEY, incarnation TEXT NOT NULL, state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS manual_assignments(
             run TEXT PRIMARY KEY, target TEXT NOT NULL, incarnation TEXT NOT NULL,
-            state TEXT NOT NULL, attestation TEXT, UNIQUE(target,incarnation));''')
+            state TEXT NOT NULL, attestation TEXT, UNIQUE(target,incarnation));
+            CREATE TABLE IF NOT EXISTS manual_lifecycle_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, state TEXT NOT NULL, confirmation TEXT, created REAL NOT NULL);
+            CREATE TRIGGER IF NOT EXISTS manual_lifecycle_audit_insert AFTER INSERT ON manual_assignments BEGIN
+                INSERT INTO manual_lifecycle_audit(schema_version,run,state,confirmation,created) VALUES(1,NEW.run,NEW.state,NULL,(julianday('now')-2440587.5)*86400.0);
+            END;
+            CREATE TRIGGER IF NOT EXISTS manual_lifecycle_audit_update AFTER UPDATE OF state ON manual_assignments WHEN NEW.state != OLD.state BEGIN
+                INSERT INTO manual_lifecycle_audit(schema_version,run,state,confirmation,created) VALUES(1,NEW.run,NEW.state,CASE WHEN NEW.state='stopped' AND NEW.attestation='terminated_and_fenced' THEN 'operator-attested' ELSE NULL END,(julianday('now')-2440587.5)*86400.0);
+            END;''')
         self.db.execute('BEGIN IMMEDIATE')
         try:
             row=self.db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()
@@ -67,6 +74,8 @@ class ManualLifecycle:
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone():
                 unresolved=db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated' OR e.run IS NULL) LIMIT 1",(run,)).fetchone()
                 if unresolved: raise ManualLifecycleError('Docker termination or launch remains unresolved')
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone() and db.execute("SELECT 1 FROM local_scopes WHERE run=? AND state!='terminated' LIMIT 1",(run,)).fetchone(): raise ManualLifecycleError('local scope termination or launch remains unresolved')
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engineering_workspaces'").fetchone() and db.execute('SELECT 1 FROM engineering_workspaces WHERE run=? AND assignment IS NOT NULL',(run,)).fetchone(): raise ManualLifecycleError('engineering workspace claim remains unresolved')
             db.execute("UPDATE manual_assignments SET state='stopped',attestation=? WHERE run=?",(attestation,run))
             db.execute("UPDATE manual_workers SET state='stopped' WHERE target=?",(self.target['manual_target'],))
             db.execute("UPDATE jobs SET status='cancelled',token=NULL,expires=NULL WHERE run=?",(run,))

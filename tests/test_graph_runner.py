@@ -5,6 +5,18 @@ from runner.artifacts import ArtifactStore
 from runner.graph_runner import GraphRunner, ExecutionError
 
 class GraphRunnerTests(unittest.TestCase):
+    def test_cache_reuse_audit_covers_both_workflows(self):
+        from runner.graph import engineering_definition
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.register(engineering_definition())
+            try:
+                runner=GraphRunner(graph,ArtifactStore(root),lambda stage,inputs,session:{'body':'synthetic'},lambda stage,result:True)
+                for workflow in ('engineering','marketing'):
+                    graph.create(workflow,workflow); token=graph.claim(workflow,60)
+                    runner.execute(workflow,'intake',token,{})
+                    runner.execute(workflow,'intake',token,{})
+                self.assertEqual(graph.db.execute('SELECT run,status FROM cache_audit ORDER BY run').fetchall(),[('engineering','reused'),('marketing','reused')])
+            finally: graph.close()
     def test_marketing_writer_revision_resumes_but_review_is_fresh(self):
         with tempfile.TemporaryDirectory() as root:
             graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('run','marketing'); token=graph.claim('run',60)
@@ -33,6 +45,11 @@ class GraphRunnerTests(unittest.TestCase):
             self.assertEqual(graph.get('run','intake')['version'],ref)
             self.assertEqual(runner.execute('run','intake',token,{'task':'synthetic'}),ref)
             self.assertEqual(calls,['intake'])
+            self.assertEqual(graph.db.execute("SELECT stage,status,output_hash FROM cache_audit").fetchall(),[('intake','reused',ref)])
+            graph.db.execute("CREATE TRIGGER reject_cache_audit BEFORE INSERT ON cache_audit BEGIN SELECT RAISE(ABORT,'synthetic audit failure'); END")
+            with self.assertRaises(Exception): runner.execute('run','intake',token,{'task':'synthetic'})
+            self.assertEqual(calls,['intake'])
+            self.assertEqual(graph.get('run','intake')['version'],ref)
             with self.assertRaises(ExecutionError): runner.execute('run','brief',token,{'source':ref})
             self.assertIsNone(graph.get('run','brief'))
             graph.close()
@@ -47,6 +64,7 @@ class GraphRunnerTests(unittest.TestCase):
             with self.assertRaises(ExecutionError): runner.execute('run','intake',token,{'valid':False})
             self.assertIsNone(graph.get('run','intake'))
             self.assertIsNone(graph.get('run','brief'))
+            self.assertEqual(graph.db.execute('SELECT stage,reason FROM invalidation_audit ORDER BY stage').fetchall(),[('brief','upstream_invalidated'),('intake','cache_miss')])
             graph.close()
 
     def test_cache_hit_rechecks_current_gate(self):
@@ -58,7 +76,20 @@ class GraphRunnerTests(unittest.TestCase):
             permitted[0]=False
             with self.assertRaises(ExecutionError): runner.execute('run','intake',token,{'task':'synthetic'})
             self.assertIsNone(graph.get('run','intake'))
+            self.assertEqual(graph.db.execute('SELECT reason FROM invalidation_audit').fetchone(),('gate_changed',))
             graph.close()
+
+    def test_invalidation_audit_failure_rolls_back_stage_deletion(self):
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('run','marketing'); token=graph.claim('run',60)
+            try:
+                runner=GraphRunner(graph,ArtifactStore(root),lambda stage,inputs,session:{'body':'synthetic'},lambda stage,result:True)
+                ref=runner.execute('run','intake',token,{})
+                graph.db.execute("CREATE TRIGGER reject_invalidation_audit BEFORE INSERT ON invalidation_audit BEGIN SELECT RAISE(ABORT,'synthetic failure'); END")
+                with self.assertRaises(Exception): graph.invalidate('run','intake',graph.prepare('run','intake',token),token,reason='cache_miss')
+                self.assertEqual(graph.get('run','intake')['version'],ref)
+                self.assertEqual(graph.db.execute("SELECT COUNT(*) FROM graph_audit WHERE status='invalidated'").fetchone()[0],0)
+            finally: graph.close()
 
     def test_result_commit_failure_keeps_stage_and_attempt_consistent(self):
         with tempfile.TemporaryDirectory() as root:

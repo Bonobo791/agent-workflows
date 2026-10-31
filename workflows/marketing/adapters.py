@@ -9,7 +9,7 @@ import os
 import stat
 from pathlib import PurePosixPath
 from runner.structured import parse_marketing_result
-from runner.artifacts import ArtifactError
+from runner.artifacts import ArtifactError, MAX_BYTES
 from workflows.marketing.gates import CHANNELS
 
 class AdapterError(RuntimeError): pass
@@ -23,8 +23,8 @@ ROLE_INPUTS = {
 }
 PROMPTS = {
     'intake': 'Validate the task is ready and identify its requested format.',
-    'brief': 'Prepare the brief and a primary-source evidence register. Do not invent claims.',
-    'canonical_draft': 'Write the requested canonical asset, following the brief and page-type requirements.',
+    'brief': 'Prepare the brief and a candidate primary-source evidence register. This writer cannot fetch network sources; a separate reviewer will fetch approved URLs and verify every claim. Do not claim sources were checked by this writer or invent claims. Return passed when the brief and candidate register are complete; the separate source gate determines whether their claims are supported.',
+    'canonical_draft': 'Write the requested canonical asset, following the brief and page-type requirements. The source_verification artifact is the independent source-gate result; it supersedes the brief writer’s lack of network access.',
     'canonical_review': 'Independently review editorial quality, factual evidence and SEO/GEO. Return structured findings.',
     **{f'{channel}_draft': f'Create a distinct {channel} draft from the frozen source.' for channel in CHANNELS},
     **{f'{channel}_review': f'Independently review the {channel} draft and report platform-specific findings.' for channel in CHANNELS},
@@ -57,8 +57,9 @@ class MarketingAdapter:
         except Exception: raise AdapterError('invalid worker output') from None
         return ref
 
-    def ingest(self, root, relative):
+    def ingest(self, root, relative, max_bytes=10*1024*1024):
         """Ingest a regular file under a private run directory, rejecting symlinks."""
+        if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_BYTES: raise AdapterError('invalid artifact limit')
         parts=PurePosixPath(relative).parts
         if not parts or PurePosixPath(relative).is_absolute() or any(x in ('..','.') for x in parts): raise AdapterError('invalid artifact path')
         fd=None
@@ -70,14 +71,14 @@ class MarketingAdapter:
                 else: flags |= os.O_NONBLOCK
                 child=os.open(part,flags,dir_fd=fd); os.close(fd); fd=child
             info=os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size > 10*1024*1024: raise ValueError('invalid artifact')
-            chunks=[]; remaining=10*1024*1024+1
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size > max_bytes: raise ValueError('invalid artifact')
+            chunks=[]; remaining=max_bytes+1
             while remaining:
                 chunk=os.read(fd,min(65536,remaining))
                 if not chunk: break
                 chunks.append(chunk); remaining-=len(chunk)
             data=b''.join(chunks)
-            if len(data)>10*1024*1024: raise ValueError('artifact too large')
+            if len(data)>max_bytes: raise ValueError('artifact too large')
             return self.store.put(data)
         except (OSError,ValueError): raise AdapterError('artifact ingestion failed') from None
         finally:

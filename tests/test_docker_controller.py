@@ -244,6 +244,39 @@ class AssignmentTests(unittest.TestCase):
             self.assertEqual({m['Source'] for m in spec['HostConfig']['Mounts']},set(mounts.values()))
             ledger.db.close(); assignments.close()
 
+    def test_openfilm_job_requires_exact_approval_and_has_no_network_or_credentials(self):
+        import tempfile
+        from pathlib import Path
+        from runner.actions import ActionLedger
+        from runner.docker_config import DockerConfig
+        from runner.docker_controller import DockerAssignments
+        class Create(Engine):
+            def request(self,method,path,body=None): self.calls.append((method,path,body)); return 201,{'Id':ID}
+        with tempfile.TemporaryDirectory() as root:
+            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
+            config=DockerConfig({'socket':'/private/engine.sock','image':'example@sha256:'+'1'*64,'network':'aw-test','job_root':str(jobs)},root)
+            engine=Create(); assignments=DockerAssignments(root+'/db',engine,config.image)
+            assignments.db.execute('CREATE TABLE docker_execution_map(task_run TEXT,role TEXT,assignment TEXT PRIMARY KEY)')
+            assignments.db.execute('CREATE TABLE openfilm_render_jobs(assignment TEXT PRIMARY KEY,task_run TEXT,attempt_id TEXT,policy_hash TEXT,state TEXT)')
+            assignments.db.execute('INSERT INTO docker_execution_map VALUES(?,?,?)',('task','openfilm_render','job'))
+            assignments.db.execute('INSERT INTO openfilm_render_jobs VALUES(?,?,?,?,?)',('job','task','attempt','policy','launching'))
+            mounts=config.create_job_dirs('job'); ledger=ActionLedger(root+'/db')
+            ledger.approve('controller','docker_config',config.policy_hash,'operator')
+            params={'task':'task','attempt_id':'attempt','policy_hash':'policy'}
+            with self.assertRaises(DockerError): assignments.create_disposable('job',config,mounts,openfilm=params)
+            self.assertFalse(engine.calls)
+            ledger.approve('controller','openfilm_policy','policy','operator')
+            with self.assertRaises(DockerError): assignments.create_disposable('job',config,mounts,openfilm={**params,'attempt_id':'other'})
+            self.assertFalse(engine.calls)
+            assignments.create_disposable('job',config,mounts,openfilm=params)
+            spec=engine.calls[0][2]
+            self.assertEqual(spec['Entrypoint'],['node','/app/runner/openfilm_render.mjs'])
+            self.assertEqual(spec['HostConfig']['NetworkMode'],'none')
+            self.assertTrue(spec['HostConfig']['ReadonlyRootfs'])
+            self.assertEqual({m['Target'] for m in spec['HostConfig']['Mounts']},{'/workspace','/output'})
+            self.assertFalse(any('TOKEN' in value or 'KEY=' in value for value in spec['Env']))
+            ledger.db.close(); assignments.close()
+
     def test_disposable_session_mount_requires_registered_exact_assignment(self):
         import tempfile
         from pathlib import Path

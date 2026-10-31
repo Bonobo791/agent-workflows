@@ -11,6 +11,15 @@ class JobQueue:
         self.db.execute('''CREATE TABLE IF NOT EXISTS jobs(
             run TEXT PRIMARY KEY, status TEXT NOT NULL, worker TEXT, token TEXT, expires REAL,
             seq INTEGER NOT NULL)''')
+        self.db.executescript('''
+        CREATE TABLE IF NOT EXISTS job_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS job_audit_insert AFTER INSERT ON jobs BEGIN
+            INSERT INTO job_audit(schema_version,run,status,created) VALUES(1,NEW.run,NEW.status,(julianday('now')-2440587.5)*86400.0);
+        END;
+        CREATE TRIGGER IF NOT EXISTS job_audit_update AFTER UPDATE OF status ON jobs WHEN NEW.status != OLD.status BEGIN
+            INSERT INTO job_audit(schema_version,run,status,created) VALUES(1,NEW.run,NEW.status,(julianday('now')-2440587.5)*86400.0);
+        END;
+        ''')
     def close(self): self.db.close()
     def enqueue(self,run):
         if not isinstance(run,str) or not run: raise ValueError('run required')

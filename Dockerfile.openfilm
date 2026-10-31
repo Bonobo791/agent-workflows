@@ -1,0 +1,13 @@
+# Supply an independently prepared base image by immutable digest. It must already
+# contain OpenFilm 0.2.6, its Playwright browser, Node and ffmpeg; this does not install them.
+ARG OPENFILM_BASE_IMAGE
+FROM ${OPENFILM_BASE_IMAGE}
+WORKDIR /app
+COPY runner/openfilm_render.mjs /app/runner/openfilm_render.mjs
+RUN node -e "const v=process.versions.node.split('.').map(Number); if(v[0]<22||(v[0]===22&&v[1]<18)||require('openfilm/package.json').version!=='0.2.6') process.exit(1)" \
+    && ffmpeg -version >/dev/null && ffprobe -version >/dev/null \
+    && test -d /opt/openfilm-browsers
+USER 10001:10001
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/openfilm-browsers
+RUN node -e "const fs=require('node:fs'),p=require('node:path'); const root=p.dirname(require.resolve('playwright-core/package.json',{paths:[p.dirname(require.resolve('openfilm/package.json'))]})); const b=require(p.join(root,'browsers.json')).browsers.find(x=>x.name==='chromium-headless-shell'); if(!b||!/^\\d+$/.test(b.revision)) process.exit(1); fs.accessSync(p.join(process.env.PLAYWRIGHT_BROWSERS_PATH,'chromium_headless_shell-'+b.revision,'chrome-headless-shell-linux64','chrome-headless-shell'),fs.constants.X_OK)"
+ENTRYPOINT ["node", "/app/runner/openfilm_render.mjs"]

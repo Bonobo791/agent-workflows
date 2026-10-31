@@ -10,7 +10,7 @@ class RateLimited(ProtocolError):
     pass
 
 class AppServer:
-    def __init__(self, transport, on_event=None, on_thread=None, on_turn=None, before_turn=None):
+    def __init__(self, transport, on_event=None, on_thread=None, on_turn=None, before_turn=None, before_thread=None):
         self.transport = transport
         self.next_id = 0
         self.on_event = on_event or (lambda _event: None)
@@ -18,6 +18,7 @@ class AppServer:
         self.pending = []
         self.on_turn = on_turn or (lambda _turn: None)
         self.before_turn = before_turn or (lambda: None)
+        self.before_thread = before_thread
 
     def _request(self, method, params):
         self.next_id += 1
@@ -44,9 +45,13 @@ class AppServer:
         self.transport.send({'method':'initialized'})
     def discover_model(self,policy):
         self.initialize()
+        if self.before_thread is not None and self.before_thread(self._request) is not True: raise ProtocolError('thread configuration unverified')
         return policy.discover(self._request)
-    def run(self, prompt, model, thread_id=None, effort=None):
+    def run(self, prompt, model, thread_id=None, effort=None, images=None):
+        from pathlib import Path
+        if images is not None and (not isinstance(images,list) or len(images)>20 or any(not isinstance(path,str) or not Path(path).is_absolute() or any(ord(c)<32 for c in path) for path in images)): raise ProtocolError('invalid local images')
         self.initialize()
+        if self.before_thread is not None and self.before_thread(self._request) is not True: raise ProtocolError('thread configuration unverified')
         if thread_id:
             thread = self._request('thread/resume', {'threadId':thread_id})
         else:
@@ -57,6 +62,7 @@ class AppServer:
         self.on_thread(tid)
         self.before_turn()
         params={'threadId':tid, 'input':[{'type':'text','text':prompt}]}
+        params['input'].extend({'type':'localImage','path':path,'detail':'original'} for path in (images or []))
         if effort is not None: params.update({'model':model,'effort':effort})
         turn = self._request('turn/start', params)
         try: turn_id = turn['turn']['id']

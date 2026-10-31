@@ -1,6 +1,8 @@
+import sqlite3
 import tempfile
 import unittest
-from runner.graph import GraphStore, GraphError, marketing_definition, engineering_definition
+from runner.graph import GraphStore, GraphError, marketing_definition, engineering_definition, _legacy_marketing_definition
+from runner.queue import JobQueue
 
 class GraphTests(unittest.TestCase):
     def setUp(self):
@@ -54,16 +56,104 @@ class GraphTests(unittest.TestCase):
         with self.assertRaisesRegex(GraphError,'PR reconciliation unavailable'): self.db.finish('e','ready',self.db.prepare('e','ready',self.tokens['e']),'passed','v',self.tokens['e'],pr_reconcile=ready)
         self.assertIsNone(self.db.get('e','ready'))
         self.assertEqual(db.execute("SELECT status FROM external_actions WHERE action='ready-action'").fetchone(),('uncertain',))
+    def test_stage_audit_is_durable_and_failure_rolls_back_transition(self):
+        self.put('m','intake')
+        self.put('e','intake')
+        reopened=GraphStore(self.tmp.name+'/db')
+        try:
+            rows=reopened.db.execute('SELECT schema_version,run,stage,status,version FROM graph_audit ORDER BY id').fetchall()
+            self.assertEqual(rows,[(1,'m','intake','passed','v1'),(1,'e','intake','passed','v1')])
+        finally: reopened.close()
+        self.db.db.execute("CREATE TRIGGER reject_audit BEFORE INSERT ON graph_audit BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+        with self.assertRaises(sqlite3.IntegrityError): self.put('m','intake',version='v2')
+        self.assertEqual(self.db.get('m','intake')['version'],'v1')
+    def test_stage_history_records_invalidated_derivatives(self):
+        self.put('e','intake'); self.put('e','plan'); self.put('e','intake',version='v2')
+        history=self.db.db.execute('SELECT stage,status,version FROM graph_audit WHERE run=? ORDER BY id',('e',)).fetchall()
+        self.assertEqual(history,[('intake','passed','v1'),('plan','passed','v1'),('plan','invalidated','v1'),('intake','passed','v2')])
+    def test_rate_limit_resume_is_recorded(self):
+        self.put('e','intake','rate_limited')
+        self.db.resume_rate_limited('e','intake',self.tokens['e'])
+        rows=self.db.db.execute('SELECT status FROM graph_audit WHERE run=? ORDER BY id',('e',)).fetchall()
+        self.assertEqual(rows,[('rate_limited',),('resumed',)])
+    def test_claim_audit_failure_keeps_claim_active(self):
+        rows=self.db.db.execute('SELECT task_id,status FROM claim_audit WHERE run=?',('e',)).fetchall()
+        self.assertEqual(rows,[('e','claimed')])
+        self.db.db.execute("CREATE TRIGGER reject_claim_audit BEFORE INSERT ON claim_audit BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+        with self.assertRaises(sqlite3.IntegrityError): self.db.release('e',self.tokens['e'])
+        self.db.prepare('e','intake',self.tokens['e'])
+    def test_rejected_duplicate_claim_is_audited_without_replacing_owner(self):
+        self.db.create('duplicate','marketing','e')
+        with self.assertRaisesRegex(GraphError,'already claimed'): self.db.claim('duplicate',60)
+        self.assertEqual(self.db.db.execute("SELECT run,task_id,status FROM claim_audit WHERE run='duplicate'").fetchall(),[('duplicate','e','rejected')])
+        self.db.prepare('e','intake',self.tokens['e'])
+        self.db.db.execute("CREATE TRIGGER reject_duplicate_audit BEFORE INSERT ON claim_audit WHEN NEW.status='rejected' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+        with self.assertRaises(sqlite3.IntegrityError): self.db.claim('duplicate',60)
+        self.db.prepare('e','intake',self.tokens['e'])
+    def test_attempt_history_tracks_retries_and_rolls_back_on_audit_failure(self):
+        self.db.begin_attempt('e','intake','v1',self.tokens['e'],2)
+        self.db.resolve_attempt('e','intake','v1',self.tokens['e'],'failed')
+        self.db.begin_attempt('e','intake','v1',self.tokens['e'],2)
+        rows=self.db.db.execute('SELECT count,status FROM attempt_audit ORDER BY id').fetchall()
+        self.assertEqual(rows,[(1,'uncertain'),(1,'failed'),(2,'uncertain')])
+        self.db.db.execute("CREATE TRIGGER reject_attempt_audit BEFORE INSERT ON attempt_audit BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+        with self.assertRaises(sqlite3.IntegrityError): self.db.resolve_attempt('e','intake','v1',self.tokens['e'],'completed')
+        self.assertEqual(self.db.db.execute('SELECT status FROM graph_attempts').fetchone(),('uncertain',))
     def test_parallel_fanout_assembly_and_scoped_invalidation(self):
         for stage in ('intake','brief','canonical_draft','canonical_review','freeze'): self.put('m',stage)
-        for channel in ('linkedin','x','facebook','instagram','reddit'):
+        for channel in ('linkedin','x','facebook','reddit'):
             self.put('m',channel+'_draft'); self.put('m',channel+'_review')
+        self.put('m','instagram_draft')
+        with self.assertRaises(GraphError): self.db.prepare('m','instagram_review',self.tokens['m'])
         self.put('m','asset_brief'); self.put('m','asset_production','blocked')
+        self.put('m','instagram_review','blocked')
         self.put('m','assembly','awaiting_review')
+        self.db.db.execute("CREATE TRIGGER reject_auto_invalidation BEFORE INSERT ON invalidation_audit BEGIN SELECT RAISE(ABORT,'synthetic failure'); END")
+        with self.assertRaises(sqlite3.IntegrityError): self.put('m','linkedin_draft',version='v2')
+        self.assertEqual(self.db.get('m','linkedin_draft')['version'],'v1')
+        self.assertEqual(self.db.get('m','linkedin_review')['status'],'passed')
+        self.assertEqual(self.db.get('m','assembly')['status'],'awaiting_review')
+        self.db.db.execute('DROP TRIGGER reject_auto_invalidation')
         self.put('m','linkedin_draft',version='v2')
+        self.assertEqual(self.db.db.execute("SELECT stage,reason FROM invalidation_audit ORDER BY stage").fetchall(),[('assembly','upstream_changed'),('linkedin_review','upstream_changed')])
         self.assertIsNone(self.db.get('m','linkedin_review'))
         self.assertIsNone(self.db.get('m','assembly'))
         self.assertEqual(self.db.get('m','x_review')['status'],'passed')
+        self.put('m','asset_production','passed','asset-v2')
+        self.assertIsNone(self.db.get('m','instagram_review'))
+        self.assertEqual(self.db.get('m','x_review')['status'],'passed')
+    def test_legacy_marketing_migration_preserves_unaffected_work(self):
+        graph=self.db; token=self.tokens['m']
+        graph.definitions['marketing']=_legacy_marketing_definition()
+        graph.db.execute('UPDATE graph_runs SET definition_hash=? WHERE id=?',(_legacy_marketing_definition().fingerprint(),'m'))
+        for stage in ('intake','brief','canonical_draft','canonical_review','freeze','instagram_draft','instagram_review','linkedin_draft','linkedin_review','x_draft','x_review','facebook_draft','facebook_review','reddit_draft','reddit_review','asset_brief'):
+            self.put('m',stage)
+        self.put('m','asset_production','blocked'); self.put('m','assembly','awaiting_review')
+        graph.definitions['marketing']=marketing_definition()
+        queue=JobQueue(self.tmp.name+'/db')
+        try:
+            queue.enqueue('m'); claim=queue.claim('worker',60)['token']
+            self.assertTrue(graph.migrate_marketing_assets('m',token,claim))
+            self.assertEqual(graph.db.execute("SELECT stage,reason FROM invalidation_audit ORDER BY stage").fetchall(),[('assembly','graph_migration'),('instagram_review','graph_migration')])
+            self.assertIsNone(graph.get('m','instagram_review'))
+            self.assertIsNone(graph.get('m','assembly'))
+            self.assertEqual(graph.get('m','linkedin_review')['status'],'passed')
+            snapshot=graph.prepare('m','instagram_review',token)
+            self.assertEqual(snapshot['dependencies']['asset_production'],graph.get('m','asset_production')['revision'])
+            with self.assertRaises(GraphError): graph.finish('m','instagram_review',snapshot,'passed','v1',token)
+            self.assertFalse(graph.migrate_marketing_assets('m',token,claim))
+            self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM graph_migrations').fetchone(),(1,))
+        finally: queue.close()
+    def test_legacy_marketing_migration_rejects_uncertain_attempt(self):
+        graph=self.db; token=self.tokens['m']; graph.definitions['marketing']=_legacy_marketing_definition()
+        graph.db.execute('UPDATE graph_runs SET definition_hash=? WHERE id=?',(_legacy_marketing_definition().fingerprint(),'m'))
+        graph.begin_attempt('m','intake','input',token,2)
+        graph.definitions['marketing']=marketing_definition(); queue=JobQueue(self.tmp.name+'/db')
+        try:
+            queue.enqueue('m'); claim=queue.claim('worker',60)['token']
+            with self.assertRaises(GraphError): graph.migrate_marketing_assets('m',token,claim)
+            self.assertEqual(graph.db.execute('SELECT definition_hash FROM graph_runs WHERE id=?',('m',)).fetchone(),(_legacy_marketing_definition().fingerprint(),))
+        finally: queue.close()
     def test_stale_result_cannot_finish_after_input_changed(self):
         self.put('m','intake'); snapshot=self.db.prepare('m','brief',self.tokens['m']); self.put('m','intake',version='v2')
         with self.assertRaises(GraphError): self.db.finish('m','brief',snapshot,'passed','v1',self.tokens['m'])

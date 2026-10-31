@@ -10,6 +10,30 @@ class FakeTransport:
     def receive(self): return next(self.messages)
 
 class CodexSessionTests(unittest.TestCase):
+    def test_only_final_agent_message_becomes_structured_output(self):
+        class Messages(FakeTransport):
+            def __init__(self):
+                self.messages=iter([{'id':1,'result':{}},{'id':2,'result':{'thread':{'id':'t'}}},{'id':3,'result':{'turn':{'id':'turn'}}},
+                    {'method':'item/agentMessage/delta','params':{'threadId':'t','turnId':'turn','itemId':'comment','delta':'Checking first.'}},
+                    {'method':'item/completed','params':{'threadId':'t','turnId':'turn','item':{'type':'agentMessage','id':'comment','phase':'commentary','text':'Checking first.'}}},
+                    {'method':'item/agentMessage/delta','params':{'threadId':'t','turnId':'turn','itemId':'answer','delta':'{"status":"passed"}'}},
+                    {'method':'item/completed','params':{'threadId':'t','turnId':'turn','item':{'type':'agentMessage','id':'answer','phase':'final_answer','text':'{"status":"passed"}'}}},
+                    {'method':'turn/completed','params':{'threadId':'t','turn':{'id':'turn','status':'completed'}}}])
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/db');graph.register(engineering_definition());graph.create('r','engineering');claim=graph.claim('r',60)
+            try:self.assertEqual(run_codex(Messages(),Provenance(graph),'r','qa',claim,{},'prompt','model')['output'],'{"status":"passed"}')
+            finally:graph.close()
+    def test_legacy_unknown_phase_uses_last_completed_message(self):
+        class Messages(FakeTransport):
+            def __init__(self):
+                self.messages=iter([{'id':1,'result':{}},{'id':2,'result':{'thread':{'id':'t'}}},{'id':3,'result':{'turn':{'id':'turn'}}},
+                    {'method':'item/completed','params':{'threadId':'t','turnId':'turn','item':{'type':'agentMessage','id':'one','text':'earlier'}}},
+                    {'method':'item/completed','params':{'threadId':'t','turnId':'turn','item':{'type':'agentMessage','id':'two','text':'final'}}},
+                    {'method':'turn/completed','params':{'threadId':'t','turn':{'id':'turn','status':'completed'}}}])
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/db');graph.register(engineering_definition());graph.create('r','engineering');claim=graph.claim('r',60)
+            try:self.assertEqual(run_codex(Messages(),Provenance(graph),'r','qa',claim,{},'prompt','model')['output'],'final')
+            finally:graph.close()
     def test_only_recorded_writer_with_matching_skills_can_resume(self):
         from runner.graph import marketing_definition
         from runner.protocol import ProtocolError

@@ -72,7 +72,8 @@ class ConfiguredTask:
                     records=service.graph.db.execute("SELECT b.manifest FROM action_bindings b JOIN external_actions a USING(run,action,version) WHERE b.run=? AND b.action LIKE 'push:%' AND b.version=? AND a.status IN ('executed','desired_state_observed')",(run,remote_head)).fetchall()
                     if not any((lambda target:target.get('repo')==current['repository'] and target.get('branch')==branch and target.get('head')==remote_head)(json.loads(row[0])) for row in records): return False
                     from runner.engineering_workspace import EngineeringWorkspace
-                    registry=EngineeringWorkspace(service.docker_supervisor.config.job_root.parent)
+                    root=service.model_supervisor.engineering_root if service.model_supervisor is not None else service.docker_supervisor.config.job_root.parent
+                    registry=EngineeringWorkspace(root)
                     try: registry._git(current['path'],'merge-base','--is-ancestor',remote_head,head)
                     finally: registry.close()
                 elif isinstance(item,dict) and set(item)=={'kind','number'} and item['kind']=='pull_request' and type(item['number']) is int:

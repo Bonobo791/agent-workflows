@@ -34,6 +34,7 @@ Run credential-free local tests with:
 python -m unittest discover -s tests
 ```
 
+The media verification tests require `ffmpeg` and `ffprobe` on `PATH`.
 Signed-token tests additionally require `requirements-auth.txt`. The full
 synthetic suite may require local Unix sockets. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
 for current boundaries and [docs/PILOT_SETUP.md](docs/PILOT_SETUP.md) for the

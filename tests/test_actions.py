@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from runner.actions import ActionLedger, ActionConflict
@@ -12,6 +13,24 @@ class ActionTests(unittest.TestCase):
         with self.assertRaises(ActionConflict): self.ledger.reserve('run', 'push', 'sha-b')
         self.ledger.reserve('run', 'push', 'sha-a')
         with self.assertRaises(ActionConflict): self.ledger.reserve('run', 'push', 'sha-a')
+    def test_action_audit_persists_and_failure_prevents_reservation(self):
+        self.ledger.approve('run','push','sha','human')
+        self.ledger.reserve('run','push','sha')
+        self.ledger.resolve('run','push','sha','not_executed')
+        self.ledger.approve('run','push','sha','human')
+        rows=self.ledger.db.execute('SELECT status FROM action_audit ORDER BY id').fetchall()
+        self.assertEqual(rows,[('approved',),('uncertain',),('not_executed',),('approved',)])
+        self.ledger.db.execute("CREATE TRIGGER reject_action_audit BEFORE INSERT ON action_audit BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+        with self.assertRaises(sqlite3.IntegrityError): self.ledger.reserve('run','push','sha')
+        self.assertEqual(self.ledger.db.execute('SELECT status FROM external_actions').fetchone(),('approved',))
+    def test_action_history_records_updates_from_another_connection(self):
+        self.ledger.approve('run','freeze','sha','human')
+        other=sqlite3.connect(self.tmp.name+'/state.db')
+        try:
+            with other:
+                other.execute("UPDATE external_actions SET status='uncertain',updated=2 WHERE run='run'")
+        finally: other.close()
+        self.assertEqual(self.ledger.db.execute('SELECT status FROM action_audit ORDER BY id').fetchall(),[('approved',),('uncertain',)])
     def test_unresolved_attempt_is_not_retried(self):
         self.ledger.approve('run', 'push', 'sha-a', 'human')
         self.ledger.reserve('run', 'push', 'sha-a')

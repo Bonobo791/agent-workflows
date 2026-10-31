@@ -17,10 +17,17 @@ class CommandSupervisor:
         self.service=service; self.backend=backend; self.spec=spec
         self.policy_hash=None
         if spec is not None:
-            if not isinstance(spec,dict) or set(spec)!={'argv','timeout_seconds','output_limit'} or not isinstance(spec['argv'],list) or not spec['argv'] or len(spec['argv'])>32 or any(not isinstance(arg,str) or not arg or '\x00' in arg or len(arg)>4096 for arg in spec['argv']) or type(spec['timeout_seconds']) is not int or not 1<=spec['timeout_seconds']<=600 or type(spec['output_limit']) is not int or not 1<=spec['output_limit']<=1048576: raise CommandError('invalid exact command policy')
+            if not isinstance(spec,dict) or set(spec)!={'argv','timeout_seconds','output_limit'} or not isinstance(spec['argv'],list) or not spec['argv'] or len(spec['argv'])>32 or any(not isinstance(arg,str) or not arg or '\x00' in arg or len(arg)>4096 for arg in spec['argv']) or type(spec['timeout_seconds']) is not int or not 5<=spec['timeout_seconds']<=600 or type(spec['output_limit']) is not int or not 1<=spec['output_limit']<=1048576: raise CommandError('invalid exact command policy')
             self.spec=json.loads(json.dumps(spec)); self.policy_hash=hashlib.sha256(json.dumps(self.spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()
             if approval!=self.policy_hash: raise CommandError('exact command policy approval required')
         service.graph.db.execute('CREATE TABLE IF NOT EXISTS supervised_commands(id TEXT PRIMARY KEY,run TEXT NOT NULL,commit_id TEXT NOT NULL,workspace_hash TEXT NOT NULL,policy_hash TEXT NOT NULL,state TEXT NOT NULL,record_ref TEXT,started REAL NOT NULL)')
+        service.graph.db.execute('CREATE TABLE IF NOT EXISTS command_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, assignment TEXT NOT NULL, status TEXT NOT NULL, commit_id TEXT NOT NULL, policy_hash TEXT NOT NULL, record_ref TEXT, started REAL NOT NULL, created REAL NOT NULL)')
+        service.graph.db.execute('''CREATE TRIGGER IF NOT EXISTS command_audit_insert AFTER INSERT ON supervised_commands BEGIN
+            INSERT INTO command_audit(schema_version,run,assignment,status,commit_id,policy_hash,record_ref,started,created) VALUES(1,NEW.run,NEW.id,NEW.state,NEW.commit_id,NEW.policy_hash,NEW.record_ref,NEW.started,NEW.started);
+        END''')
+        service.graph.db.execute('''CREATE TRIGGER IF NOT EXISTS command_audit_update AFTER UPDATE OF state ON supervised_commands WHEN NEW.state!=OLD.state BEGIN
+            INSERT INTO command_audit(schema_version,run,assignment,status,commit_id,policy_hash,record_ref,started,created) VALUES(1,NEW.run,NEW.id,NEW.state,NEW.commit_id,NEW.policy_hash,NEW.record_ref,NEW.started,(julianday('now')-2440587.5)*86400.0);
+        END''')
     def ready(self):
         if self.spec is None or not callable(getattr(self.backend,'execute',None)) or not callable(getattr(self.backend,'verify_terminal',None)): return False
         try:

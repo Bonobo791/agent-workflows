@@ -21,6 +21,8 @@ class CommandSupervisorTests(EngineeringWorkspaceTests):
         forged=self.service.artifacts.put(json.dumps({'commands':[{'exit_code':0}]}).encode())
         self.assertFalse(supervisor.verify('run-1',snapshot['head'],forged,snapshot))
         ref=supervisor.execute('run-1',queue,claim,snapshot)
+        history=self.service.graph.db.execute('SELECT status,record_ref FROM command_audit ORDER BY id').fetchall()
+        self.assertEqual(history,[('uncertain',None),('passed',ref)])
         self.assertTrue(supervisor.verify('run-1',snapshot['head'],ref,snapshot))
         record=json.loads(self.service.artifacts.get(ref)); self.assertEqual(record['stdout']['text'],'[redacted]'); self.assertNotIn('secret',json.dumps(record))
         self.assertFalse(supervisor.verify('run-1','0'*40,ref,snapshot))
@@ -39,8 +41,17 @@ class CommandSupervisorTests(EngineeringWorkspaceTests):
         supervisor,queue,claim,snapshot=self.prepared(Backend())
         with self.assertRaises(CommandError): supervisor.execute('run-1',queue,claim,snapshot)
         self.assertEqual(self.service.graph.db.execute('SELECT state FROM supervised_commands').fetchone()[0],'uncertain')
+        self.assertEqual(self.service.graph.db.execute('SELECT status FROM command_audit').fetchall(),[('uncertain',)])
         self.assertIsNotNone(self.registry.db.execute('SELECT assignment FROM engineering_workspaces').fetchone()[0])
         with self.assertRaises(Exception): supervisor.execute('run-1',queue,claim,snapshot)
+    def test_audit_failure_fences_completed_command(self):
+        class Backend:
+            def execute(self,**kw): return {'outcome':'exited','exit_code':0,'stdout':b'', 'stderr':b''}
+        supervisor,queue,claim,snapshot=self.prepared(Backend())
+        self.service.graph.db.execute("CREATE TRIGGER reject_command_audit BEFORE INSERT ON command_audit WHEN NEW.status='passed' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+        with self.assertRaises(CommandError): supervisor.execute('run-1',queue,claim,snapshot)
+        self.assertEqual(self.service.graph.db.execute('SELECT state FROM supervised_commands').fetchone(),('uncertain',))
+        self.assertIsNotNone(self.registry.db.execute('SELECT assignment FROM engineering_workspaces').fetchone()[0])
     def test_late_backend_completion_does_not_release_fenced_workspace(self):
         import threading
         gate=threading.Event(); finished=threading.Event()
@@ -66,3 +77,8 @@ class CommandSupervisorTests(EngineeringWorkspaceTests):
         supervisor,queue,claim,snapshot=self.prepared(Backend())
         with self.assertRaises(CommandError): supervisor.execute('run-1',queue,claim,snapshot)
         self.assertEqual(self.service.graph.db.execute('SELECT state FROM supervised_commands').fetchone()[0],'failed')
+    def test_policy_rejects_timeouts_too_short_for_the_local_relay(self):
+        for timeout in (1,2,4):
+            spec={'argv':['/bin/true'],'timeout_seconds':timeout,'output_limit':1024}
+            policy=hashlib.sha256(json.dumps(spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            with self.assertRaises(CommandError): CommandSupervisor(self.service,spec,policy,object())

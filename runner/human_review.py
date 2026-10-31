@@ -8,6 +8,10 @@ class HumanReview:
     def __init__(self,service):
         self.service=service
         service.graph.db.execute('CREATE TABLE IF NOT EXISTS human_review_decisions(run TEXT NOT NULL,version TEXT NOT NULL,decision TEXT NOT NULL,actor TEXT NOT NULL,created REAL NOT NULL,PRIMARY KEY(run,version))')
+        service.graph.db.execute('CREATE TABLE IF NOT EXISTS human_review_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, actor TEXT NOT NULL, created REAL NOT NULL)')
+        service.graph.db.execute('''CREATE TRIGGER IF NOT EXISTS human_review_audit_insert AFTER INSERT ON human_review_decisions BEGIN
+            INSERT INTO human_review_audit(schema_version,run,version,status,actor,created) VALUES(1,NEW.run,NEW.version,NEW.decision,NEW.actor,NEW.created);
+        END''')
     def decide(self,run,queue_claim,graph_claim,version,decision):
         service=self.service
         if decision not in ('approved','rejected') or not isinstance(version,str): raise HumanReviewError('invalid review decision')

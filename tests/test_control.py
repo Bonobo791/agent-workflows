@@ -4,6 +4,21 @@ from runner.control import ControlPlane, ControlError
 from runner.service import Service
 
 class ControlTests(unittest.TestCase):
+    def test_metrics_are_authenticated_and_failure_does_not_change_workflow(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); control=ControlPlane(service,'synthetic-secret')
+            try:
+                service.create('private-run','engineering','private-task'); service.enqueue('private-run')
+                with self.assertRaises(ControlError): control.handle('wrong',{'action':'metrics'})
+                result=control.handle('synthetic-secret',{'action':'metrics'})['metrics']
+                self.assertIn('workflow_jobs{status="queued"} 1',result)
+                self.assertNotIn('private',result)
+                with patch('runner.metrics.snapshot',side_effect=RuntimeError('private failure')):
+                    with self.assertRaisesRegex(ControlError,'request failed'): control.handle('synthetic-secret',{'action':'metrics'})
+                self.assertEqual(service.queue.get('private-run')['status'],'queued')
+            finally: service.close()
+
     def test_authentication_and_default_no_evidence_injection(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root); control=ControlPlane(service,'synthetic-secret')
@@ -37,6 +52,24 @@ class ControlTests(unittest.TestCase):
             ref=service.artifacts.put(json.dumps({'review':'synthetic'}).encode())
             self.assertEqual(control.handle('synthetic-secret',{'action':'artifact','reference':ref})['artifact']['review'],'synthetic')
             service.close()
+
+    def test_cli_reads_large_authenticated_artifact_over_socket(self):
+        import json, os, threading
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.cli import request_control
+        from runner.control import UnixControlServer
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); secret=Path(root)/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            content='\x7f'*(1048576-20)
+            ref=service.artifacts.put(json.dumps({'review':content},ensure_ascii=False).encode())
+            server=UnixControlServer(Path(root)/'control.sock',ControlPlane(service,'x'*40))
+            thread=threading.Thread(target=server.handle_request); thread.start()
+            try:
+                with patch.dict(os.environ,{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}):
+                    result=request_control({'action':'artifact','reference':ref})
+                self.assertEqual(result['result']['artifact']['review'],content)
+            finally: thread.join(5); server.server_close(); service.close()
 
     def test_cancel_job_fences_graph_writes(self):
         with tempfile.TemporaryDirectory() as root:

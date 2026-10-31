@@ -26,7 +26,7 @@ def renew_leases(path,run,queue_claim,graph_claim,ttl=60):
 
 class AutoWorker:
     def __init__(self,factory,root):
-        self.factory=factory; self.db_path=str(root/'state.db'); self.stop_event=threading.Event(); self.guard=threading.Lock(); self.thread=None; self.state={'status':'idle'}; self.pending_decision=None; self.pending_action=None; self.last_action=None
+        self.factory=factory; self.db_path=str(root/'state.db'); self.stop_event=threading.Event(); self.guard=threading.Lock(); self.thread=None; self.claimed_run=None; self.state={'status':'idle'}; self.pending_decision=None; self.pending_action=None; self.last_action=None
     def status(self):
         with self.guard: return {**self.state,'last_action':self.last_action}
     def _set(self,**value):
@@ -49,7 +49,14 @@ class AutoWorker:
             if self.state.get('run')!=run or self.state.get('status') not in ('blocked','awaiting_approval','awaiting_review','awaiting_merge_review','no_runnable_stage') or self.pending_action is not None: raise AutoWorkerError('automatic task unavailable or busy')
             ticket=secrets.token_hex(16); self.pending_action={'ticket':ticket,'operation':operation,'parameters':dict(parameters)}
         return {'pending':True,'ticket':ticket}
-    def stop(self): self.stop_event.set()
+    def stop(self,service=None):
+        with self.guard:
+            self.stop_event.set()
+            run=self.claimed_run
+            if service is not None and run is not None:
+                row=service.graph.db.execute("SELECT j.status,a.state FROM jobs j JOIN manual_assignments a ON a.run=j.run WHERE j.run=? AND a.target=? AND a.incarnation=?",(run,service.lifecycle.target['manual_target'],service.lifecycle.incarnation)).fetchone()
+                if row and row[0] in ('running','cancelling') and row[1] in ('running','pending'):
+                    service.fence_execution(run)
     def _run(self):
         service=None; queue=None; run=None; heartbeat_stop=threading.Event(); failed=threading.Event(); heartbeat=None
         try:
@@ -59,12 +66,15 @@ class AutoWorker:
             if not existing: intake.submit_configured()
             candidate=service.graph.db.execute("SELECT run FROM jobs WHERE status='queued' ORDER BY seq LIMIT 1").fetchone()
             if candidate!=(run,): raise AutoWorkerError('configured task is not the next queued task')
-            queue=service.lifecycle.claim()
-            if not queue: raise AutoWorkerError('configured task not claimable')
-            if queue['run']!=run:
-                run=queue['run']
-                raise AutoWorkerError('claimed task differs from configuration')
-            claim=service.claim(run)
+            with self.guard:
+                if self.stop_event.is_set(): return
+                queue=service.lifecycle.claim()
+                if not queue: raise AutoWorkerError('configured task not claimable')
+                self.claimed_run=queue['run']
+                if queue['run']!=run:
+                    run=queue['run']
+                    raise AutoWorkerError('claimed task differs from configuration')
+                claim=service.claim(run)
             renew_leases(self.db_path,run,queue['token'],claim)
             def keepalive():
                 while not heartbeat_stop.wait(10):
@@ -88,6 +98,7 @@ class AutoWorker:
                     assembly=service.graph.get(run,'assembly')
                     if assembly and assembly['status']=='awaiting_review': version=assembly['version']
                 self._set(status=state,stage=stage,run=run,version=version,reason=result.get('reason'))
+                if state=='uncertain': raise AutoWorkerError('stage outcome uncertain; inspection required')
                 if state=='awaiting_review' and service.human_review is not None:
                     with self.guard:
                         pending=self.pending_decision; self.pending_decision=None
@@ -96,7 +107,10 @@ class AutoWorker:
                         except Exception: self._set(status=state,stage=stage,run=run,version=version,reason='human decision rejected; review package changed or evidence unavailable')
                     decision=service.human_review.current(run)
                     if decision and decision['decision']=='approved':
-                        service.finish_job(run,queue['token']); self._set(status='completed',run=run); return
+                        with self.guard:
+                            if self.stop_event.is_set(): raise AutoWorkerError('automatic worker stopped; inspection required')
+                            service.finish_job(run,queue['token'])
+                        self._set(status='completed',run=run); return
                     if decision and decision['decision']=='rejected':
                         self._set(status='revision_required',stage=stage,run=run,version=version,reason='human rejected the review package')
                         while not self.stop_event.wait(5) and not failed.is_set(): pass
@@ -107,8 +121,9 @@ class AutoWorker:
             if self.stop_event.is_set(): raise AutoWorkerError('automatic worker stopped; inspection required')
         except Exception:
             if service is not None and queue is not None:
-                try: service.fence_execution(run)
-                except Exception: pass
+                with self.guard:
+                    try: service.fence_execution(run)
+                    except Exception: pass
             self._set(status='inspection_required',run=run,reason='automatic worker stopped or encountered an unresolved outcome')
         finally:
             heartbeat_stop.set()

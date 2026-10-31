@@ -32,6 +32,15 @@ class Lifecycle:
         self.db.execute('''CREATE TABLE IF NOT EXISTS worker_lifecycle(
             run TEXT PRIMARY KEY, policy_hash TEXT NOT NULL, incarnation TEXT NOT NULL,
             status TEXT NOT NULL, manual_requested INTEGER NOT NULL DEFAULT 0, replacement TEXT, target_hash TEXT NOT NULL DEFAULT '')''')
+        self.db.executescript('''
+        CREATE TABLE IF NOT EXISTS lifecycle_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, status TEXT NOT NULL, confirmation TEXT, created REAL NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS lifecycle_audit_insert AFTER INSERT ON worker_lifecycle BEGIN
+            INSERT INTO lifecycle_audit(schema_version,run,status,confirmation,created) VALUES(1,NEW.run,NEW.status,NULL,(julianday('now')-2440587.5)*86400.0);
+        END;
+        CREATE TRIGGER IF NOT EXISTS lifecycle_audit_update AFTER UPDATE OF status ON worker_lifecycle WHEN NEW.status != OLD.status BEGIN
+            INSERT INTO lifecycle_audit(schema_version,run,status,confirmation,created) VALUES(1,NEW.run,NEW.status,CASE WHEN NEW.status='stopped' THEN 'independently-verified' ELSE NULL END,(julianday('now')-2440587.5)*86400.0);
+        END;
+        ''')
         columns=[row[1] for row in self.db.execute('PRAGMA table_info(worker_lifecycle)')]
         if 'target_hash' not in columns: self.db.execute("ALTER TABLE worker_lifecycle ADD COLUMN target_hash TEXT NOT NULL DEFAULT ''")
         self.db.execute("UPDATE worker_lifecycle SET target_hash=? WHERE target_hash='' AND policy_hash=?",(self.target_hash,self.policy_hash))

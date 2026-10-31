@@ -138,6 +138,8 @@ class EngineeringEntrypointTests(unittest.TestCase):
                         if result.get('status')=='awaiting_approval': break
                     self.assertEqual(seen,['intake','plan','implement','test','qa','implement','test','qa','open_draft'])
                     self.assertEqual(result['status'],'awaiting_approval'); self.assertEqual(Engine.canonical_reviews,2); self.assertEqual(len(Engine.resumed),1)
+                    from runner.metrics import snapshot, prometheus_text
+                    self.assertIn('workflow_stages{workflow="engineering",stage="open_draft",status="awaiting_approval"} 1',prometheus_text(snapshot(service.graph.db)))
                     package=json.loads(service.artifacts.get(result['version'])); report=json.loads(service.artifacts.get(package['test_report']))
                     self.assertEqual(report['commands'][0]['exit_code'],0)
                     self.assertEqual(package['test_evidence_kind'],'supervisor_observed'); self.assertTrue(package['trusted_execution_verified']); self.assertEqual(package['role_report_kind'],'role_reported')
@@ -237,12 +239,18 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     self.assertEqual(draft_observed['outcome'],'desired_state_observed')
                     self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(draft['proposal'],)).fetchone(),('desired_state_observed',))
                     self.assertEqual(service.graph.get('run-1','open_draft')['status'],'passed')
+                    self.assertNotIn('stage="open_draft",status="awaiting_approval"',prometheus_text(snapshot(service.graph.db)))
                     service.pr_authority.http.comments=[{'id':1,'body':'Fix this'}]
+                    service.graph.db.execute("CREATE TRIGGER reject_review_audit BEFORE INSERT ON review_audit BEGIN SELECT RAISE(ABORT,'synthetic audit failure'); END")
+                    with self.assertRaises(ControlError): control.handle('x'*40,{**base_req,'action':'pr_review','number':7,'dispositions':{'review:1':{'disposition':'valid','evidence':'fixture'}}})
+                    self.assertEqual(service.graph.db.execute("SELECT COUNT(*) FROM pr_review_blockers WHERE run='run-1'").fetchone()[0],0)
+                    service.graph.db.execute('DROP TRIGGER reject_review_audit')
                     blocked=control.handle('x'*40,{**base_req,'action':'pr_review','number':7,'dispositions':{'review:1':{'disposition':'valid','evidence':'fixture'}}})
                     self.assertEqual(blocked['status'],'blocked_for_correction')
                     service.pr_authority.http.comments=[]
                     still_blocked=control.handle('x'*40,{**base_req,'action':'pr_review','number':7,'dispositions':{}})
                     self.assertEqual(still_blocked['status'],'blocked_for_correction')
+                    self.assertEqual(json.loads(service.artifacts.get(still_blocked['evidence_ref']))['status'],'blocked_for_correction')
                     service.pr_authority.http.comments=[{'id':1,'body':'Fix this'}]
                     requested=control.handle('x'*40,{**base_req,'action':'pr_request_qa','evidence_ref':blocked['evidence_ref']})
                     self.assertEqual(requested['status'],'blocked')
@@ -276,3 +284,14 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     from runner.control import ControlError
                     with self.assertRaises(ControlError): control.handle('x'*40,req)
                 finally: service.lifecycle.close(); service.close(); engine.shutdown(); engine_thread.join(); engine.server_close()
+                import sqlite3
+                from contextlib import closing
+                with closing(sqlite3.connect(root+'/state.db')) as reopened:
+                    history=reopened.execute("SELECT status,evidence_ref FROM review_audit WHERE run='run-1' AND comment_id='review:1' ORDER BY id").fetchall()
+                    self.assertEqual(history,[('open',blocked['evidence_ref']),('resolved',blocked['evidence_ref'])])
+                    for proposal in (draft,ready_proposal):
+                        action_history=reopened.execute("SELECT status FROM action_audit WHERE run='run-1' AND action=? ORDER BY id",(proposal['action'],)).fetchall()
+                        self.assertEqual(action_history,[('approved',),('uncertain',),('desired_state_observed',)])
+                    self.assertTrue(reopened.execute("SELECT 1 FROM action_audit WHERE run='run-1' AND status='approved'").fetchone())
+                    self.assertTrue(reopened.execute("SELECT 1 FROM execution_turn_audit WHERE run='run-1' AND role='qa'").fetchone())
+                    self.assertTrue(reopened.execute("SELECT 1 FROM command_audit WHERE run='run-1' AND status='passed' AND record_ref IS NOT NULL").fetchone())

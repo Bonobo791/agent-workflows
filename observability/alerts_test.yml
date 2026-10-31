@@ -1,0 +1,94 @@
+rule_files:
+  - alerts.yml
+evaluation_interval: 1m
+tests:
+  - name: execution and approval alerts respect their wait periods
+    interval: 1m
+    input_series:
+      - series: 'workflow_jobs{status="uncertain"}'
+        values: '1+0x70'
+      - series: 'workflow_expired_leases'
+        values: '1+0x70'
+      - series: 'workflow_quota_pauses'
+        values: '1+0x70'
+      - series: 'workflow_stages{status="awaiting_approval"}'
+        values: '1+0x70'
+      - series: 'workflow_snapshot_timestamp_seconds'
+        values: '0+60x70'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: WorkflowUncertainExecution
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: WorkflowUncertainExecution
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow execution requires inspection
+              description: Inspect private worker state and verify termination before retrying.
+      - eval_time: 5m
+        alertname: WorkflowExpiredLease
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow lease has expired
+              description: Inspect the worker and reconcile its state before resuming work.
+      - eval_time: 15m
+        alertname: WorkflowQuotaPaused
+        exp_alerts:
+          - exp_labels: {severity: info}
+            exp_annotations:
+              summary: A workflow is paused for quota
+              description: Check the private quota record and resume only when the provider permits it.
+      - eval_time: 60m
+        alertname: WorkflowAwaitingApproval
+        exp_alerts:
+          - exp_labels: {severity: info}
+            exp_annotations:
+              summary: Workflow approval is waiting
+              description: Review the exact pending action in the private control plane.
+  - name: stale and missing metrics are distinct
+    interval: 1m
+    input_series:
+      - series: 'workflow_snapshot_timestamp_seconds'
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WorkflowMetricsStale
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: WorkflowMetricsStale
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow metrics snapshot is stale
+              description: Inspect the private collector and its last successful snapshot.
+      - eval_time: 11m
+        alertname: WorkflowMetricsMissing
+        exp_alerts: []
+  - name: missing metrics alert
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WorkflowMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow metrics are unavailable
+              description: Check collector and scrape configuration; absence is not zero activity.
+  - name: resolved execution clears its alert
+    interval: 1m
+    input_series:
+      - series: 'workflow_jobs{status="uncertain"}'
+        values: '1 1 1 1 1 1 0 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WorkflowUncertainExecution
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow execution requires inspection
+              description: Inspect private worker state and verify termination before retrying.
+      - eval_time: 6m
+        alertname: WorkflowUncertainExecution
+        exp_alerts: []

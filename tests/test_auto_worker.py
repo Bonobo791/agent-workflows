@@ -8,6 +8,104 @@ from runner.manual_lifecycle import ManualLifecycle
 from runner.service import Service
 
 class AutoWorkerTests(unittest.TestCase):
+    def test_stop_does_not_cancel_completion_already_in_progress(self):
+        import threading
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); entered=threading.Event(); release=threading.Event()
+            def factory():
+                service=Service(root); service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self): service.create('r','marketing','task'); service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args): return {'status':'awaiting_review'}
+                class Human:
+                    def current(self,run): return {'decision':'approved'}
+                def finish(run,token):
+                    entered.set(); release.wait(5); service.queue.finish(run,token,verify_completed=lambda _:True)
+                service.task_intake=Intake(); service.stage_dispatcher=Dispatcher(); service.human_review=Human(); service.finish_job=finish
+                return service,None
+            controller=Service(root); controller.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start(); self.assertTrue(entered.wait(5))
+                timer=threading.Timer(.1,release.set); timer.start()
+                worker.stop(controller); timer.join(); worker.thread.join(timeout=5)
+                self.assertEqual(controller.graph.db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('completed',))
+                self.assertEqual(worker.status()['status'],'completed')
+            finally:
+                release.set()
+                if worker.thread: worker.thread.join(timeout=5)
+                controller.lifecycle.close(); controller.close()
+
+    def test_stop_before_claim_prevents_late_assignment(self):
+        import threading
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); entered=threading.Event(); release=threading.Event()
+            def factory():
+                service=Service(root); service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):
+                        service.create('r','engineering','task'); service.enqueue('r'); entered.set(); release.wait(5)
+                service.task_intake=Intake(); return service,None
+            controller=Service(root); controller.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start(); self.assertTrue(entered.wait(5)); worker.stop(controller); release.set(); worker.thread.join(timeout=5)
+                self.assertFalse(worker.thread.is_alive())
+                self.assertEqual(controller.graph.db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('queued',))
+                self.assertIsNone(controller.graph.db.execute("SELECT 1 FROM manual_assignments WHERE run='r'").fetchone())
+            finally:
+                release.set()
+                if worker.thread: worker.thread.join(timeout=5)
+                controller.lifecycle.close(); controller.close()
+
+    def test_stop_fences_assignment_while_dispatch_is_still_running(self):
+        import threading
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); entered=threading.Event(); release=threading.Event(); claims=[]
+            def factory():
+                service=Service(root); service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self): service.create('r','engineering','task'); service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args): claims.extend(args[1:]); entered.set(); release.wait(5); return {'status':'blocked'}
+                service.task_intake=Intake(); service.stage_dispatcher=Dispatcher(); return service,None
+            controller=Service(root); controller.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start(); self.assertTrue(entered.wait(5))
+                worker.stop(controller)
+                self.assertTrue(worker.thread.is_alive())
+                self.assertEqual(controller.graph.db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
+                self.assertEqual(controller.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('cancelled',))
+                self.assertEqual(controller.lifecycle.status('r')['status'],'pending')
+                self.assertFalse(controller.queue.may_start('r',claims[0]))
+                from runner.graph import GraphError
+                with self.assertRaises(GraphError): controller.graph._lease('r',claims[1])
+            finally:
+                release.set()
+                if worker.thread: worker.thread.join(timeout=5)
+                controller.lifecycle.close(); controller.close()
+
+    def test_uncertain_dispatch_stops_loop_and_fences_job(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);calls=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):calls.append(1);return {'stage':'asset_production','status':'uncertain'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            worker=AutoWorker(factory,root);worker.start();worker.thread.join(timeout=5)
+            self.assertFalse(worker.thread.is_alive());self.assertEqual(worker.status()['status'],'inspection_required');self.assertEqual(len(calls),1)
+            db=sqlite3.connect(root/'state.db')
+            try:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
+            finally:db.close()
     def test_atomic_renewal_requires_both_claims_and_active_manual_fence(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root); lifecycle=ManualLifecycle(root+'/state.db','worker','inc')

@@ -22,6 +22,7 @@ class EngineeringWorkspace:
         self.db=sqlite3.connect(str(self.root/'state.db'),timeout=10,isolation_level=None)
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_workspaces(run TEXT PRIMARY KEY,repository TEXT NOT NULL,base TEXT NOT NULL,branch TEXT NOT NULL,owner INTEGER NOT NULL,path TEXT NOT NULL,policy TEXT NOT NULL,assignment TEXT)')
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_workspace_approvals(run TEXT PRIMARY KEY,binding_hash TEXT NOT NULL,actor TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS engineering_local_scopes(run TEXT NOT NULL,assignment TEXT PRIMARY KEY,unit TEXT NOT NULL UNIQUE)')
     def close(self): self.db.close()
     def _git(self,path,*args):
         try:
@@ -74,6 +75,21 @@ class EngineeringWorkspace:
         try:
             row=self.db.execute("SELECT 1 FROM docker_assignments a JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE a.run=? AND a.state='terminated'",(assignment,)).fetchone()
             if not row: raise WorkspaceError('terminal container evidence required')
+            if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')
+            self.db.execute('COMMIT')
+        except Exception: self.db.execute('ROLLBACK'); raise
+    def bind_local_scope(self,run,assignment,unit):
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            row=self.db.execute("SELECT 1 FROM engineering_workspaces w JOIN local_scopes s ON s.run=w.run WHERE w.run=? AND w.assignment=? AND s.unit=? AND s.state='running'",(run,assignment,unit)).fetchone()
+            if not row: raise WorkspaceError('active local scope binding required')
+            self.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit)); self.db.execute('COMMIT')
+        except Exception: self.db.execute('ROLLBACK'); raise
+    def release_local(self,run,assignment,unit):
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            row=self.db.execute("SELECT 1 FROM engineering_local_scopes m JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE m.run=? AND m.assignment=? AND m.unit=? AND s.state='terminated'",(run,assignment,unit)).fetchone()
+            if not row: raise WorkspaceError('terminal local scope evidence required')
             if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise

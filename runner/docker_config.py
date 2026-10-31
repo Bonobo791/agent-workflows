@@ -18,8 +18,10 @@ class DockerConfig:
         if getattr(self,'_frozen',False): raise AttributeError('Docker configuration is immutable')
         object.__setattr__(self,name,value)
     def __init__(self,config,state_root):
-        if not isinstance(config,dict) or set(config)!=self.FIELDS or any(not isinstance(x,str) or not x for x in config.values()): raise ConfigError('exact Docker configuration required')
-        if not re.fullmatch(r'[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}',config['image']): raise ConfigError('pinned image required')
+        if not isinstance(config,dict) or set(config) not in (self.FIELDS,self.FIELDS|{'engine'}) or any(not isinstance(x,str) or not x for x in config.values()): raise ConfigError('exact Docker configuration required')
+        if 'engine' in config and (config['engine']!='podman-rootless' or config['network']!='none'): raise ConfigError('unsupported engine policy')
+        if not re.fullmatch(r'(?:[A-Za-z0-9._/:@-]+@)?sha256:[0-9a-f]{64}',config['image']): raise ConfigError('pinned image required')
+        if config.get('engine')=='podman-rootless' and not re.fullmatch(r'sha256:[0-9a-f]{64}',config['image']): raise ConfigError('rootless Podman requires a local image ID')
         if config['network']!='none' and not re.fullmatch(r'aw-[a-z0-9][a-z0-9-]{0,59}',config['network']): raise ConfigError('restricted network required')
         socket=config['socket']; root=Path(state_root); job=Path(config['job_root'])
         if not socket.startswith('/') or os.path.normpath(socket)!=socket or ':' in socket or '\x00' in socket: raise ConfigError('canonical Engine socket required')
@@ -31,7 +33,7 @@ class DockerConfig:
                 if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode & 0o077: raise ConfigError('private owned job root required')
             if Path(socket).is_relative_to(job): raise ConfigError('Engine socket cannot be in job root')
         except OSError: raise ConfigError('job root unavailable') from None
-        self.job_root=job; self.socket=socket; self.image=config['image']; self.network=config['network']
+        self.job_root=job; self.socket=socket; self.image=config['image']; self.network=config['network']; self.engine=config.get('engine','docker')
         canonical=json.dumps(config,sort_keys=True,separators=(',',':')).encode()
         self.policy_hash=hashlib.sha256(canonical).hexdigest()
         self._frozen=True
