@@ -8,7 +8,7 @@ from runner.auto_worker import AutoWorker, AutoWorkerError, renew_leases
 from runner.manual_lifecycle import ManualLifecycle
 from runner.service import Service
 
-def checkpoint_fixture(root):
+def checkpoint_fixture(root,status='blocked'):
     from types import SimpleNamespace
     from runner.local_scope import LocalScopes
     from tests.test_local_scope import Backend
@@ -20,7 +20,7 @@ def checkpoint_fixture(root):
         config={'run':'r'}
         def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
     class Dispatcher:
-        def step(self,*args):return {'status':'blocked'}
+        def step(self,*args):return {'status':status}
     service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
 
 
@@ -182,26 +182,12 @@ class AutoWorkerTests(unittest.TestCase):
 
     def test_stop_during_checkpoint_does_not_fence_requeued_run(self):
         import threading
-        from types import SimpleNamespace
         from unittest.mock import patch
         from runner.checkpoint import checkpoint
-        from runner.local_scope import LocalScopes
-        from tests.test_local_scope import Backend
         with tempfile.TemporaryDirectory() as root:
             root=Path(root);entered=threading.Event();release=threading.Event()
-            def factory():
-                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
-                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
-                service.graph.db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
-                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
-                class Intake:
-                    config={'run':'r'}
-                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
-                class Dispatcher:
-                    def step(self,*args):return {'status':'awaiting_approval'}
-                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
             controller=Service(root);controller.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
-            worker=AutoWorker(factory,root)
+            worker=AutoWorker(lambda:checkpoint_fixture(root,'awaiting_approval'),root)
             def delayed(*args):entered.set();release.wait(5);return checkpoint(*args)
             try:
                 with patch('runner.checkpoint.checkpoint',side_effect=delayed):
