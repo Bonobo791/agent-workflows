@@ -103,14 +103,14 @@ class Service:
             return self.lifecycle.status(run)
         result=self.lifecycle.manual_stop(run)
         if isinstance(self.lifecycle,ManualLifecycle) and self.docker_supervisor is not None:
-            rows=self.graph.db.execute("SELECT m.assignment,a.container_id,COALESCE(a.state,'unresolved') FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated') ORDER BY m.assignment",(run,)).fetchall()
+            rows=self.graph.db.execute("SELECT m.assignment,a.container_id,COALESCE(a.state,'unresolved') FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated') ORDER BY m.assignment",(run,)).fetchall()
             result['docker_assignments']=[{'assignment':row[0],'container_id':row[1],'state':row[2]} for row in rows]
         if isinstance(self.lifecycle,ManualLifecycle):
             tables={row[0] for row in self.graph.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('local_scopes','engineering_workspaces','engineering_local_scopes')")}
             if 'local_scopes' in tables:
                 columns={row[1] for row in self.graph.db.execute('PRAGMA table_info(local_scopes)')}
                 if {'run','unit','state'}<=columns:
-                    rows=self.graph.db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state!='terminated' ORDER BY unit",(run,)).fetchall()
+                    rows=self.graph.db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state IS NOT 'terminated' ORDER BY unit",(run,)).fetchall()
                     result['local_scopes']=[{'unit':row[0],'state':row[1]} for row in rows]
                 else: result['local_scopes_unavailable']=True
             if {'engineering_workspaces','engineering_local_scopes'}<=tables:

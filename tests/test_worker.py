@@ -323,6 +323,21 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(service.queue.get('run')['status'],'cancelling')
             finally:service.lifecycle.close();service.close()
 
+    def test_null_scope_state_remains_visible_and_blocks_confirmation(self):
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.control import ControlError
+        with tempfile.TemporaryDirectory() as root:
+            service,control=build_control(root,'x'*40,lifecycle_factory=lambda _:ManualLifecycle(root+'/state.db','worker','inc'))
+            try:
+                service.create('run','marketing','task');service.enqueue('run');service.lifecycle.claim()
+                service.graph.db.execute('CREATE TABLE local_scopes(run TEXT,unit TEXT,state TEXT)')
+                service.graph.db.execute("INSERT INTO local_scopes VALUES('run','unknown.scope',NULL)")
+                result=control.handle('x'*40,{'action':'manual_stop','run':'run'})
+                self.assertEqual(result['local_scopes'],[{'unit':'unknown.scope','state':None}])
+                with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
+                self.assertEqual(service.queue.get('run')['status'],'cancelling')
+            finally:service.lifecycle.close();service.close()
+
     def test_fenced_active_local_scope_can_be_stopped_but_unstarted_cannot(self):
         from runner.local_supervisor import LocalSupervisor
         from runner.local_scope import LocalScopes

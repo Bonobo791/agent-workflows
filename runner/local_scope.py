@@ -44,7 +44,9 @@ class LocalScopes:
         self.db=sqlite3.connect(path,timeout=10,isolation_level=None)
         if not self.db.execute('PRAGMA database_list').fetchone()[2]: raise ScopeError('durable database required')
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scopes(run TEXT NOT NULL,unit TEXT PRIMARY KEY,invocation TEXT,cgroup TEXT,state TEXT NOT NULL)')
-        self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS local_scopes_live ON local_scopes(run) WHERE state != 'terminated'")
+        try: self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS local_scopes_live_v2 ON local_scopes(run) WHERE state IS NOT 'terminated'")
+        except sqlite3.IntegrityError:
+            self.db.close(); raise ScopeError('conflicting unresolved scopes') from None
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,unit TEXT NOT NULL,state TEXT NOT NULL,created REAL NOT NULL)')
         self.db.execute("""CREATE TRIGGER IF NOT EXISTS local_scope_audit_insert AFTER INSERT ON local_scopes BEGIN
             INSERT INTO local_scope_audit(schema_version,run,unit,state,created) VALUES(1,NEW.run,NEW.unit,NEW.state,(julianday('now')-2440587.5)*86400.0); END""")

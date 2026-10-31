@@ -49,7 +49,7 @@ class LocalSupervisor:
             dbh=self._db()
             try:
                 row=dbh.execute('SELECT session,binding,state FROM local_sessions WHERE run=? AND role=?',(run,role)).fetchone()
-                live=dbh.execute("SELECT 1 FROM local_scopes WHERE run=? AND state!='terminated'",(run,)).fetchone()
+                live=dbh.execute("SELECT 1 FROM local_scopes WHERE run=? AND state IS NOT 'terminated'",(run,)).fetchone()
                 return row==(session,binding,'idle') and live is None
             finally: dbh.close()
         except Exception: return False

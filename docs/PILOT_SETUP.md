@@ -248,6 +248,9 @@ requires the configured local supervisor and its systemd backend.
 If `manual_stop` returns `local_scopes_unavailable`, the stored scope schema
 cannot provide unit identities; inspect and reconcile that state before any
 stop confirmation.
+An unknown scope state is treated as unresolved. If an older database contains
+multiple unresolved scopes for one run, the stricter scope index fails closed;
+inspect that state before attempting recovery.
 
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
 engineering workspace claim. Operator stop confirmation still requires the exact
