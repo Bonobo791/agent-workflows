@@ -34,12 +34,15 @@ class ControllerImageTests(unittest.TestCase):
             podman('run','--rm','--network=none','--user','0:0','-v',volume+':/data',image,'python','-c',"import os; p='/data/secret'; open(p,'w').write('x'*40); os.chown(p,10001,10001); os.chmod(p,0o600)")
             start()
             self.assertTrue(request({'action':'create','run':'r','workflow':'marketing','task':'t'})['ok'])
+            self.assertTrue(request({'action':'enqueue','run':'r'})['ok'])
+            expected_job={'ok':True,'result':{'job':{'status':'queued','worker':None,'expires':None}}}
+            self.assertEqual(request({'action':'job_status','run':'r'}),expected_job)
             duplicate=subprocess.run(['podman','run','--rm','--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges','--tmpfs','/tmp','-v',volume+':/data','-e','CONTROL_SECRET_FILE=/data/secret','-e','WORKFLOW_DATA_DIR=/data','-e','WORKFLOW_CONTROL_DIR=/tmp/other',image],capture_output=True,text=True,timeout=10)
             self.assertNotEqual(duplicate.returncode,0)
             self.assertIn('state directory already in use',duplicate.stderr)
             podman('stop','--time','5',name); podman('rm',name)
             start()
-            self.assertTrue(request({'action':'status','run':'r','stage':'intake'})['ok'])
+            self.assertEqual(request({'action':'job_status','run':'r'}),expected_job)
         finally:
             subprocess.run(['podman','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             subprocess.run(['podman','volume','rm',volume],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
