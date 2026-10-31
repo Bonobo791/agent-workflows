@@ -22,8 +22,9 @@ class ControllerImageTests(unittest.TestCase):
             podman('run','-d','--name',name,'--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges','--tmpfs','/tmp','-v',volume+':/data','-e','CONTROL_SECRET_FILE=/data/secret','-e','WORKFLOW_DATA_DIR=/data',image)
             deadline=time.monotonic()+10
             while time.monotonic()<deadline:
-                state=podman('inspect','--format','{{.State.Running}}',name).stdout.strip()
-                if state!='true': self.fail('controller exited before socket became available')
+                state=podman('inspect','--format','{{.State.Status}}',name).stdout.strip()
+                if state in ('exited','dead'): self.fail('controller exited before socket became available')
+                if state!='running': time.sleep(.2); continue
                 try:
                     if request({'action':'metrics'})['ok']: return
                 except (subprocess.SubprocessError,ValueError,KeyError): time.sleep(.2)

@@ -11,7 +11,7 @@ import uuid
 
 @unittest.skipUnless(os.environ.get('CONTROLLER_TEST_IMAGE') and os.environ.get('CONTROLLER_TEST_DOCKER_HOST'), 'controller image and Podman Compose socket not configured')
 class ControllerComposeTests(unittest.TestCase):
-    def test_private_secret_and_state_work_at_startup(self):
+    def test_private_secret_and_state_survive_stop_and_start(self):
         root=Path(__file__).resolve().parents[1]
         project='workflow-check-'+uuid.uuid4().hex[:12]
         with tempfile.TemporaryDirectory(prefix='workflow-compose-') as directory:
@@ -40,6 +40,9 @@ class ControllerComposeTests(unittest.TestCase):
                 compose('up','-d','--no-build')
                 container=wait_ready()
                 self.assertTrue(request(container,{'action':'create','run':'r','workflow':'marketing','task':'t'})['ok'])
+                compose('stop','workflow')
+                compose('start','workflow')
+                container=wait_ready()
                 self.assertTrue(request(container,{'action':'status','run':'r','stage':'intake'})['ok'])
             finally:
                 subprocess.run(command+['down','--volumes','--remove-orphans'],env=env,capture_output=True,timeout=30)

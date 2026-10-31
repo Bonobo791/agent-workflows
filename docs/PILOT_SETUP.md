@@ -173,8 +173,9 @@ For rootless Podman on the validated host, use `compose.podman.yaml` alongside
 bind mount. Run `docker-compose -f compose.yaml -f compose.podman.yaml up -d`
 with `CONTROL_SECRET_PATH` set to a private
 owner-only host file and the Podman socket configured for the Compose provider.
-Startup with a synthetic secret was tested; a Compose restart on that host
-left `control.sock` behind and the worker failed to restart. Treat restart as
+Startup and a graceful Compose stop followed by start passed with a synthetic
+secret and persisted run. A Compose restart on that host left `control.sock`
+behind and the worker failed to restart. Treat restart as
 unresolved and do not remove the socket without independently verifying that
 the previous worker and its work are quiescent.
 
