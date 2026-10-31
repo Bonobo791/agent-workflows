@@ -118,9 +118,10 @@ def fixture_control(root, secret, **kwargs):
                 from runner.local_scope import LocalScopes, SystemdScopes, ScopeError
                 scopes=LocalScopes(str(Path(root)/'state.db'),SystemdScopes(os.environ))
                 unit=scopes.reserve('r')
-                subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                launcher=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                 deadline=time.monotonic()+10
                 while True:
+                    if launcher.poll() is not None: raise RuntimeError('scope launcher exited before activation')
                     try:
                         if os.environ.get('WORKFLOW_TEST_UNBOUND')=='1':
                             if scopes.backend.inspect(unit)['active']!='active': raise ScopeError('not active')
@@ -194,6 +195,7 @@ worker.main()
                                 with client.makefile('rb') as stream: return json.loads(stream.readline())
                         result=action({'action':'manual_stop','run':'r'})
                         self.assertTrue(result['ok'],result)
+                        self.assertEqual(len(result['result']['local_scopes']),1,result)
                         unit=result['result']['local_scopes'][0]['unit']
                         if unbound:
                             self.assertEqual(result['result']['local_scopes'][0]['state'],'starting')
