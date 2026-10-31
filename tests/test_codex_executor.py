@@ -33,9 +33,10 @@ class ExecutorTests(unittest.TestCase):
         from runner.local_scope import LocalScopes
         from tests.test_local_scope import Backend
         class ScopedHandle(Handle):
-            def __init__(self,root,db,backend,unit):
-                super().__init__(root,'ok','local-thread','local-turn','asset_production')
+            def __init__(self,root,db,backend,unit,corrupt=False):
+                super().__init__(root,'ok','other-thread' if corrupt else 'local-thread','local-turn','asset_production')
                 self.db,self.backend,self.unit=db,backend,unit
+                self.corrupt=corrupt
                 self.output_path_prefix=root
             def assert_active(self): return True
             def verify_config(self,request): return True
@@ -45,7 +46,10 @@ class ExecutorTests(unittest.TestCase):
             def finish(self):
                 if not super().finish(): return False
                 scopes=LocalScopes(self.db,self.backend)
-                try: return scopes.stop('r',self.unit)
+                try:
+                    stopped=scopes.stop('r',self.unit)
+                    if self.corrupt:scopes.db.execute('UPDATE local_scopes SET invocation=NULL WHERE unit=?',(self.unit,))
+                    return stopped
                 finally: scopes.close()
         with tempfile.TemporaryDirectory() as root:
             output=Path(root)/'out'; output.mkdir(mode=0o700); art=Path(root)/'art'; art.mkdir(mode=0o700)
@@ -54,13 +58,21 @@ class ExecutorTests(unittest.TestCase):
             backend=Backend(); supervisor=LocalSupervisor(root+'/db',str(binary),{'HOME':root},backend,lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
             scopes=LocalScopes(root+'/db',backend); unit=scopes.reserve('r'); backend.unit=unit; scopes.bind('r',unit); scopes.close()
             handle=ScopedHandle(str(output),root+'/db',backend,unit)
-            store=ArtifactStore(str(art));executor=CodexExecutor(supervisor,Provenance(graph),store,lambda run:None)
+            store=ArtifactStore(str(art));fenced=[];executor=CodexExecutor(supervisor,Provenance(graph),store,fenced.append)
             try:
                 with patch.object(supervisor,'preflight',return_value=True), patch('runner.local_supervisor.start_local_process',return_value=handle):
                     result=executor.execute(run='r',role='asset_production',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
                 row=graph.db.execute('SELECT unit,binding FROM local_turn_scopes WHERE run=? AND role=? AND session=? AND turn=?',('r','asset_production',result['session_id'],result['turn_id'])).fetchone()
                 self.assertEqual(row,(unit,supervisor._binding('r','asset_production',{},'m')[1]))
                 self.assertEqual(graph.db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('terminated',))
+                scopes=LocalScopes(root+'/db',backend);unit2=scopes.reserve('r');backend.unit=unit2;backend.state='active';scopes.bind('r',unit2);scopes.close()
+                broken=ScopedHandle(str(output),root+'/db',backend,unit2,corrupt=True)
+                from runner.codex_executor import ExecutorError
+                with patch.object(supervisor,'preflight',return_value=True), patch('runner.local_supervisor.start_local_process',return_value=broken):
+                    with self.assertRaises(ExecutorError):executor.execute(run='r',role='asset_production',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
+                self.assertIsNone(graph.db.execute("SELECT 1 FROM local_turn_scopes WHERE session='other-thread'").fetchone())
+                self.assertEqual(fenced,['r'])
+                self.assertEqual(graph.db.execute('SELECT status FROM execution_launch_audit ORDER BY id DESC LIMIT 1').fetchone(),('uncertain',))
             finally: graph.close()
     def test_images_require_a_subject_bound_local_asset_review(self):
         from runner.codex_executor import ExecutorError

@@ -14,6 +14,10 @@ def valid_scope_identity(unit,invocation,cgroup):
     return (isinstance(unit,str) and bool(unit) and isinstance(invocation,str) and re.fullmatch(r'[0-9a-f]{32}',invocation) is not None
             and isinstance(cgroup,str) and cgroup.startswith('/') and cgroup.endswith('/'+unit) and '..' not in PurePosixPath(cgroup).parts)
 
+def valid_terminated_scope(db,run,unit):
+    row=db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,unit)).fetchone()
+    return bool(row and valid_scope_identity(unit,*row))
+
 def unresolved_scope_rows(db,run):
     rows=db.execute('SELECT unit,invocation,cgroup,state FROM local_scopes WHERE run=? ORDER BY unit',(run,)).fetchall()
     return [(unit,'unverified' if state=='terminated' else state) for unit,invocation,cgroup,state in rows
@@ -51,7 +55,11 @@ class SystemdScopes:
         try:
             values=dict(line.split() for line in target.read_text().splitlines())
             return values.get('populated')=='0'
-        except FileNotFoundError: return True
+        except FileNotFoundError:
+            try: target.parent.stat()
+            except FileNotFoundError: return Path('/sys/fs/cgroup/cgroup.controllers').is_file()
+            except OSError: return False
+            return False
         except (OSError,ValueError): return False
 
 class LocalScopes:

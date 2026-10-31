@@ -67,6 +67,9 @@ class LocalBuilderTests(unittest.TestCase):
                 with patch.object(service.model_supervisor,'preflight',return_value=True),patch('runner.local_supervisor.start_local_process',side_effect=lambda db,run,*args,**kwargs:Handle(run)):
                     built=builder.build(run='run',attempt_id=attempt,brief_ref=brief_ref,brief=brief,canonical='Approved text',graph_claim=claim,queue_claim=job['token'])
                 self.assertTrue(builder.verify('run',attempt,brief_ref,built['project_ref'],built['proof_ref']))
+                service.graph.db.execute("UPDATE local_scopes SET invocation=NULL")
+                self.assertFalse(builder.verify('run',attempt,brief_ref,built['project_ref'],built['proof_ref']))
+                service.graph.db.execute("UPDATE local_scopes SET invocation=?",('a'*32,))
                 with patch.object(service.model_supervisor,'verify_policy',return_value=False):
                     self.assertFalse(builder.verify('run',attempt,brief_ref,built['project_ref'],built['proof_ref']))
                 service.graph.db.execute("UPDATE local_scopes SET state='running'")

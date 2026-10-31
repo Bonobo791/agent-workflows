@@ -112,7 +112,8 @@ class AudioTranscriber:
                 audio=self._read(work/'audio.wav',20*1024*1024);report_data=self._read(work/'transcript.json',1048576)
                 self._report(report_data,audio,self.languages[channel],float(duration))
                 audio_ref=store.put(audio);transcript_ref=store.put(report_data);unit=result['unit'];graph._lease(run,claim)
-                if not graph.db.execute("SELECT 1 FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,unit)).fetchone(): raise AudioTranscriptionError('audio scope not terminated')
+                from runner.local_scope import valid_terminated_scope
+                if not valid_terminated_scope(graph.db,run,unit): raise AudioTranscriptionError('audio scope not terminated')
                 receipt={'run':run,'subject':subject,'asset_ref':asset_ref,'channel':channel,'audio_ref':audio_ref,'transcript_ref':transcript_ref,'unit':unit,'policy_hash':self.policy_hash,'coverage':'machine transcript and signal levels; human listening required'}
                 receipt_ref=store.put(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode())
                 if graph.db.execute("UPDATE local_audio_transcripts SET audio_ref=?,transcript_ref=?,receipt_ref=?,state='complete' WHERE id=? AND run=? AND unit=? AND state='reserved'",(audio_ref,transcript_ref,receipt_ref,operation,run,unit)).rowcount!=1: raise AudioTranscriptionError('audio receipt unavailable')
@@ -127,8 +128,9 @@ class AudioTranscriber:
             if set(receipt)!={'run','subject','asset_ref','channel','audio_ref','transcript_ref','unit','policy_hash','coverage'} or (receipt['run'],receipt['subject'],receipt['asset_ref'],receipt['channel'],receipt['policy_hash'],receipt['coverage'])!=(run,subject,asset_ref,channel,self.policy_hash,'machine transcript and signal levels; human listening required') or not matches or any(not self.supports(item) for item in matches) or not self._approved(graph.db) or not self._current(): return False
             duration=matches[0].get('duration_seconds')
             if type(duration) not in (int,float) or not math.isfinite(duration) or not 0<duration<=600 or any(item.get('duration_seconds')!=duration for item in matches): return False
-            row=graph.db.execute("SELECT 1 FROM local_audio_transcripts a JOIN local_scopes s ON s.run=a.run AND s.unit=a.unit WHERE a.run=? AND a.subject=? AND a.asset_ref=? AND a.channel=? AND a.unit=? AND a.policy_hash=? AND a.audio_ref=? AND a.transcript_ref=? AND a.receipt_ref=? AND a.state='complete' AND s.state='terminated'",(run,subject,asset_ref,channel,receipt['unit'],self.policy_hash,receipt['audio_ref'],receipt['transcript_ref'],receipt_ref)).fetchone()
+            row=graph.db.execute("SELECT s.invocation,s.cgroup FROM local_audio_transcripts a JOIN local_scopes s ON s.run=a.run AND s.unit=a.unit WHERE a.run=? AND a.subject=? AND a.asset_ref=? AND a.channel=? AND a.unit=? AND a.policy_hash=? AND a.audio_ref=? AND a.transcript_ref=? AND a.receipt_ref=? AND a.state='complete' AND s.state='terminated'",(run,subject,asset_ref,channel,receipt['unit'],self.policy_hash,receipt['audio_ref'],receipt['transcript_ref'],receipt_ref)).fetchone()
             store.get(asset_ref);self._report(store.get(receipt['transcript_ref']),store.get(receipt['audio_ref']),self.languages[channel],float(duration))
-            return bool(row)
+            from runner.local_scope import valid_scope_identity
+            return bool(row and valid_scope_identity(receipt['unit'],*row))
         except Exception:return False
         finally:graph.close()

@@ -25,6 +25,9 @@ class VideoSampleTests(unittest.TestCase):
                         return {'outcome':'exited','exit_code':0,'unit':unit,'stderr':stderr}
                     with patch('runner.video_samples.run_scoped_sandbox',side_effect=execute):receipt=sampler.sample('run',claim,subject,video)
                     self.assertTrue(sampler.verify('run',subject,video,receipt))
+                    service.graph.db.execute("UPDATE local_scopes SET cgroup=NULL WHERE unit=(SELECT unit FROM local_video_samples WHERE receipt_ref=?)",(receipt,))
+                    self.assertFalse(sampler.verify('run',subject,video,receipt))
+                    service.graph.db.execute("UPDATE local_scopes SET cgroup='/user.slice/'||unit WHERE unit=(SELECT unit FROM local_video_samples WHERE receipt_ref=?)",(receipt,))
                     self.assertFalse(sampler.verify('other',subject,video,receipt))
                     def missing_frame(*args,**kwargs):
                         result=execute(*args,**kwargs);result['stderr']=b'\n'.join(result['stderr'].splitlines()[:-1]);return result
@@ -38,4 +41,12 @@ class VideoSampleTests(unittest.TestCase):
                     with self.assertRaises(VideoSampleError):sampler.sample('run',claim,bad,video)
                     service.graph.db.execute("UPDATE local_scopes SET state='running' WHERE unit=(SELECT unit FROM local_video_samples WHERE receipt_ref=?)",(receipt,))
                     self.assertFalse(sampler.verify('run',subject,video,receipt))
+                    service.graph.db.execute("UPDATE local_scopes SET state='terminated' WHERE unit=(SELECT unit FROM local_video_samples WHERE receipt_ref=?)",(receipt,))
+                    def broken_scope(*args,**kwargs):
+                        result=execute(*args,**kwargs)
+                        service.graph.db.execute('UPDATE local_scopes SET cgroup=NULL WHERE unit=?',(result['unit'],))
+                        return result
+                    with patch('runner.video_samples.run_scoped_sandbox',side_effect=broken_scope):
+                        with self.assertRaises(VideoSampleError):sampler.sample('run',claim,subject,video)
+                    self.assertGreaterEqual(service.graph.db.execute("SELECT COUNT(*) FROM local_video_samples WHERE state='reserved'").fetchone()[0],1)
             finally:service.close()

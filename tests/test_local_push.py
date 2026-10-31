@@ -29,6 +29,10 @@ class LocalPushCommandTests(unittest.TestCase):
 from tests.test_engineering_workspace import EngineeringWorkspaceTests
 class LocalPushTransportTests(EngineeringWorkspaceTests):
     def test_exact_approval_scopes_snapshot_and_push_before_release(self):
+        self._exercise_push(False)
+    def test_push_with_invalid_terminal_scope_stays_uncertain(self):
+        self._exercise_push(True)
+    def _exercise_push(self,corrupt):
         import hashlib,json,time
         from contextlib import contextmanager
         from unittest.mock import patch
@@ -68,6 +72,7 @@ class LocalPushTransportTests(EngineeringWorkspaceTests):
                 unit=scopes.reserve(run);on_reserved(unit);engine.unit=unit;engine.state='active';scopes.bind(run,unit);on_started(unit)
                 self.assertIn('--force-with-lease=refs/heads/task-1:'+self.base,argv);self.assertNotIn('GH_TOKEN',env)
                 http.head=target['head'];scopes.stop(run,unit)
+                if corrupt:scopes.db.execute('UPDATE local_scopes SET cgroup=NULL WHERE unit=?',(unit,))
                 return {'outcome':'exited','exit_code':0,'stdout':b'','stderr':b'','unit':unit}
             finally:scopes.close()
         try:
@@ -75,8 +80,14 @@ class LocalPushTransportTests(EngineeringWorkspaceTests):
                 with self.assertRaises(Exception):transport.push_exact('task-1',target['head'])
                 loop.approve_push('run-1',self.base,'owner',time.time()+60);action=loop.github.push_action('task-1',self.base)
                 proposal=service.artifacts.put(json.dumps({'action':action,'target':target,'args':{'expected_remote':self.base}}).encode());service.graph.db.execute("INSERT INTO pr_bridge_operations VALUES(?,?,?,'uncertain',NULL)",(proposal,'run-1','push'))
-                loop.push('run-1',self.base)
-                self.assertEqual(ledger.db.execute("SELECT status FROM external_actions WHERE action LIKE 'push:%'").fetchone(),('executed',))
-                self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(None,))
+                if corrupt:
+                    from workflows.engineering.github import GitHubError
+                    with self.assertRaises(GitHubError):loop.push('run-1',self.base)
+                    self.assertEqual(ledger.db.execute("SELECT status FROM external_actions WHERE action LIKE 'push:%'").fetchone(),('uncertain',))
+                    self.assertIsNotNone(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone()[0])
+                else:
+                    loop.push('run-1',self.base)
+                    self.assertEqual(ledger.db.execute("SELECT status FROM external_actions WHERE action LIKE 'push:%'").fetchone(),('executed',))
+                    self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(None,))
                 self.assertEqual(service.graph.db.execute("SELECT kind FROM local_pr_scopes ORDER BY rowid").fetchall(),[('bundle',),('push',)])
         finally:ledger.db.close()
