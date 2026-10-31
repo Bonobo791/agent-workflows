@@ -255,7 +255,7 @@ for line in sys.stdin:
  if m['method']=='initialize': result={}
  elif m['method']=='thread/start': result={'thread':{'id':'thread'}}
  elif m['method']=='mcpServer/tool/call':
-  open(log,'w').write(json.dumps({'params':m['params'],'secret_inherited':'UNRELATED_SECRET' in os.environ}))
+  open(log,'w').write(json.dumps({'params':m['params'],'cwd':os.getcwd(),'secret_inherited':'UNRELATED_SECRET' in os.environ,'codex_home':os.environ.get('CODEX_HOME'),'auth_target':os.readlink(os.path.join(os.environ['CODEX_HOME'],'auth.json')) if os.path.islink(os.path.join(os.environ.get('CODEX_HOME',''),'auth.json')) else None}))
   result={'isError':False,'structuredContent':{'ok':True,'data':{'identifier':'TOOLS-36'}}}
  else: raise SystemExit(1)
  print(json.dumps({'id':m['id'],'result':result}),flush=True)
@@ -264,6 +264,10 @@ for line in sys.stdin:
             self.assertEqual(client.get_issue('TOOLS',36)['data']['identifier'],'TOOLS-36')
             record=json.loads(log.read_text())
             self.assertFalse(record['secret_inherited'])
+            self.assertEqual(record['cwd'],record['codex_home'])
+            self.assertNotEqual(record['codex_home'],str(Path(root)/'.codex'))
+            self.assertEqual(record['auth_target'],str(Path(root)/'.codex'/'auth.json'))
+            self.assertFalse(Path(record['codex_home']).exists())
             self.assertEqual(record['params']['server'],'codex_apps')
             self.assertEqual(record['params']['tool'],'it_s_a_plan_mcp.get_issue_by_number')
             self.assertEqual(record['params']['arguments'],{'projectKey':'TOOLS','sequenceNumber':36})

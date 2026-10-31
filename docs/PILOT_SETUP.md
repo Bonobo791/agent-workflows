@@ -41,7 +41,12 @@ must not contain private skills, credentials, user data or session histories.
   `github_branch`; marketing also requires `task_format`. Set `plan_endpoint`
   to `codex-apps` in local mode to use the existing signed-in Codex app gateway
   for read-only It's a Plan tools. This starts an ephemeral app-server thread
-  without a model turn and uses the pinned local executable. Alternatively, an
+  without a model turn and uses the pinned local executable. Each call uses a
+  private temporary Codex home and working directory linked to the existing
+  `auth.json`; other sign-in storage methods may not work. Normal cleanup removes
+  this directory; a killed caller can leave a private directory for inspection.
+  System-wide Codex configuration and escaped descendants remain unverified.
+  Alternatively, an
   HTTPS MCP endpoint requires an owner-only credential file referenced by
   `PLAN_TOKEN_FILE`. Do not configure both gateway mode and a Plan token.
   To verify this access without admitting a task, run
