@@ -91,6 +91,134 @@ class AutoWorkerTests(unittest.TestCase):
                 release.set();worker.stop()
                 if worker.thread:worker.thread.join(timeout=5)
 
+    def test_slow_rejected_checkpoint_does_not_trip_heartbeat_fence(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.checkpoint import CheckpointError
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);locked=threading.Event();heartbeat=threading.Event();busy=threading.Event();release=threading.Event();calls=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):return {'status':'blocked'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            def slow_check(*args):locked.set();release.wait(9);raise CheckpointError('unresolved')
+            def renewal(*args,**kwargs):
+                calls.append(1)
+                if len(calls)>1:
+                    locked.wait(3);heartbeat.set()
+                try:return renew_leases(*args,**kwargs)
+                except sqlite3.OperationalError:busy.set();raise
+            worker=AutoWorker(factory,root)
+            try:
+                with patch('runner.checkpoint.ensure_quiescent',side_effect=slow_check),patch('runner.auto_worker.renew_leases',side_effect=renewal),patch('runner.auto_worker.HEARTBEAT_INTERVAL',.02):
+                    worker.start();deadline=time.monotonic()+5
+                    while not worker.status().get('checkpoint_available') and time.monotonic()<deadline:time.sleep(.01)
+                    self.assertTrue(worker.status()['checkpoint_available']);worker.request_checkpoint('r')
+                    self.assertTrue(locked.wait(3));self.assertTrue(heartbeat.wait(3));self.assertTrue(busy.wait(7));release.set()
+                    deadline=time.monotonic()+5
+                    while (worker.status().get('last_checkpoint') or {}).get('status')!='rejected' and time.monotonic()<deadline:time.sleep(.01)
+                    worker.wake.set();worker.thread.join(timeout=2)
+                    self.assertTrue(worker.thread.is_alive(),'heartbeat contention fenced the running task')
+                    self.assertNotEqual(worker.status()['status'],'inspection_required')
+                    with sqlite3.connect(root/'state.db') as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
+            finally:
+                release.set();worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
+    def test_busy_heartbeat_returning_after_rejected_checkpoint_rechecks_claim(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.checkpoint import CheckpointError
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);locked=threading.Event();heartbeat=threading.Event();release_checkpoint=threading.Event();release_heartbeat=threading.Event();calls=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):return {'status':'blocked'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            def slow_check(*args):locked.set();release_checkpoint.wait(5);raise CheckpointError('unresolved')
+            def renewal(*args,**kwargs):
+                calls.append(1)
+                if len(calls)==2:
+                    locked.wait(3);heartbeat.set();release_heartbeat.wait(5)
+                    error=sqlite3.OperationalError('database is locked');error.sqlite_errorcode=sqlite3.SQLITE_BUSY;raise error
+                return renew_leases(*args,**kwargs)
+            worker=AutoWorker(factory,root)
+            try:
+                with patch('runner.checkpoint.ensure_quiescent',side_effect=slow_check),patch('runner.auto_worker.renew_leases',side_effect=renewal),patch('runner.auto_worker.HEARTBEAT_INTERVAL',.02):
+                    worker.start();deadline=time.monotonic()+5
+                    while not worker.status().get('checkpoint_available') and time.monotonic()<deadline:time.sleep(.01)
+                    self.assertTrue(worker.status()['checkpoint_available']);worker.request_checkpoint('r')
+                    self.assertTrue(locked.wait(3));self.assertTrue(heartbeat.wait(3));release_checkpoint.set()
+                    deadline=time.monotonic()+3
+                    while (worker.status().get('last_checkpoint') or {}).get('status')!='rejected' and time.monotonic()<deadline:time.sleep(.01)
+                    self.assertEqual(worker.status()['last_checkpoint']['status'],'rejected')
+                    release_heartbeat.set();time.sleep(.2);worker.wake.set();worker.thread.join(timeout=2)
+                    self.assertTrue(worker.thread.is_alive(),'late busy response fenced the running task')
+                    with sqlite3.connect(root/'state.db') as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
+            finally:
+                release_checkpoint.set();release_heartbeat.set();worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
+    def test_heartbeat_recheck_fences_expired_claim_after_checkpoint_contention(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.checkpoint import CheckpointError
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);locked=threading.Event();busy=threading.Event();release=threading.Event();calls=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):return {'status':'blocked'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            def slow_check(*args):locked.set();release.wait(5);raise CheckpointError('unresolved')
+            def renewal(*args,**kwargs):
+                calls.append(1)
+                if len(calls)==1:return renew_leases(*args,**kwargs)
+                if len(calls)==2:
+                    locked.wait(3);error=sqlite3.OperationalError('database is locked');error.sqlite_errorcode=sqlite3.SQLITE_BUSY;busy.set();raise error
+                raise AutoWorkerError('lease expired')
+            worker=AutoWorker(factory,root)
+            try:
+                with patch('runner.checkpoint.ensure_quiescent',side_effect=slow_check),patch('runner.auto_worker.renew_leases',side_effect=renewal),patch('runner.auto_worker.HEARTBEAT_INTERVAL',.02):
+                    worker.start();deadline=time.monotonic()+5
+                    while not worker.status().get('checkpoint_available') and time.monotonic()<deadline:time.sleep(.01)
+                    self.assertTrue(worker.status()['checkpoint_available']);worker.request_checkpoint('r')
+                    self.assertTrue(locked.wait(3));self.assertTrue(busy.wait(3));release.set();worker.thread.join(timeout=5)
+                    self.assertFalse(worker.thread.is_alive());self.assertEqual(worker.status()['status'],'inspection_required')
+                    with sqlite3.connect(root/'state.db') as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
+            finally:
+                release.set();worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
     def test_stop_during_checkpoint_does_not_fence_requeued_run(self):
         import threading
         from types import SimpleNamespace
@@ -128,6 +256,32 @@ class AutoWorkerTests(unittest.TestCase):
                 release.set()
                 if worker.thread:worker.thread.join(timeout=5)
                 controller.lifecycle.close();controller.close()
+
+    def test_accepted_owner_action_wakes_waiting_worker(self):
+        import threading
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);processed=threading.Event()
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):return {'status':'blocked'}
+                class Control:
+                    secret='fixture'
+                    def handle(self,*args):processed.set();return {'ok':True}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,Control()
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();deadline=time.monotonic()+5
+                while worker.status()['status']!='blocked' and time.monotonic()<deadline:time.sleep(.01)
+                self.assertEqual(worker.status()['status'],'blocked')
+                worker.request_action('r','pr_withdraw',{'proposal':'fixture'})
+                self.assertTrue(processed.wait(2),'accepted action did not wake the worker')
+            finally:
+                worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
 
     def test_checkpoint_rejected_while_dispatch_is_running(self):
         import threading
@@ -348,6 +502,32 @@ class AutoWorkerTests(unittest.TestCase):
                 service.cancel_job('r')
                 with self.assertRaises(AutoWorkerError): renew_leases(root+'/state.db','r',queue['token'],claim,120)
             finally: lifecycle.close(); service.close()
+    def test_accepted_human_decision_wakes_waiting_worker(self):
+        import threading
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);processed=threading.Event();version='a'*64
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):return {'stage':'assembly','status':'awaiting_review','version':version}
+                class Human:
+                    def current(self,run):return {'decision':'rejected'} if processed.is_set() else None
+                    def decide(self,*args):processed.set()
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();service.human_review=Human();return service,None
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();deadline=time.monotonic()+5
+                while worker.status()['status']!='awaiting_review' and time.monotonic()<deadline:time.sleep(.01)
+                self.assertEqual(worker.status()['status'],'awaiting_review')
+                worker.request_decision('r',version,'rejected')
+                self.assertTrue(processed.wait(2),'accepted decision did not wake the worker')
+            finally:
+                worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
     def test_automatic_human_decision_requires_current_version(self):
         with tempfile.TemporaryDirectory() as root:
             worker=AutoWorker(lambda:None,Path(root)); version='a'*64

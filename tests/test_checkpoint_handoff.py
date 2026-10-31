@@ -161,6 +161,14 @@ class CheckpointHandoffTests(unittest.TestCase):
                 with self.assertRaises(CheckpointError):checkpoint(self.service,'run',self.queue,self.graph)
                 self.assertTrue(self.service.queue.may_start('run',self.queue))
 
+    def test_pending_post_ready_review_blocks_checkpoint(self):
+        from runner.checkpoint import CheckpointError,checkpoint
+        self.service.actions.approve('run','mark_ready:test','v1','owner')
+        self.service.actions.reserve_scoped('run','mark_ready:test','v1','pr')
+        self.service.actions.resolve_scoped('run','mark_ready:test','v1','pr','executed',followup='post_ready_review')
+        with self.assertRaises(CheckpointError):checkpoint(self.service,'run',self.queue,self.graph)
+        self.assertTrue(self.service.queue.may_start('run',self.queue))
+
     def test_unknown_session_state_blocks_checkpoint(self):
         from runner.checkpoint import CheckpointError,checkpoint
         db=self.service.graph.db
@@ -182,6 +190,12 @@ class CheckpointHandoffTests(unittest.TestCase):
         from runner.checkpoint import CheckpointError,checkpoint
         self.service.graph.db.execute('DROP TABLE local_scopes')
         with self.assertRaises(CheckpointError): checkpoint(self.service,'run',self.queue,self.graph)
+        self.assertTrue(self.service.queue.may_start('run',self.queue))
+
+    def test_missing_followup_table_blocks_checkpoint(self):
+        from runner.checkpoint import CheckpointError,checkpoint
+        self.service.graph.db.execute('DROP TABLE action_followups')
+        with self.assertRaises(CheckpointError):checkpoint(self.service,'run',self.queue,self.graph)
         self.assertTrue(self.service.queue.may_start('run',self.queue))
 
     def test_missing_job_audit_trigger_blocks_checkpoint(self):

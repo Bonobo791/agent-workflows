@@ -8,6 +8,8 @@ import sqlite3
 import threading
 import time
 
+HEARTBEAT_INTERVAL=10
+
 class AutoWorkerError(RuntimeError): pass
 
 def renew_leases(path,run,queue_claim,graph_claim,ttl=60):
@@ -26,7 +28,7 @@ def renew_leases(path,run,queue_claim,graph_claim,ttl=60):
 
 class AutoWorker:
     def __init__(self,factory,root):
-        self.factory=factory; self.db_path=str(root/'state.db'); self.stop_event=threading.Event(); self.guard=threading.Lock(); self.thread=None; self.claimed_run=None; self.state={'status':'idle'}; self.pending_decision=None; self.pending_action=None; self.last_action=None; self.last_checkpoint=None; self.checkpoint_pending=False; self.at_gate=False; self.checkpoint_capable=False; self.wake=threading.Event()
+        self.factory=factory; self.db_path=str(root/'state.db'); self.stop_event=threading.Event(); self.guard=threading.Lock(); self.thread=None; self.claimed_run=None; self.state={'status':'idle'}; self.pending_decision=None; self.pending_action=None; self.last_action=None; self.last_checkpoint=None; self.checkpoint_pending=False; self.checkpoint_active=threading.Event(); self.checkpoint_generation=0; self.at_gate=False; self.checkpoint_capable=False; self.wake=threading.Event()
     def status(self):
         with self.guard: return {**self.state,'last_action':self.last_action,'last_checkpoint':self.last_checkpoint,'checkpoint_available':self.checkpoint_capable and self.at_gate and not self.stop_event.is_set() and not self.checkpoint_pending and self.pending_action is None and self.pending_decision is None}
     def _set(self,**value):
@@ -40,14 +42,14 @@ class AutoWorker:
         if decision not in ('approved','rejected') or not isinstance(version,str) or len(version)!=64 or any(c not in '0123456789abcdef' for c in version): raise AutoWorkerError('invalid human decision')
         with self.guard:
             if self.state.get('run')!=run or self.state.get('status')!='awaiting_review' or self.state.get('version')!=version or self.pending_decision is not None or self.checkpoint_pending or self.stop_event.is_set(): raise AutoWorkerError('current review unavailable')
-            self.pending_decision={'run':run,'version':version,'decision':decision}
+            self.pending_decision={'run':run,'version':version,'decision':decision}; self.wake.set()
         return {'pending':True,'version':version}
     def request_action(self,run,operation,parameters):
         allowed={'engineering_workspace_binding','bind_engineering_workspace','pr_propose','pr_approve','pr_execute','pr_review','pr_request_qa','pr_post_ready','pr_reconcile','pr_reauthorize','pr_withdraw'}
         if operation not in allowed or not isinstance(parameters,dict) or any(key in parameters for key in ('action','run','queue_claim','graph_claim','secret')): raise AutoWorkerError('invalid automatic action')
         with self.guard:
             if self.state.get('run')!=run or self.state.get('status') not in ('blocked','awaiting_approval','awaiting_review','awaiting_merge_review','no_runnable_stage') or self.pending_action is not None or self.checkpoint_pending or self.stop_event.is_set(): raise AutoWorkerError('automatic task unavailable or busy')
-            ticket=secrets.token_hex(16); self.pending_action={'ticket':ticket,'operation':operation,'parameters':dict(parameters)}
+            ticket=secrets.token_hex(16); self.pending_action={'ticket':ticket,'operation':operation,'parameters':dict(parameters)}; self.wake.set()
         return {'pending':True,'ticket':ticket}
     def request_checkpoint(self,run):
         with self.guard:
@@ -84,23 +86,34 @@ class AutoWorker:
                 claim=service.claim(run)
             renew_leases(self.db_path,run,queue['token'],claim)
             def keepalive():
-                while not heartbeat_stop.wait(10):
+                while not heartbeat_stop.wait(HEARTBEAT_INTERVAL):
+                    generation=self.checkpoint_generation; was_active=self.checkpoint_active.is_set()
                     try: renew_leases(self.db_path,run,queue['token'],claim)
-                    except Exception: failed.set(); break
+                    except Exception as error:
+                        code=getattr(error,'sqlite_errorcode',None)
+                        if isinstance(error,sqlite3.OperationalError) and isinstance(code,int) and (code & 255) in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED) and (was_active or self.checkpoint_active.is_set() or self.checkpoint_generation!=generation):
+                            while self.checkpoint_active.is_set() and not heartbeat_stop.wait(.1): pass
+                            if heartbeat_stop.is_set(): break
+                            try: renew_leases(self.db_path,run,queue['token'],claim); continue
+                            except Exception: pass
+                        failed.set();self.wake.set();break
             heartbeat=threading.Thread(target=keepalive,daemon=True); heartbeat.start()
             while not self.stop_event.is_set() and not failed.is_set():
                 with self.guard:
                     if self.checkpoint_pending:
                         from runner.checkpoint import checkpoint,CheckpointError
-                        try: checkpoint(service,run,queue['token'],claim)
-                        except CheckpointError:
-                            self.checkpoint_pending=False; self.at_gate=False
-                            self.last_checkpoint={'status':'rejected','reason':'work remains active or unresolved'}
-                            self.state={**self.state,'reason':'checkpoint unavailable; work remains active or unresolved'}
-                        else:
-                            self.claimed_run=None;self.at_gate=False;self.checkpoint_pending=False
-                            self.last_checkpoint={'status':'completed'}
-                            self.state={'status':'checkpointed','run':run};return
+                        self.checkpoint_active.set();self.checkpoint_generation+=1
+                        try:
+                            try: checkpoint(service,run,queue['token'],claim)
+                            except CheckpointError:
+                                self.checkpoint_pending=False; self.at_gate=False
+                                self.last_checkpoint={'status':'rejected','reason':'work remains active or unresolved'}
+                                self.state={**self.state,'reason':'checkpoint unavailable; work remains active or unresolved'}
+                            else:
+                                self.claimed_run=None;self.at_gate=False;self.checkpoint_pending=False
+                                self.last_checkpoint={'status':'completed'}
+                                self.state={'status':'checkpointed','run':run};return
+                        finally: self.checkpoint_active.clear()
                     self.at_gate=False
                     pending_action=self.pending_action; self.pending_action=None
                 if pending_action is not None:

@@ -238,7 +238,8 @@ with the exact `run`. Wait for `automatic_status` to report `checkpointed`.
 Its `last_checkpoint` also reports whether the request is pending, completed,
 rejected, or requires inspection; rejection retains the existing claims.
 The checkpoint releases the queue and graph claims only when the run has no
-unresolved local work, remote outcomes, or unconsumed approvals. The owner may
+unresolved local work, remote outcomes, required follow-ups, or unconsumed
+approvals. The owner may
 withdraw an unused freeze approval with `revoke_freeze_approval`, specifying its
 exact `run` and `version`; a started or uncertain action cannot be withdrawn.
 For an unused GitHub proposal approval, submit `pr_withdraw` with the exact
