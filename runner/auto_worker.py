@@ -92,7 +92,8 @@ class AutoWorker:
                     except Exception as error:
                         code=getattr(error,'sqlite_errorcode',None)
                         if isinstance(error,sqlite3.OperationalError) and isinstance(code,int) and (code & 255) in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED) and (was_active or self.checkpoint_active.is_set() or self.checkpoint_generation!=generation):
-                            while self.checkpoint_active.is_set() and not heartbeat_stop.wait(.1): pass
+                            while self.checkpoint_active.is_set():
+                                if heartbeat_stop.wait(.1): return
                             if heartbeat_stop.is_set(): break
                             try: renew_leases(self.db_path,run,queue['token'],claim); continue
                             except Exception: pass
