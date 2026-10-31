@@ -5,7 +5,7 @@ import os
 import re
 import subprocess
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from runner.monitor_http import MonitoringHandler, MonitoringHTTPServer
 
 from runner.worker import ConfigurationError, read_secret
 
@@ -26,12 +26,7 @@ def desktop_notify(title,body):
     subprocess.run(['/usr/bin/notify-send','--app-name=Agent Workflows','--',title,body],check=True,timeout=5,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env)
 
 
-class Handler(BaseHTTPRequestHandler):
-    def setup(self):
-        super().setup();self.connection.settimeout(5)
-
-    def log_message(self,*args): pass
-
+class Handler(MonitoringHandler):
     def do_POST(self):
         try:
             if self.path!='/alerts': return self.respond(404)
@@ -42,7 +37,10 @@ class Handler(BaseHTTPRequestHandler):
             length=int(lengths[0])
             if not 1<=length<=MAX_BODY: return self.respond(413)
             if self.headers.get_content_type()!='application/json': return self.respond(415)
-            payload=json.loads(self.rfile.read(length))
+            body=self.rfile.read(length)
+            if len(body)!=length: return self.respond(400)
+            self.finish_reading()
+            payload=json.loads(body)
             if not isinstance(payload,dict) or type(payload.get('truncatedAlerts',0)) is not int or payload.get('truncatedAlerts',0)!=0: return self.respond(400)
             alerts=payload.get('alerts')
             if not isinstance(alerts,list) or not 1<=len(alerts)<=32: return self.respond(400)
@@ -64,7 +62,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def build_server(secret,notify=desktop_notify,port=0):
     if not isinstance(secret,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',secret) or not callable(notify) or type(port) is not int or not 0<=port<=65535: raise ValueError('invalid alert receiver configuration')
-    server=HTTPServer(('127.0.0.1',port),Handler);server.secret=secret;server.notify=notify
+    server=MonitoringHTTPServer(('127.0.0.1',port),Handler);server.secret=secret;server.notify=notify
     return server
 
 

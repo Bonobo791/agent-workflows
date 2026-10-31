@@ -13,6 +13,9 @@ at `http://127.0.0.1:PORT/metrics`. Set `WORKFLOW_METRICS_HTTP_PORT` and
 Prometheus must send the metrics token as a bearer credential. The endpoint
 returns 503 when it cannot obtain a current snapshot; it does not return stale
 data. The endpoint does not configure a collector, retention, or API protection.
+Both monitoring endpoints allow up to 16 concurrent requests and impose a
+five-second total deadline for reading each request. Extra connections are
+closed; the collector or router must retry after capacity becomes available.
 
 `python -m runner.desktop_alert_receiver` receives Alertmanager webhooks at
 `http://127.0.0.1:PORT/alerts`. Set `WORKFLOW_ALERT_PORT` and

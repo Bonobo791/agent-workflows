@@ -3,7 +3,7 @@ import hmac
 import os
 import re
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from runner.monitor_http import MonitoringHandler, MonitoringHTTPServer
 
 from runner.metrics_cli import read_metrics
 from runner.worker import ConfigurationError, read_secret
@@ -11,13 +11,9 @@ from runner.worker import ConfigurationError, read_secret
 MAX_BODY=65536
 
 
-class Handler(BaseHTTPRequestHandler):
-    def setup(self):
-        super().setup();self.connection.settimeout(5)
-
-    def log_message(self,*args): pass
-
+class Handler(MonitoringHandler):
     def do_GET(self):
+        self.finish_reading()
         if self.path!='/metrics': return self.respond(404)
         auth=self.headers.get_all('Authorization',[])
         if len(auth)!=1 or not hmac.compare_digest(auth[0].encode('utf-8'),('Bearer '+self.server.secret).encode('utf-8')): return self.respond(403)
@@ -38,7 +34,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def build_server(secret,collect=read_metrics,port=0):
     if not isinstance(secret,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',secret) or not callable(collect) or type(port) is not int or not 0<=port<=65535: raise ValueError('invalid metrics endpoint configuration')
-    server=HTTPServer(('127.0.0.1',port),Handler);server.secret=secret;server.collect=collect
+    server=MonitoringHTTPServer(('127.0.0.1',port),Handler);server.secret=secret;server.collect=collect
     return server
 
 
