@@ -116,6 +116,8 @@ class PRBridge:
             proposal,state=self._load(loop,run,ref)
             if state!='proposed': raise PRBridgeError('proposal not available')
             def record(db):
+                claims=db.execute("SELECT j.token,j.expires,c.token,c.expires FROM jobs j JOIN graph_runs r ON r.id=j.run AND r.status='active' JOIN graph_claims c ON c.run=r.id AND c.task_id=r.task_id WHERE j.run=? AND j.status='running'",(run,)).fetchone()
+                if not claims or not all(isinstance(value,str) for value in (queue_claim,graph_claim,claims[0],claims[2])) or not secrets.compare_digest(queue_claim,claims[0]) or not secrets.compare_digest(graph_claim,claims[2]) or claims[1] is None or claims[3] is None or claims[1]<=time.time() or claims[3]<=self.service.graph.clock(): raise PRBridgeError('current claims unavailable')
                 if db.execute("UPDATE pr_bridge_operations SET state='approved' WHERE proposal=? AND run=? AND state='proposed'",(ref,run)).rowcount!=1: raise PRBridgeError('proposal changed')
             loop.ledger.approve_bound(run,proposal['action'],proposal['target'],'local-owner',expires,record=record)
             return {'approved':True,'proposal':ref,'action':proposal['action']}
