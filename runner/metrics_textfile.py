@@ -2,7 +2,6 @@
 import os
 import fcntl
 import secrets
-import stat
 import sys
 from runner.metrics_cli import read_metrics
 from runner.worker import ConfigurationError
@@ -28,7 +27,10 @@ def publish(directory):
         content=read_metrics().encode('utf-8')
         temporary='.workflow-'+secrets.token_hex(16)+'.tmp'
         output=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
-        with os.fdopen(output,'wb') as stream:
+        try: stream=os.fdopen(output,'wb')
+        except BaseException:
+            os.close(output); raise
+        with stream:
             stream.write(content); stream.flush(); os.fsync(stream.fileno())
         os.replace(temporary,'workflow.prom',src_dir_fd=fd,dst_dir_fd=fd)
         temporary=None

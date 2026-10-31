@@ -13,8 +13,21 @@ from runner.metrics_textfile import publish
 
 
 class MetricsTextfileTests(unittest.TestCase):
+    def test_fdopen_failure_closes_descriptor_and_removes_temporary_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            descriptors=[]
+            def fail(fd,mode):
+                descriptors.append(fd)
+                raise OSError('synthetic fdopen failure')
+            with patch('runner.metrics_textfile.read_metrics',return_value='metric 1\n'), patch('runner.metrics_textfile.os.fdopen',side_effect=fail):
+                with self.assertRaises(OSError): publish(root)
+            self.assertEqual(len(descriptors),1)
+            with self.assertRaises(OSError): os.fstat(descriptors[0])
+            self.assertEqual(list(Path(root).iterdir()),[])
+
     def test_concurrent_publication_is_rejected(self):
         with tempfile.TemporaryDirectory() as root:
+            os.chmod(root,0o700)
             fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
             try:
                 fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -59,7 +72,7 @@ class MetricsTextfileTests(unittest.TestCase):
             with patch('runner.metrics_textfile.read_metrics',return_value='new 1\n'), patch('runner.metrics_textfile.os.replace',side_effect=OSError('unavailable')):
                 with self.assertRaises(OSError): publish(root)
             self.assertEqual(target.read_text(),'workflow_snapshot_timestamp_seconds 123\n')
-            self.assertEqual([p.name for p in Path(root).iterdir()],['workflow.prom'])
+            self.assertEqual({p.name for p in Path(root).iterdir()},{'workflow.prom'})
 
     def test_rejects_nonprivate_directory_and_symlink(self):
         with tempfile.TemporaryDirectory() as root:
