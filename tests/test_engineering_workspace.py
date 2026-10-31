@@ -98,6 +98,13 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             with self.assertRaises(ControlError): self.control.handle('x'*40,request)
             self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
             self.registry.db.execute('DROP TRIGGER reject_workspace_recovery_audit')
+            for table,key,rejected,restored in (('graph_runs','id','active','cancelled'),('jobs','run','running','cancelling')):
+                with self.subTest(table=table):
+                    service.graph.db.execute('UPDATE '+table+' SET status=? WHERE '+key+'=?',(rejected,'run-1'))
+                    try:
+                        with self.assertRaises(ControlError): self.control.handle('x'*40,request)
+                        self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+                    finally: service.graph.db.execute('UPDATE '+table+' SET status=? WHERE '+key+'=?',(restored,'run-1'))
             self.assertEqual(self.control.handle('x'*40,request),{'released':True})
             self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
             from runner.audit_export import read_events

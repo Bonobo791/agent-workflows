@@ -136,6 +136,14 @@ class Service:
         except Exception:
             db.execute('ROLLBACK'); raise
         return self.lifecycle.status(run)
+    def inspect_local_scope(self,run,unit):
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.local_scope import LocalScopes
+        if not isinstance(self.lifecycle,ManualLifecycle) or self.model_supervisor is None: raise ServiceError('local manual supervisor unavailable')
+        if self.lifecycle.status(run)['incarnation']!=self.lifecycle.incarnation: raise ServiceError('scope incarnation unavailable')
+        scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
+        try: return scopes.inspect(run,unit)
+        finally: scopes.close()
     def _require_fenced_local(self,run):
         from runner.manual_lifecycle import ManualLifecycle
         if not isinstance(self.lifecycle,ManualLifecycle): raise ServiceError('local manual supervisor unavailable')

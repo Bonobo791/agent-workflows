@@ -48,6 +48,7 @@ class ControlPlane:
                 return self.service.lifecycle.confirm_operator_stop(request['run'],request['incarnation'],request['attestation'])
             if action=='stop_local_scope': return self.service.stop_local_scope(request['run'],request['unit'])
             if action=='release_local_workspace': return self.service.release_local_workspace(request['run'],request['assignment'],request['unit'])
+            if action=='inspect_local_scope': return self.service.inspect_local_scope(request['run'],request['unit'])
             if action=='manual_register_replacement':
                 from runner.manual_lifecycle import ManualLifecycle
                 if not isinstance(self.service.lifecycle,ManualLifecycle): raise ControlError('manual provider unavailable')
