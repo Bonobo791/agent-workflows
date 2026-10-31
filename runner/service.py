@@ -108,8 +108,11 @@ class Service:
         if isinstance(self.lifecycle,ManualLifecycle):
             tables={row[0] for row in self.graph.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('local_scopes','engineering_workspaces','engineering_local_scopes')")}
             if 'local_scopes' in tables:
-                rows=self.graph.db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state!='terminated' ORDER BY unit",(run,)).fetchall()
-                result['local_scopes']=[{'unit':row[0],'state':row[1]} for row in rows]
+                columns={row[1] for row in self.graph.db.execute('PRAGMA table_info(local_scopes)')}
+                if {'run','unit','state'}<=columns:
+                    rows=self.graph.db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state!='terminated' ORDER BY unit",(run,)).fetchall()
+                    result['local_scopes']=[{'unit':row[0],'state':row[1]} for row in rows]
+                else: result['local_scopes_unavailable']=True
             if {'engineering_workspaces','engineering_local_scopes'}<=tables:
                 workspace=self.graph.db.execute('SELECT w.assignment,m.unit FROM engineering_workspaces w LEFT JOIN engineering_local_scopes m ON m.run=w.run AND m.assignment=w.assignment WHERE w.run=? AND w.assignment IS NOT NULL',(run,)).fetchone()
                 if workspace: result['local_workspace']={'assignment':workspace[0],'unit':workspace[1]}
