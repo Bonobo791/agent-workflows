@@ -85,9 +85,13 @@ class EngineeringWorkspace:
             if not row: raise WorkspaceError('active local scope binding required')
             self.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit)); self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
-    def release_local(self,run,assignment,unit):
+    def release_local(self,run,assignment,unit,*,fenced=None):
         self.db.execute('BEGIN IMMEDIATE')
         try:
+            if fenced is not None:
+                if not isinstance(fenced,tuple) or len(fenced)!=2 or any(not isinstance(x,str) or not x for x in fenced): raise WorkspaceError('invalid recovery fence')
+                fence=self.db.execute("SELECT 1 FROM manual_assignments a JOIN manual_workers w ON w.target=a.target JOIN jobs j ON j.run=a.run JOIN graph_runs g ON g.id=a.run WHERE a.run=? AND a.target=? AND a.incarnation=? AND a.state='pending' AND w.incarnation=a.incarnation AND w.state='assigned' AND j.status IN ('cancelling','uncertain') AND g.status='cancelled'",(run,*fenced)).fetchone()
+                if not fence: raise WorkspaceError('recovery fence changed')
             row=self.db.execute("SELECT 1 FROM engineering_local_scopes m JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE m.run=? AND m.assignment=? AND m.unit=? AND s.state='terminated'",(run,assignment,unit)).fetchone()
             if not row: raise WorkspaceError('terminal local scope evidence required')
             if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')

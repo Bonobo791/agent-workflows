@@ -147,7 +147,7 @@ class Service:
         root=Path(self.model_supervisor.engineering_root)
         if (root/'state.db').resolve()!=Path(self.graph.db.execute('PRAGMA database_list').fetchone()[2]).resolve(): raise ServiceError('workspace and queue must share durable state')
         registry=EngineeringWorkspace(root)
-        try: registry.release_local(run,assignment,unit)
+        try: registry.release_local(run,assignment,unit,fenced=(self.lifecycle.target['manual_target'],self.lifecycle.incarnation))
         finally: registry.close()
         return {'released':True}
     def stop_local_scope(self,run,unit):

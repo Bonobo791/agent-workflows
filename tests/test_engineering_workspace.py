@@ -54,6 +54,7 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         finally:scopes.close()
     def test_fenced_control_releases_only_exact_terminated_local_workspace(self):
         from types import SimpleNamespace
+        from unittest.mock import patch
         from runner.control import ControlError
         from runner.local_scope import LocalScopes
         from tests.test_local_scope import Backend
@@ -73,6 +74,14 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
             with self.assertRaises(ControlError): self.control.handle('x'*40,request)
             self.assertTrue(scopes.stop('run-1',unit))
+            original=EngineeringWorkspace.release_local
+            def fence_changes(registry,*args,**kwargs):
+                self.registry.db.execute("UPDATE jobs SET status='cancelled' WHERE run='run-1'")
+                return original(registry,*args,**kwargs)
+            with patch.object(EngineeringWorkspace,'release_local',fence_changes):
+                with self.assertRaises(ControlError): self.control.handle('x'*40,request)
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+            self.registry.db.execute("UPDATE jobs SET status='cancelling' WHERE run='run-1'")
             for field,value in (('assignment','job-'+'b'*48),('unit','other.scope')):
                 with self.subTest(field=field),self.assertRaises(ControlError): self.control.handle('x'*40,{**request,field:value})
             service.model_supervisor.engineering_root=str(self.root/'other')
@@ -123,6 +132,66 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             try: launcher.wait(timeout=5)
             except subprocess.TimeoutExpired: launcher.kill();launcher.wait(timeout=5)
             scopes.close()
+
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_fenced_workspace_recovery_after_claiming_process_crash(self):
+        import sys,time
+        from types import SimpleNamespace
+        from runner.control import ControlError
+        from runner.local_scope import LocalScopes, SystemdScopes
+        code='''
+import os,subprocess,sys,time
+from pathlib import Path
+from runner.engineering_workspace import EngineeringWorkspace
+from runner.local_scope import LocalScopes,SystemdScopes,ScopeError
+root,policy,assignment,ready=sys.argv[1:]
+registry=EngineeringWorkspace(root);registry.claim('run-1',assignment,policy)
+backend=SystemdScopes(os.environ);scopes=LocalScopes(str(Path(root)/'state.db'),backend)
+unit=scopes.reserve('run-1')
+launcher=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+deadline=time.monotonic()+10
+while True:
+    try: scopes.bind('run-1',unit);break
+    except ScopeError:
+        if launcher.poll() is not None or time.monotonic()>=deadline: raise
+        time.sleep(.05)
+registry.bind_local_scope('run-1',assignment,unit)
+Path(ready).write_text(unit)
+time.sleep(60)
+'''
+        service=self.service;service.create('run-1','engineering','task');service.enqueue('run-1')
+        self.control.handle('x'*40,{'action':'manual_claim'})
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args));assignment='job-'+'c'*48
+        backend=SystemdScopes(os.environ);service.model_supervisor=SimpleNamespace(backend=backend,engineering_root=str(self.root))
+        scopes=LocalScopes(str(self.root/'state.db'),backend);ready=self.root/'claim-ready'
+        with tempfile.TemporaryFile() as errors:
+            worker=subprocess.Popen([sys.executable,'-c',code,str(self.root),self.policy,assignment,str(ready)],stdout=subprocess.DEVNULL,stderr=errors)
+            try:
+                deadline=time.monotonic()+15
+                while not ready.exists() and worker.poll() is None and time.monotonic()<deadline:time.sleep(.02)
+                if not ready.exists():
+                    errors.seek(0);self.fail(f'claiming process did not start (exit={worker.poll()}): {errors.read(2000).decode(errors="replace")}')
+                unit=ready.read_text();group=backend.inspect(unit)['cgroup']
+                worker.kill();self.assertEqual(worker.wait(timeout=5),-9)
+                self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+                self.assertEqual(scopes.state('run-1',unit),'running')
+                stop=self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
+                self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
+                release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
+                with self.assertRaises(ControlError):self.control.handle('x'*40,release)
+                self.control.handle('x'*40,{'action':'stop_local_scope','run':'run-1','unit':unit})
+                self.assertEqual(backend.inspect(unit)['active'],'inactive');self.assertTrue(backend.empty_cgroup(group))
+                confirm={'action':'manual_confirm_stopped','run':'run-1','incarnation':'inc','attestation':'terminated_and_fenced'}
+                with self.assertRaises(ControlError):self.control.handle('x'*40,confirm)
+                self.assertEqual(self.control.handle('x'*40,release),{'released':True})
+                self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+                self.assertEqual(self.control.handle('x'*40,confirm)['status'],'stopped')
+            finally:
+                if worker.poll() is None:worker.kill();worker.wait(timeout=5)
+                rows=scopes.db.execute("SELECT unit FROM local_scopes WHERE run='run-1'").fetchall()
+                for (unit,) in rows:
+                    subprocess.run(['/usr/bin/systemctl','--user','stop',unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
+                scopes.close()
 
     def test_local_engineering_binding_claims_exact_checkout_until_scope_stops(self):
         import hashlib
