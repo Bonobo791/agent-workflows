@@ -10,6 +10,43 @@ import unittest
 from runner.local_scope import LocalScopes, ScopeError, SystemdScopes
 
 
+def _cleanup_stop_fixture(unit, launcher, worker_errors, scopes):
+    """Attempt every cleanup step while preserving failures for the test result."""
+    try:
+        subprocess.run(['/usr/bin/systemctl', '--user', 'stop', unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+    finally:
+        try:
+            try:
+                launcher.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                launcher.kill()
+                launcher.wait(timeout=5)
+        finally:
+            try:
+                worker_errors.close()
+            finally:
+                scopes.close()
+
+
+class StopFixtureCleanupTests(unittest.TestCase):
+    def test_cleanup_releases_resources_after_stop_or_launcher_timeout(self):
+        from unittest.mock import MagicMock, patch
+        for failure in ('stop', 'launcher'):
+            with self.subTest(failure=failure):
+                launcher, worker_errors, scopes = MagicMock(), MagicMock(), MagicMock()
+                timeout = subprocess.TimeoutExpired(failure, 5)
+                if failure == 'launcher':
+                    launcher.wait.side_effect = [timeout, timeout]
+                with patch(__name__ + '.subprocess.run', side_effect=timeout if failure == 'stop' else None):
+                    with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                        _cleanup_stop_fixture('fixture.scope', launcher, worker_errors, scopes)
+                self.assertIs(raised.exception, timeout)
+                launcher.wait.assert_called()
+                worker_errors.close.assert_called_once()
+                scopes.close.assert_called_once()
+                if failure == 'launcher': launcher.kill.assert_called_once()
+
+
 @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD') == '1', 'real user systemd scope not configured')
 class InterruptedStopTests(unittest.TestCase):
     def test_killed_before_stop_request(self):
@@ -73,17 +110,12 @@ scopes.stop('run',sys.argv[2])
                 self.assertTrue(scopes.reconcile_stop('run', unit, lambda *_: worker.poll() is not None))
                 self.assertEqual(scopes.state('run', unit), 'terminated')
             finally:
-                if worker is not None and worker.poll() is None:
-                    worker.kill()
-                    worker.wait(timeout=5)
-                subprocess.run(['/usr/bin/systemctl', '--user', 'stop', unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
                 try:
-                    launcher.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    launcher.kill()
-                    launcher.wait(timeout=5)
-                worker_errors.close()
-                scopes.close()
+                    if worker is not None and worker.poll() is None:
+                        worker.kill()
+                        worker.wait(timeout=5)
+                finally:
+                    _cleanup_stop_fixture(unit, launcher, worker_errors, scopes)
 
     def test_killed_with_stop_request_in_flight(self):
         import select
@@ -158,19 +190,14 @@ scopes.stop('run',sys.argv[2])
                 self.assertTrue(scopes.reconcile_stop('run', unit, lambda *_: bool(select.select([fd], [], [], 0)[0])))
                 self.assertEqual(scopes.state('run', unit), 'terminated')
             finally:
-                release.touch()
-                if worker is not None and worker.poll() is None:
-                    worker.kill()
-                    worker.wait(timeout=5)
-                if fd is not None:
-                    if not select.select([fd], [], [], 5)[0]:
-                        signal.pidfd_send_signal(fd, signal.SIGKILL)
-                    os.close(fd)
-                subprocess.run(['/usr/bin/systemctl', '--user', 'stop', unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
                 try:
-                    launcher.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    launcher.kill()
-                    launcher.wait(timeout=5)
-                worker_errors.close()
-                scopes.close()
+                    release.touch()
+                    if worker is not None and worker.poll() is None:
+                        worker.kill()
+                        worker.wait(timeout=5)
+                    if fd is not None:
+                        if not select.select([fd], [], [], 5)[0]:
+                            signal.pidfd_send_signal(fd, signal.SIGKILL)
+                        os.close(fd)
+                finally:
+                    _cleanup_stop_fixture(unit, launcher, worker_errors, scopes)
