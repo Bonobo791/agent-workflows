@@ -1,5 +1,6 @@
 import json
 import http.server
+import io
 import os
 import shutil
 import signal
@@ -25,6 +26,10 @@ class FakeTransport:
 class MCPTests(unittest.TestCase):
     def test_endpoint_rejects_empty_user_info(self):
         with self.assertRaises(MCPError): HTTPSMCP('https://@example.com/mcp','token')
+        from runner import plan_mcp_child
+        with patch('sys.stdin',io.StringIO(json.dumps({'endpoint':'https://@example.com/mcp'}))), patch.object(plan_mcp_child.urllib.request,'build_opener') as opener:
+            with self.assertRaises(ValueError): plan_mcp_child.main()
+            opener.assert_not_called()
 
     def test_timeout_cleanup_does_not_mask_mcp_error(self):
         from unittest.mock import MagicMock
