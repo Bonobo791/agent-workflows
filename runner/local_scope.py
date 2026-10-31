@@ -19,6 +19,13 @@ def unresolved_scope_rows(db,run):
     return [(unit,'unverified' if state=='terminated' else state) for unit,invocation,cgroup,state in rows
             if state!='terminated' or not valid_scope_identity(unit,invocation,cgroup)]
 
+def reserve_scope(db,run):
+    if not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run): raise ScopeError('invalid run')
+    if unresolved_scope_rows(db,run): raise ScopeError('prior scope unresolved')
+    unit='agent-workflows-'+secrets.token_hex(24)+'.scope'
+    db.execute("INSERT INTO local_scopes(run,unit,state) VALUES(?,?,'starting')",(run,unit))
+    return unit
+
 class SystemdScopes:
     def __init__(self, environment):
         self.environment=dict(environment)
@@ -63,18 +70,14 @@ class LocalScopes:
             INSERT INTO local_scope_audit(schema_version,run,unit,state,created) VALUES(1,NEW.run,NEW.unit,NEW.state,(julianday('now')-2440587.5)*86400.0); END""")
     def close(self): self.db.close()
     def reserve(self,run):
-        if not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run): raise ScopeError('invalid run')
-        unit='agent-workflows-'+secrets.token_hex(24)+'.scope'
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            if unresolved_scope_rows(self.db,run): raise ScopeError('prior scope unresolved')
-            self.db.execute("INSERT INTO local_scopes(run,unit,state) VALUES(?,?,'starting')",(run,unit))
-            self.db.execute('COMMIT')
+            unit=reserve_scope(self.db,run)
+            self.db.execute('COMMIT'); return unit
         except sqlite3.IntegrityError:
             self.db.execute('ROLLBACK'); raise ScopeError('prior scope unresolved') from None
         except Exception:
             self.db.execute('ROLLBACK'); raise
-        return unit
     def state(self,run,unit):
         row=self.db.execute('SELECT state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
         if not row: raise ScopeError('scope assignment unavailable')

@@ -60,16 +60,29 @@ class EngineeringWorkspace:
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise WorkspaceError('workspace binding already exists') from None
         return path
-    def claim(self,run,assignment,policy):
+    def _claim(self,run,assignment,policy):
         if not re.fullmatch(r'job-[0-9a-f]{48}',assignment): raise WorkspaceError('invalid assignment')
+        row=self.db.execute('SELECT repository,base,branch,owner,path,policy,assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
+        if not row or row[5]!=policy or row[6] is not None: raise WorkspaceError('workspace unavailable or already claimed')
+        approved=self.db.execute('SELECT binding_hash FROM engineering_workspace_approvals WHERE run=?',(run,)).fetchone()
+        if approved!=(self.binding_hash(run,*row[:4],policy),): raise WorkspaceError('workspace approval mismatch')
+        if self.verify(run,*row[:4],policy)!=row[4]: raise WorkspaceError('workspace binding changed')
+        self.db.execute('UPDATE engineering_workspaces SET assignment=? WHERE run=? AND assignment IS NULL',(assignment,run))
+        return row[4]
+    def claim(self,run,assignment,policy):
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            row=self.db.execute('SELECT repository,base,branch,owner,path,policy,assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
-            if not row or row[5]!=policy or row[6] is not None: raise WorkspaceError('workspace unavailable or already claimed')
-            approved=self.db.execute('SELECT binding_hash FROM engineering_workspace_approvals WHERE run=?',(run,)).fetchone()
-            if approved!=(self.binding_hash(run,*row[:4],policy),): raise WorkspaceError('workspace approval mismatch')
-            if self.verify(run,*row[:4],policy)!=row[4]: raise WorkspaceError('workspace binding changed')
-            self.db.execute('UPDATE engineering_workspaces SET assignment=? WHERE run=? AND assignment IS NULL',(assignment,run)); self.db.execute('COMMIT'); return row[4]
+            path=self._claim(run,assignment,policy)
+            self.db.execute('COMMIT'); return path
+        except Exception: self.db.execute('ROLLBACK'); raise
+    def claim_local(self,run,assignment,policy):
+        from runner.local_scope import reserve_scope
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            path=self._claim(run,assignment,policy)
+            unit=reserve_scope(self.db,run)
+            self.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit))
+            self.db.execute('COMMIT'); return path,unit
         except Exception: self.db.execute('ROLLBACK'); raise
     def release(self,run,assignment):
         self.db.execute('BEGIN IMMEDIATE')
