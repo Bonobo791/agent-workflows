@@ -6,7 +6,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -26,19 +25,18 @@ def connect_control(path, timeout):
 
 class WorkerProcessTests(unittest.TestCase):
     def test_connect_control_waits_until_bound_socket_is_listening(self):
+        from unittest.mock import patch
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/'control.sock'
             server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
             server.bind(str(path))
-            def listen():
-                time.sleep(.1)
-                server.listen(1)
-            thread=threading.Thread(target=listen);thread.start()
             try:
-                with connect_control(path,1) as client:
-                    accepted,_=server.accept();accepted.close()
+                with patch('tests.test_worker_process.time.sleep',side_effect=lambda delay:server.listen(1)) as retry:
+                    with connect_control(path,1) as client:
+                        accepted,_=server.accept();accepted.close()
+                    retry.assert_called_once_with(.02)
             finally:
-                thread.join();server.close()
+                server.close()
 
     def test_connect_control_closes_socket_on_nonretryable_failure(self):
         from unittest.mock import Mock,patch
