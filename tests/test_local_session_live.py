@@ -6,6 +6,38 @@ import unittest
 from pathlib import Path
 
 
+def run_writer_turn(handle, model, session, prompt):
+    from runner.protocol import AppServer
+    chunks = []
+    turns = []
+    def event(message):
+        if message.get('method') == 'item/agentMessage/delta':
+            params = message.get('params', {})
+            chunks.append((params.get('threadId'), params.get('turnId'), params.get('delta', '')))
+    server = AppServer(handle.open_transport(time.monotonic() + 120, lambda: False), on_event=event, on_thread=handle.bind_session, on_turn=turns.append, before_thread=handle.verify_config)
+    actual = server.run(prompt, model, thread_id=session, effort='medium')
+    return actual, ''.join(text for thread,turn,text in chunks if thread == actual and turn == turns[0])
+
+
+class SessionOutputTests(unittest.TestCase):
+    def test_only_current_thread_and_turn_deltas_count_including_early_events(self):
+        from tests.test_protocol import FakeTransport
+        def delta(thread,turn,text):
+            return {'method':'item/agentMessage/delta','params':{'threadId':thread,'turnId':turn,'delta':text}}
+        class Handle:
+            def open_transport(self,*args):
+                return FakeTransport([{'id':1,'result':{}},{'id':2,'result':{'thread':{'id':'current'}}},
+                    delta('other','old','cobalt-orchid'),delta('current','new','early '),
+                    {'id':3,'result':{'turn':{'id':'new'}}},delta('current','old','cobalt-orchid'),
+                    delta('current','new','response'),{'method':'turn/completed','params':{'threadId':'current','turn':{'id':'new','status':'completed'}}}])
+            def bind_session(self,session): pass
+            def verify_config(self,request): return True
+        session,output=run_writer_turn(Handle(),'model','current','prompt')
+        self.assertEqual(session,'current')
+        self.assertEqual(output,'early response')
+        self.assertNotIn('cobalt-orchid',output)
+
+
 @unittest.skipUnless(os.environ.get('CODEX_TEST_EXECUTABLE'), 'real local Codex executable not configured')
 class LocalSessionLiveTests(unittest.TestCase):
     def test_writer_resumes_after_scope_termination(self):
@@ -38,16 +70,11 @@ class LocalSessionLiveTests(unittest.TestCase):
                        'Reply with only the exact token I asked you to remember. Do not use tools.')
             for prompt in prompts:
                 handle = supervisor.start_execution('resume-probe', 'canonical_draft', session, {}, model)
-                chunks = []
-                def event(message):
-                    if message.get('method') == 'item/agentMessage/delta':
-                        chunks.append(message.get('params', {}).get('delta', ''))
                 try:
-                    server = AppServer(handle.open_transport(time.monotonic() + 120, lambda: False), on_event=event, on_thread=handle.bind_session, before_thread=handle.verify_config)
-                    actual = server.run(prompt, model, thread_id=session, effort='medium')
+                    actual, output = run_writer_turn(handle, model, session, prompt)
                     if session is not None:
                         self.assertEqual(actual, session)
-                        self.assertIn('cobalt-orchid', ''.join(chunks).lower())
+                        self.assertIn('cobalt-orchid', output.lower())
                     session = actual
                 finally:
                     handle.finish()
