@@ -26,7 +26,7 @@ class HTTPSMCP:
         process=None
         try:
             deadline=time.monotonic()+self.TIMEOUT
-            request=json.dumps({'endpoint':self.endpoint,'token':self.token,'message':message,'headers':headers},separators=(',',':')).encode()
+            request=json.dumps({'endpoint':self.endpoint,'token':self.token,'message':message,'headers':headers,'timeout':self.TIMEOUT},separators=(',',':')).encode()
             process=subprocess.Popen([sys.executable,'-I',str(Path(__file__).with_name('plan_mcp_child.py'))],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
             output,_=process.communicate(request,timeout=max(0,deadline-time.monotonic()))
             if process.returncode or time.monotonic()>deadline or len(output)>3000000: raise ValueError()
@@ -37,9 +37,15 @@ class HTTPSMCP:
         except Exception: raise MCPError('MCP request failed') from None
         finally:
             if process is not None and process.poll() is None:
-                try: process.kill()
-                except ProcessLookupError: pass
-                process.communicate()
+                try:
+                    try: process.kill()
+                    except ProcessLookupError: pass
+                    process.communicate(timeout=1)
+                except (OSError,subprocess.TimeoutExpired):
+                    for stream in (process.stdin,process.stdout):
+                        try:
+                            if stream is not None: stream.close()
+                        except OSError: pass
 
 class PlanMCP:
     ALLOWED={'get_issue_by_number','get_issue','list_attachments','list_issues','list_issue_activity'}

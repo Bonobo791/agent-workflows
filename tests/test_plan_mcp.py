@@ -2,12 +2,15 @@ import json
 import http.server
 import os
 import shutil
+import signal
 import ssl
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
+import sys
+from pathlib import Path
 from unittest.mock import patch
 from runner.plan_mcp import PlanMCP, MCPError, HTTPSMCP
 
@@ -20,6 +23,15 @@ class FakeTransport:
         return (200,{'Content-Type':'text/event-stream'},('event: message\ndata: '+json.dumps({'jsonrpc':'2.0','id':message['id'],'result':{'structuredContent':{'ok':True,'data':{'identifier':'TEST-1'}}}})+'\n\n').encode())
 
 class MCPTests(unittest.TestCase):
+    def test_timeout_cleanup_does_not_mask_mcp_error(self):
+        from unittest.mock import MagicMock
+        process=MagicMock(); process.poll.return_value=None
+        process.communicate.side_effect=subprocess.TimeoutExpired('helper',1)
+        with patch('runner.plan_mcp.subprocess.Popen',return_value=process):
+            with self.assertRaises(MCPError): HTTPSMCP('https://example.com/mcp','token').post({}, {})
+        process.kill.assert_called_once()
+        self.assertIsNotNone(process.communicate.call_args.kwargs.get('timeout'))
+
     @unittest.skipUnless(shutil.which('openssl'),'openssl required for local TLS fixture')
     def test_https_request_has_total_deadline_even_with_trickling_response(self):
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -48,6 +60,10 @@ class MCPTests(unittest.TestCase):
                     started=time.monotonic()
                     with self.assertRaises(MCPError): client.post({'test':1},{})
                     self.assertLess(time.monotonic()-started,2)
+                    child=Path(__file__).resolve().parents[1]/'runner'/'plan_mcp_child.py'
+                    data={'endpoint':client.endpoint,'token':'test-token','message':{'test':1},'headers':{},'timeout':.5}
+                    result=subprocess.run([sys.executable,'-I',str(child)],input=json.dumps(data).encode(),capture_output=True,timeout=2)
+                    self.assertEqual(result.returncode,-signal.SIGALRM)
             finally: server.shutdown(); server.server_close(); thread.join()
 
     def test_handshake_and_read_only_tool_call(self):
