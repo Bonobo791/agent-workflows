@@ -20,6 +20,8 @@ class ManualLifecycle:
             CREATE TABLE IF NOT EXISTS manual_assignments(
             run TEXT PRIMARY KEY, target TEXT NOT NULL, incarnation TEXT NOT NULL,
             state TEXT NOT NULL, attestation TEXT, UNIQUE(target,incarnation));
+            CREATE TABLE IF NOT EXISTS manual_incarnation_history(target TEXT NOT NULL, incarnation TEXT NOT NULL, PRIMARY KEY(target,incarnation));
+            CREATE TABLE IF NOT EXISTS checkpoint_replacements(id INTEGER PRIMARY KEY,run TEXT NOT NULL,target TEXT NOT NULL,old_incarnation TEXT NOT NULL,new_incarnation TEXT NOT NULL,created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS manual_lifecycle_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, state TEXT NOT NULL, confirmation TEXT, created REAL NOT NULL);
             CREATE TRIGGER IF NOT EXISTS manual_lifecycle_audit_insert AFTER INSERT ON manual_assignments BEGIN
                 INSERT INTO manual_lifecycle_audit(schema_version,run,state,confirmation,created) VALUES(1,NEW.run,NEW.state,NULL,(julianday('now')-2440587.5)*86400.0);
@@ -29,9 +31,13 @@ class ManualLifecycle:
             END;''')
         self.db.execute('BEGIN IMMEDIATE')
         try:
+            self.db.execute('INSERT OR IGNORE INTO manual_incarnation_history SELECT target,incarnation FROM manual_workers')
+            self.db.execute('INSERT OR IGNORE INTO manual_incarnation_history SELECT target,incarnation FROM manual_assignments')
             row=self.db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()
             if row and row[0]!=incarnation: raise ManualLifecycleError('configured incarnation differs from persisted identity')
-            if not row: self.db.execute('INSERT INTO manual_workers VALUES(?,?,?)',(target,incarnation,'available'))
+            if not row:
+                self.db.execute('INSERT INTO manual_workers VALUES(?,?,?)',(target,incarnation,'available'))
+                self.db.execute('INSERT OR IGNORE INTO manual_incarnation_history VALUES(?,?)',(target,incarnation))
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); self.db.close(); raise
     def close(self): self.db.close()
@@ -46,7 +52,10 @@ class ManualLifecycle:
             job=db.execute("SELECT run FROM jobs WHERE status='queued' ORDER BY seq LIMIT 1").fetchone()
             if not job: db.execute('COMMIT'); return None
             token=secrets.token_urlsafe(32)
-            db.execute("INSERT INTO manual_assignments(run,target,incarnation,state) VALUES(?,?,?,'running')",(job[0],target,self.incarnation))
+            prior=db.execute('SELECT target,incarnation,state FROM manual_assignments WHERE run=?',(job[0],)).fetchone()
+            if prior is None: db.execute("INSERT INTO manual_assignments(run,target,incarnation,state) VALUES(?,?,?,'running')",(job[0],target,self.incarnation))
+            elif prior==(target,self.incarnation,'checkpointed'): db.execute("UPDATE manual_assignments SET state='running' WHERE run=? AND state='checkpointed'",(job[0],))
+            else: raise ManualLifecycleError('prior assignment unavailable')
             db.execute("UPDATE manual_workers SET state='assigned' WHERE target=?",(target,))
             db.execute("UPDATE jobs SET status='running',worker=?,token=?,expires=? WHERE run=?",(self.incarnation,token,time.time()+ttl,job[0]))
             db.execute('COMMIT'); return {'run':job[0],'token':token,'incarnation':self.incarnation}
@@ -91,8 +100,29 @@ class ManualLifecycle:
         try:
             target=self.target['manual_target']
             row=db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()
-            if row!=(old,'stopped') or db.execute('SELECT 1 FROM manual_assignments WHERE target=? AND incarnation=?',(target,new)).fetchone(): raise ManualLifecycleError('replacement stale or already used')
+            if row!=(old,'stopped') or db.execute('SELECT 1 FROM manual_incarnation_history WHERE target=? AND incarnation=?',(target,new)).fetchone(): raise ManualLifecycleError('replacement stale or already used')
+            db.execute('INSERT INTO manual_incarnation_history VALUES(?,?)',(target,new))
             db.execute("UPDATE manual_workers SET incarnation=?,state='available' WHERE target=?",(new,target))
             db.execute('COMMIT'); self.incarnation=new
             return {'incarnation':new,'confirmation':'operator-attested'}
+        except Exception: db.execute('ROLLBACK'); raise
+
+    def register_checkpoint_replacement(self,run,old,new):
+        if old!=self.incarnation or not isinstance(new,str) or not new.strip() or len(new)>200 or new==old: raise ManualLifecycleError('exact old and distinct replacement identities required')
+        from runner.checkpoint import ensure_quiescent
+        db=self.db; db.execute('BEGIN IMMEDIATE')
+        try:
+            target=self.target['manual_target']
+            worker=db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()
+            assignment=db.execute('SELECT target,incarnation,state FROM manual_assignments WHERE run=?',(run,)).fetchone()
+            job=db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
+            graph=db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()
+            if worker!=(old,'checkpointed') or assignment!=(target,old,'checkpointed') or job!=('queued',None,None) or graph!=('active',) or db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone() or db.execute('SELECT 1 FROM manual_incarnation_history WHERE target=? AND incarnation=?',(target,new)).fetchone(): raise ManualLifecycleError('checkpoint replacement stale or already used')
+            ensure_quiescent(db,run)
+            db.execute('INSERT INTO manual_incarnation_history VALUES(?,?)',(target,new))
+            if db.execute("UPDATE manual_assignments SET incarnation=? WHERE run=? AND target=? AND incarnation=? AND state='checkpointed'",(new,run,target,old)).rowcount!=1: raise ManualLifecycleError('assignment changed')
+            if db.execute("UPDATE manual_workers SET incarnation=?,state='available' WHERE target=? AND incarnation=? AND state='checkpointed'",(new,target,old)).rowcount!=1: raise ManualLifecycleError('worker changed')
+            if db.execute('INSERT INTO checkpoint_replacements(run,target,old_incarnation,new_incarnation,created) VALUES(?,?,?,?,?)',(run,target,old,new,time.time())).rowcount!=1: raise ManualLifecycleError('replacement history unavailable')
+            if db.execute("INSERT INTO checkpoint_audit(schema_version,run,status,created) VALUES(1,?,'replacement_registered',?)",(run,time.time())).rowcount!=1: raise ManualLifecycleError('checkpoint audit unavailable')
+            db.execute('COMMIT'); return {'incarnation':new}
         except Exception: db.execute('ROLLBACK'); raise
