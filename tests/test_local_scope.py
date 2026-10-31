@@ -13,6 +13,18 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    def test_reservation_audit_failure_is_not_reported_as_existing_scope(self):
+        with tempfile.TemporaryDirectory() as root:
+            scopes=LocalScopes(root+'/state.db',Backend())
+            try:
+                scopes.db.execute("CREATE TRIGGER reject_reservation_audit BEFORE INSERT ON local_scope_audit BEGIN SELECT RAISE(ABORT,'private details'); END")
+                with self.assertRaisesRegex(ScopeError,'scope reservation unavailable') as error: scopes.reserve('run')
+                self.assertNotIn('private details',str(error.exception))
+                self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scopes').fetchone(),(0,))
+                scopes.db.execute('DROP TRIGGER reject_reservation_audit');scopes.reserve('run')
+                with self.assertRaisesRegex(ScopeError,'prior scope unresolved'): scopes.reserve('run')
+            finally: scopes.close()
+
     def test_missing_scope_audit_trigger_blocks_reservation(self):
         with tempfile.TemporaryDirectory() as root:
             scopes=LocalScopes(root+'/state.db',Backend())

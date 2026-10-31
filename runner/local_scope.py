@@ -100,7 +100,7 @@ class LocalScopes:
             unit=reserve_scope(self.db,run)
             self.db.execute('COMMIT'); return unit
         except sqlite3.IntegrityError:
-            self.db.execute('ROLLBACK'); raise ScopeError('prior scope unresolved') from None
+            self.db.execute('ROLLBACK'); raise ScopeError('scope reservation unavailable') from None
         except Exception:
             self.db.execute('ROLLBACK'); raise
     def state(self,run,unit):
