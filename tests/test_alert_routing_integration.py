@@ -1,9 +1,11 @@
 """Opt-in disposable Prometheus/Alertmanager routing check; no real receivers."""
 import http.server
+import datetime
 import json
 import os
 from pathlib import Path
 import queue
+import re
 import socket
 import sqlite3
 import subprocess
@@ -17,7 +19,7 @@ import uuid
 
 @unittest.skipUnless(os.environ.get('WORKFLOW_ALERT_ROUTING_TEST')=='1','local alert routing test not configured')
 class AlertRoutingTests(unittest.TestCase):
-    def test_uncertain_job_fires_and_resolves_through_local_webhook(self):
+    def test_uncertain_stale_and_missing_alerts_fire_and_resolve(self):
         from runner.metrics_textfile import publish
         from runner.service import Service
         notifications=queue.Queue()
@@ -56,7 +58,7 @@ class AlertRoutingTests(unittest.TestCase):
                     with patch.dict(os.environ,env,clear=True): publish(str(metrics))
                     nodeport,amport,promport=port(),port(),port()
                     rules=(Path(__file__).resolve().parents[1]/'observability'/'alerts.yml').read_text()
-                    (config/'rules.yml').write_text(rules.replace('for: 5m','for: 1s'))
+                    (config/'rules.yml').write_text(rules.replace('for: 5m','for: 1s').replace('for: 10m','for: 1s'))
                     (config/'alertmanager.yml').write_text(f"route:\n  receiver: local\n  group_wait: 0s\n  group_interval: 1s\n  repeat_interval: 1h\nreceivers:\n  - name: local\n    webhook_configs:\n      - url: http://127.0.0.1:{server.server_port}/alerts\n        send_resolved: true\n")
                     (config/'prometheus.yml').write_text(f"global:\n  scrape_interval: 1s\n  evaluation_interval: 1s\nrule_files:\n  - /config/rules.yml\nscrape_configs:\n  - job_name: workflow\n    static_configs:\n      - targets: ['127.0.0.1:{nodeport}']\nalerting:\n  alertmanagers:\n    - static_configs:\n        - targets: ['127.0.0.1:{amport}']\n")
                     prefix='workflow-alert-'+uuid.uuid4().hex[:12]
@@ -66,19 +68,34 @@ class AlertRoutingTests(unittest.TestCase):
                     launch('node','quay.io/prometheus/node-exporter:v1.9.1','--collector.disable-defaults','--collector.textfile','--collector.textfile.directory=/collector',f'--web.listen-address=127.0.0.1:{nodeport}',volume=str(metrics)+':/collector:ro,Z')
                     launch('alertmanager','docker.io/prom/alertmanager:v0.28.1','--config.file=/config/alertmanager.yml','--storage.path=/tmp/alertmanager','--cluster.listen-address=',f'--web.listen-address=127.0.0.1:{amport}',volume=str(config)+':/config:ro,Z')
                     launch('prometheus','docker.io/prom/prometheus:v3.4.2','--config.file=/config/prometheus.yml','--storage.tsdb.path=/tmp/prometheus',f'--web.listen-address=127.0.0.1:{promport}',volume=str(config)+':/config:ro,Z')
-                    def expect(status):
+                    def expect(name,status,since=0):
                         deadline=time.monotonic()+70
                         while time.monotonic()<deadline:
                             try: payload=notifications.get(timeout=min(2,max(.01,deadline-time.monotonic())))
                             except queue.Empty: continue
                             for alert in payload.get('alerts',[]):
-                                if alert.get('labels',{}).get('alertname')=='WorkflowUncertainExecution' and alert.get('status')==status:
+                                start=datetime.datetime.fromisoformat(alert['startsAt'].replace('Z','+00:00')).timestamp()
+                                if alert.get('labels',{}).get('alertname')==name and alert.get('status')==status and start>=since:
                                     self.assertNotIn('x'*40,json.dumps(payload)); return
-                        self.fail('missing '+status+' notification')
-                    expect('firing')
+                        self.fail('missing '+name+' '+status+' notification')
+                    expect('WorkflowUncertainExecution','firing')
                     with sqlite3.connect(data/'state.db') as db: db.execute("UPDATE jobs SET status='completed' WHERE run='r'")
                     with patch.dict(os.environ,env,clear=True): publish(str(metrics))
-                    expect('resolved')
+                    expect('WorkflowUncertainExecution','resolved')
+                    target=metrics/'workflow.prom'; temporary=metrics/'stale.tmp'
+                    text=target.read_text()
+                    stale,count=re.subn(r'(?m)^workflow_snapshot_timestamp_seconds [0-9]+$', 'workflow_snapshot_timestamp_seconds 1',text)
+                    self.assertEqual(count,1)
+                    since=time.time()-1
+                    temporary.write_text(stale); os.replace(temporary,target)
+                    expect('WorkflowMetricsStale','firing',since)
+                    with patch.dict(os.environ,env,clear=True): publish(str(metrics))
+                    expect('WorkflowMetricsStale','resolved',since)
+                    since=time.time()-1
+                    target.unlink()
+                    expect('WorkflowMetricsMissing','firing',since)
+                    with patch.dict(os.environ,env,clear=True): publish(str(metrics))
+                    expect('WorkflowMetricsMissing','resolved',since)
                 finally:
                     for name in reversed(names): subprocess.run(['podman','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                     if worker is not None: worker.terminate(); worker.communicate(timeout=10)

@@ -213,8 +213,9 @@ This does not configure a collector,
 listener authentication, notification routing, or production deployment.
 A separate opt-in integration test runs disposable Prometheus and Alertmanager
 instances with a synthetic loopback webhook. It verified firing and resolution
-of the uncertain-job alert using the shipped expression with its wait shortened
-to one second for the test. It does not verify a real notification destination.
+of the uncertain-job, stale-snapshot and missing-snapshot alerts using the
+shipped expressions with their waits shortened to one second for the test. It
+does not verify a real notification destination.
 To rerun it, make node-exporter v1.9.1, Prometheus v3.4.2 and
 Alertmanager v0.28.1 images available locally, then explicitly run
 `WORKFLOW_ALERT_ROUTING_TEST=1 python -m unittest tests.test_alert_routing_integration`.
