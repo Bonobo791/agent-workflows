@@ -5,7 +5,8 @@ import os
 import re
 import subprocess
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
+from runner.loopback_http import LoopbackHTTPServer
 
 from runner.worker import ConfigurationError, read_secret
 
@@ -71,7 +72,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def build_server(secret,notify=desktop_notify,port=0):
     if not isinstance(secret,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',secret) or not callable(notify) or type(port) is not int or not 0<=port<=65535: raise ValueError('invalid alert receiver configuration')
-    server=HTTPServer(('127.0.0.1',port),Handler);server.secret=secret;server.notify=notify
+    server=LoopbackHTTPServer(port,Handler);server.secret=secret;server.notify=notify
     return server
 
 

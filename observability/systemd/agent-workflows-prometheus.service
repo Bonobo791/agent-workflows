@@ -1,6 +1,7 @@
 [Unit]
 Description=Agent Workflows private Prometheus collector
 After=agent-workflows-metrics-http.service agent-workflows-alertmanager.service
+Wants=agent-workflows-metrics-http.service agent-workflows-alertmanager.service
 
 [Service]
 Type=simple

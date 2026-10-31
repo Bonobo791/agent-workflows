@@ -10,9 +10,14 @@ before using them with private workflow information.
 at `http://127.0.0.1:PORT/metrics`. Set `WORKFLOW_METRICS_HTTP_PORT` and
 `WORKFLOW_METRICS_HTTP_SECRET_FILE`, along with the worker control client's
 `CONTROL_SECRET_FILE`, `WORKFLOW_DATA_DIR`, and optional `WORKFLOW_CONTROL_DIR`.
-Prometheus must send the metrics token as a bearer credential. The endpoint
+Prometheus must send the metrics token as a bearer credential. Each endpoint
+accepts at most four connections concurrently and closes each connection after
+ten seconds, even when a peer keeps trickling request bytes. Excess connections
+are closed without processing; the five-second inactivity timeout also remains. The endpoint
 returns 503 when it cannot obtain a current snapshot; it does not return stale
-data. The endpoint does not configure a collector, retention, or API protection.
+data. A long-running worker control action can make collection time out; a
+failed scrape describes telemetry availability, not proof of process termination.
+The endpoint does not configure a collector, retention, or API protection.
 
 `python -m runner.desktop_alert_receiver` receives Alertmanager webhooks at
 `http://127.0.0.1:PORT/alerts`. Set `WORKFLOW_ALERT_PORT` and
@@ -83,8 +88,11 @@ Create those directories privately before starting the units. Prometheus is
 configured for 15 days and a 2 GB block-retention target; its write-ahead log
 and other files can require additional space. Alertmanager retains its data
 for 120 hours. The container names are fixed; if a previous container remains,
-inspect it rather than removing it blindly. These units are not installed or
-started by this repository.
+inspect it rather than removing it blindly. Starting the Prometheus unit also requests the metrics endpoint and Alertmanager;
+Alertmanager requests the desktop receiver. Grafana requests Prometheus. These
+are soft dependencies so a temporary outage can still be collected and alerted
+on. The worker itself remains separately managed. These units are not installed
+or started by this repository.
 
 The optional `agent-workflows-grafana.service` listens on `127.0.0.1:13000`.
 It expects private directories `~/.config/agent-workflows/grafana` and
@@ -142,3 +150,6 @@ WORKFLOW_LOCAL_MONITORING_TEST=1 WORKFLOW_MONITOR_SYSTEMD_TEST=1 WORKFLOW_GRAFAN
 
 These tests use temporary synthetic credentials and loopback containers. The
 Alertmanager test substitutes a callback for actual desktop notifications.
+If integration cleanup fails, it still attempts the remaining resources and
+retains its private temporary fixture directory for inspection; the failure
+identifies that directory. Successful cleanup removes it.

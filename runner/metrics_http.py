@@ -3,7 +3,8 @@ import hmac
 import os
 import re
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
+from runner.loopback_http import LoopbackHTTPServer
 
 from runner.metrics_cli import read_metrics
 from runner.worker import ConfigurationError, read_secret
@@ -40,7 +41,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def build_server(secret,collect=read_metrics,port=0):
     if not isinstance(secret,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',secret) or not callable(collect) or type(port) is not int or not 0<=port<=65535: raise ValueError('invalid metrics endpoint configuration')
-    server=HTTPServer(('127.0.0.1',port),Handler);server.secret=secret;server.collect=collect
+    server=LoopbackHTTPServer(port,Handler);server.secret=secret;server.collect=collect
     return server
 
 

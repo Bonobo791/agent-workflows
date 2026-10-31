@@ -1,6 +1,7 @@
 [Unit]
 Description=Agent Workflows private Grafana dashboard
 After=agent-workflows-prometheus.service
+Wants=agent-workflows-prometheus.service
 
 [Service]
 Type=simple

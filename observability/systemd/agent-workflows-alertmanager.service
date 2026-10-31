@@ -1,6 +1,7 @@
 [Unit]
 Description=Agent Workflows private alert router
 After=agent-workflows-alert-receiver.service
+Wants=agent-workflows-alert-receiver.service
 
 [Service]
 Type=simple
