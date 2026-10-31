@@ -13,6 +13,24 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    def test_missing_scope_audit_trigger_blocks_reservation(self):
+        with tempfile.TemporaryDirectory() as root:
+            scopes=LocalScopes(root+'/state.db',Backend())
+            try:
+                scopes.db.execute('DROP TRIGGER local_scope_audit_insert')
+                with self.assertRaises(ScopeError): scopes.reserve('run')
+                self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scopes').fetchone(),(0,))
+            finally: scopes.close()
+
+    def test_scope_reservation_helper_requires_transaction(self):
+        from runner.local_scope import reserve_scope
+        with tempfile.TemporaryDirectory() as root:
+            scopes=LocalScopes(root+'/state.db',Backend())
+            try:
+                with self.assertRaises(ScopeError): reserve_scope(scopes.db,'run')
+                self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scopes').fetchone(),(0,))
+            finally: scopes.close()
+
     def test_missing_events_in_existing_cgroup_is_not_termination_evidence(self):
         from pathlib import Path
         from unittest.mock import patch

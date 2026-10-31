@@ -12,6 +12,13 @@ from pathlib import Path
 
 class WorkspaceError(RuntimeError): pass
 
+def bind_scope_with_audit(db,run,assignment,unit):
+    if not db.in_transaction: raise WorkspaceError('workspace binding transaction required')
+    last=db.execute('SELECT COALESCE(MAX(id),0) FROM workspace_scope_audit').fetchone()[0]
+    db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit))
+    row=db.execute("SELECT 1 FROM workspace_scope_audit WHERE id>? AND schema_version=1 AND run=? AND assignment=? AND unit=? AND status='bound'",(last,run,assignment,unit)).fetchone()
+    if not row: raise WorkspaceError('workspace scope audit unavailable')
+
 class EngineeringWorkspace:
     def __init__(self,root):
         self.root=Path(root)
@@ -85,7 +92,7 @@ class EngineeringWorkspace:
             path=self._claim(run,assignment,policy)
             if expected_path is not None and path!=expected_path: raise WorkspaceError('engineering workspace changed')
             unit=reserve_scope(self.db,run)
-            self.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit))
+            bind_scope_with_audit(self.db,run,assignment,unit)
             if pr_scope is not None:
                 if not isinstance(pr_scope,tuple) or len(pr_scope)!=3 or any(not isinstance(value,str) or not value for value in pr_scope) or pr_scope[2]!='bundle': raise WorkspaceError('invalid push scope binding')
                 self.db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,run,*pr_scope))
@@ -105,7 +112,7 @@ class EngineeringWorkspace:
         try:
             row=self.db.execute("SELECT 1 FROM engineering_workspaces w JOIN local_scopes s ON s.run=w.run WHERE w.run=? AND w.assignment=? AND s.unit=? AND s.state='running'",(run,assignment,unit)).fetchone()
             if not row: raise WorkspaceError('active local scope binding required')
-            self.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit)); self.db.execute('COMMIT')
+            bind_scope_with_audit(self.db,run,assignment,unit); self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
     def release_local(self,run,assignment,unit,*,fenced=None):
         self.db.execute('BEGIN IMMEDIATE')

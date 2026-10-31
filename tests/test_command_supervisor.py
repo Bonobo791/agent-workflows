@@ -28,6 +28,27 @@ class CommandSupervisorTests(EngineeringWorkspaceTests):
         row=self.service.graph.db.execute("SELECT w.assignment,m.unit,s.state,c.unit FROM engineering_workspaces w JOIN engineering_local_scopes m ON m.run=w.run AND m.assignment=w.assignment JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit JOIN local_command_scopes c ON c.run=w.run AND c.assignment=w.assignment WHERE w.run='run-1'").fetchone()
         self.assertIsNotNone(row);self.assertEqual(row[2:3],('starting',));self.assertEqual(row[1],row[3])
 
+    def test_missing_workspace_audit_blocks_local_command_reservation(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.engineering_workspace import WorkspaceError
+        from runner.local_command import LocalCommandBackend
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        path=str(self.root/'state.db');scopes=LocalScopes(path,Backend());scopes.close()
+        backend=LocalCommandBackend(SimpleNamespace(db=path))
+        supervisor,queue,claim,snapshot=self.prepared(backend)
+        original=self.service.graph._lease
+        def remove_trigger(*args):
+            result=original(*args)
+            self.service.graph.db.execute('DROP TRIGGER workspace_scope_audit_insert')
+            return result
+        with patch.object(self.service.graph,'_lease',side_effect=remove_trigger),patch.object(backend,'execute') as launch:
+            with self.assertRaises(WorkspaceError): supervisor.execute('run-1',queue,claim,snapshot)
+            launch.assert_not_called()
+        self.assertEqual(self.service.graph.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+        self.assertEqual(self.service.graph.db.execute('SELECT COUNT(*) FROM supervised_commands').fetchone(),(0,))
+
     def test_scope_audit_failure_rolls_back_command_and_workspace_claim(self):
         import sqlite3
         from types import SimpleNamespace

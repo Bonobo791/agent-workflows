@@ -37,7 +37,10 @@ def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved
             try:
                 row=db.execute("SELECT 1 FROM local_command_scopes c JOIN local_scopes x ON x.run=c.run AND x.unit=c.unit JOIN engineering_local_scopes m ON m.run=c.run AND m.assignment=c.assignment AND m.unit=c.unit JOIN engineering_workspaces w ON w.run=c.run AND w.assignment=c.assignment WHERE c.assignment=? AND c.run=? AND c.unit=? AND c.exit_code IS NULL AND x.state='starting' AND w.path=?",(assignment,run,unit,workspace)).fetchone()
                 if not row: raise LocalCommandError('command reservation unavailable')
+                last=db.execute('SELECT COALESCE(MAX(id),0) FROM local_command_launch_audit').fetchone()[0]
                 db.execute('INSERT INTO local_command_launches VALUES(?,?,?)',(assignment,run,unit))
+                audit=db.execute("SELECT 1 FROM local_command_launch_audit WHERE id>? AND schema_version=1 AND run=? AND assignment=? AND unit=? AND status='starting'",(last,run,assignment,unit)).fetchone()
+                if not audit: raise LocalCommandError('command launch audit unavailable')
                 db.execute('COMMIT')
             except sqlite3.IntegrityError:
                 db.execute('ROLLBACK'); raise LocalCommandError('command launch unavailable') from None
@@ -104,8 +107,9 @@ class LocalCommandBackend:
     def _db(self): return sqlite3.connect(self.supervisor.db,timeout=10,isolation_level=None)
     def reserve_local_scope(self,db,assignment,run):
         from runner.local_scope import reserve_scope
+        from runner.engineering_workspace import bind_scope_with_audit
         unit=reserve_scope(db,run)
-        db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit))
+        bind_scope_with_audit(db,run,assignment,unit)
         db.execute('INSERT INTO local_command_scopes(assignment,run,unit) VALUES(?,?,?)',(assignment,run,unit))
     def verify_terminal(self,assignment,run,exit_code):
         if type(exit_code) is not int:return False

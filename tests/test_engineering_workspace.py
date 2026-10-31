@@ -78,6 +78,24 @@ class EngineeringWorkspaceTests(unittest.TestCase):
                 self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
         finally: scopes.close()
 
+    def test_workspace_scope_binding_helper_requires_transaction(self):
+        from runner.engineering_workspace import bind_scope_with_audit
+        with self.assertRaises(WorkspaceError): bind_scope_with_audit(self.registry.db,'run-1','job-'+'a'*48,'scope')
+        self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM engineering_local_scopes').fetchone(),(0,))
+
+    def test_missing_workspace_scope_audit_trigger_blocks_reservation(self):
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            self.registry.db.execute('DROP TRIGGER workspace_scope_audit_insert')
+            with self.assertRaises(WorkspaceError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy)
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            for table in ('local_scopes','engineering_local_scopes','workspace_scope_audit'):
+                self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
+        finally: scopes.close()
+
     def test_workspace_scope_audit_failure_rolls_back_reservation(self):
         import sqlite3
         from runner.local_scope import LocalScopes
@@ -91,6 +109,28 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             for table in ('local_scopes','engineering_local_scopes','local_scope_audit','workspace_scope_audit'):
                 self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
         finally: scopes.close()
+
+    def test_concurrent_local_claims_serialize_on_shared_database(self):
+        import concurrent.futures
+        import threading
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        scopes=LocalScopes(str(self.root/'state.db'),Backend());scopes.close()
+        gate=threading.Barrier(2)
+        def claim(assignment):
+            registry=EngineeringWorkspace(self.root)
+            try:
+                gate.wait(timeout=5)
+                try: return registry.claim_local('run-1',assignment,self.policy)
+                except WorkspaceError: return None
+            finally: registry.close()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures=[pool.submit(claim,'job-'+digit*48) for digit in ('a','b')]
+            results=[future.result(timeout=15) for future in futures]
+        self.assertEqual(sum(result is not None for result in results),1)
+        for table in ('local_scopes','engineering_local_scopes','workspace_scope_audit'):
+            self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(1,))
 
     def test_local_claim_rejects_changed_expected_workspace_without_reservation(self):
         from runner.local_scope import LocalScopes

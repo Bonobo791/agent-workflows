@@ -58,6 +58,11 @@ class LocalCommandTests(unittest.TestCase):
             registry.db.execute("INSERT INTO local_command_scopes VALUES('job','run',?,NULL)",(unit,))
             try:
                 with patch('runner.local_command.subprocess.Popen',side_effect=OSError('launch uncertain')) as launch:
+                    trigger=registry.db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='local_command_launch_audit_insert'").fetchone()[0]
+                    registry.db.execute('DROP TRIGGER local_command_launch_audit_insert')
+                    with self.assertRaises(LocalCommandError): _run_scoped(supervisor,'run',root,['/bin/true'],{},time.monotonic()+10,1024,lambda _:None,reserved_command=('job',unit))
+                    launch.assert_not_called()
+                    registry.db.execute(trigger)
                     registry.db.execute("CREATE TRIGGER reject_launch_audit BEFORE INSERT ON local_command_launch_audit BEGIN SELECT RAISE(ABORT,'unavailable'); END")
                     with self.assertRaises(LocalCommandError): _run_scoped(supervisor,'run',root,['/bin/true'],{},time.monotonic()+10,1024,lambda _:None,reserved_command=('job',unit))
                     launch.assert_not_called()

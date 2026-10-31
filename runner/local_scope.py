@@ -24,10 +24,14 @@ def unresolved_scope_rows(db,run):
             if state!='terminated' or not valid_scope_identity(unit,invocation,cgroup)]
 
 def reserve_scope(db,run):
+    if not db.in_transaction: raise ScopeError('scope reservation transaction required')
     if not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run): raise ScopeError('invalid run')
     if unresolved_scope_rows(db,run): raise ScopeError('prior scope unresolved')
     unit='agent-workflows-'+secrets.token_hex(24)+'.scope'
+    last=db.execute('SELECT COALESCE(MAX(id),0) FROM local_scope_audit').fetchone()[0]
     db.execute("INSERT INTO local_scopes(run,unit,state) VALUES(?,?,'starting')",(run,unit))
+    audit=db.execute("SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state='starting'",(last,run,unit)).fetchone()
+    if not audit: raise ScopeError('scope reservation audit unavailable')
     return unit
 
 def reserve_for_execution(db,run,backend,workspace,workspace_claim=None):
