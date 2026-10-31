@@ -211,6 +211,14 @@ than the stale threshold and monitor publication failures. One disposable
 rootless node-exporter test on loopback scraped an actual local worker snapshot.
 This does not configure a collector,
 listener authentication, notification routing, or production deployment.
+A separate opt-in integration test runs disposable Prometheus and Alertmanager
+instances with a synthetic loopback webhook. It verified firing and resolution
+of the uncertain-job alert using the shipped expression with its wait shortened
+to one second for the test. It does not verify a real notification destination.
+To rerun it, make node-exporter v1.9.1, Prometheus v3.4.2 and
+Alertmanager v0.28.1 images available locally, then explicitly run
+`WORKFLOW_ALERT_ROUTING_TEST=1 python -m unittest tests.test_alert_routing_integration`.
+The test uses loopback listeners and removes its temporary containers and data.
 
 `observability/alerts.yml` is a
 non-activated Prometheus rule file. Alertmanager deduplication and routing are
