@@ -52,6 +52,20 @@ class PlanAdapterTests(unittest.TestCase):
         self.assertTrue(result['ready'])
         self.assertTrue(result['dependencies_complete'])
 
+    def test_future_task_with_canceled_and_unfinished_blockers_is_not_ready(self):
+        class Blockers(FakeMCP):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number)
+                result['data']['startDate']='2026-12-03'
+                result['data']['links']=[{'kind':'blocks','direction':'inward','issue':{'id':2}},{'kind':'blocks','direction':'inward','issue':{'id':3}}]
+                return result
+            def call(self,name,args):
+                if name=='get_issue': return {'ok':True,'data':{'id':args['issueId'],'columnId':21 if args['issueId']==2 else 18}}
+                return super().call(name,args)
+        result=inspect_issue(Blockers(),'team.DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[],today='2026-10-31')
+        self.assertFalse(result['ready'])
+        self.assertFalse(result['dependencies_complete'])
+
     def test_malformed_owner_is_not_treated_as_unassigned(self):
         for field in ('assigneeUserId','delegateUserId'):
             for invalid in ('',False,0):
