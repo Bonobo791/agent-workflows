@@ -86,19 +86,21 @@ with patch('runner.source_fetch.socket.getaddrinfo',return_value=[(socket.AF_INE
         real_popen=subprocess.Popen
         with tempfile.TemporaryDirectory() as root:
             for cancel_on_stream in (False,True):
-                marker=Path(root)/str(cancel_on_stream); fetcher=SourceFetcher(['https://docs.example.com/'],timeout=1 if not cancel_on_stream else 3); children=[]; cancellations=[]; started=time.monotonic()
+                marker=Path(root)/str(cancel_on_stream); fetcher=SourceFetcher(['https://docs.example.com/'],timeout=1 if not cancel_on_stream else 5); children=[]; cancellations=[]; started=time.monotonic()
                 def launch(*args,**kwargs):
-                    if cancel_on_stream: time.sleep(.45)
+                    if cancel_on_stream: time.sleep(2.05)
                     child=real_popen([sys.executable,'-c',code,str(marker)],**kwargs); children.append(child); return child
                 def cancelled():
-                    if cancel_on_stream and marker.exists(): cancellations.append(True); return True
+                    if cancel_on_stream and marker.exists(): cancellations.append(time.monotonic()); return True
                     return False
                 with self.subTest(cancel_on_stream=cancel_on_stream),patch('runner.source_fetch.subprocess.Popen',side_effect=launch):
                     with self.assertRaises(SourceFetchError):
                         fetcher.fetch('https://docs.example.com/',cancelled=cancelled)
-                    self.assertLess(time.monotonic()-started,1.6 if not cancel_on_stream else 2)
                     self.assertTrue(marker.exists())
-                    if cancel_on_stream: self.assertTrue(cancellations)
+                    if cancel_on_stream:
+                        self.assertTrue(cancellations)
+                        self.assertLess(time.monotonic()-cancellations[0],1.6)
+                    else: self.assertLess(time.monotonic()-started,1.6)
                     self.assertEqual(len(children),1); self.assertIsNotNone(children[0].poll())
     def test_public_json_sources_must_be_valid_and_bounded(self):
         fetcher=SourceFetcher(['https://docs.example.com/data'],max_bytes=32)
