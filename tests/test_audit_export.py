@@ -18,6 +18,43 @@ from runner.otel_audit import OpenTelemetryAuditExporter, OpenTelemetryAuditTrac
 
 
 class AuditExportTests(unittest.TestCase):
+    @unittest.skipUnless(OTLPSpanExporter is not None, 'optional OpenTelemetry OTLP exporter unavailable')
+    def test_unavailable_otlp_receiver_replays_after_cursor_restart(self):
+        import http.server
+        import socket
+        import sqlite3
+        import threading
+        import requests
+        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+        from runner.opik_export import create_opik_trace_exporter, PATH
+        class Receiver(http.server.BaseHTTPRequestHandler):
+            payloads=[]
+            def log_message(self,*args): pass
+            def do_POST(self):
+                Receiver.payloads.append(self.rfile.read(int(self.headers['Content-Length'])))
+                self.send_response(200); self.send_header('Content-Length','0'); self.end_headers()
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/state.db'); graph.register(engineering_definition()); graph.create('private-run','engineering'); claim=graph.claim('private-run',60)
+            graph.finish('private-run','intake',graph.prepare('private-run','intake',claim),'passed','private-content',claim)
+            cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None); session=requests.Session(); session.trust_env=False
+            reservation=socket.socket(); reservation.bind(('127.0.0.1',0)); port=reservation.getsockname()[1]
+            server=None; thread=None
+            try:
+                adapter=create_opik_trace_exporter(f'http://127.0.0.1:{port}{PATH}',session,timeout=.5)
+                self.assertEqual(deliver_page(graph.db,cursor,'local-fixture','graph_audit',10,b'x'*32,adapter),{'status':'unavailable','cursor':0})
+                cursor.close(); cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None)
+                reservation.close()
+                server=http.server.ThreadingHTTPServer(('127.0.0.1',port),Receiver); thread=threading.Thread(target=server.serve_forever); thread.start()
+                self.assertEqual(deliver_page(graph.db,cursor,'local-fixture','graph_audit',10,b'x'*32,adapter),{'status':'exported','cursor':1})
+                self.assertEqual(deliver_page(graph.db,cursor,'local-fixture','graph_audit',10,b'x'*32,adapter)['status'],'empty')
+                self.assertEqual(len(Receiver.payloads),1)
+                self.assertNotIn(b'private',Receiver.payloads[0])
+                self.assertEqual(len(ExportTraceServiceRequest.FromString(Receiver.payloads[0]).resource_spans[0].scope_spans[0].spans),2)
+            finally:
+                reservation.close()
+                if server is not None: server.shutdown(); thread.join(); server.server_close()
+                session.close(); cursor.close(); graph.close()
+
     def test_platform_review_role_is_preserved_in_sanitized_projection(self):
         from runner.otel_audit import _attributes
         event=project_event('execution_launch_audit',{'id':1,'schema_version':1,'run':'private',
@@ -50,14 +87,19 @@ class AuditExportTests(unittest.TestCase):
                 try:
                     adapter=create_opik_trace_exporter(f'http://127.0.0.1:{server.server_port}{PATH}',session,timeout=2)
                     self.assertEqual(deliver_page(graph.db,cursor,'local-fixture','graph_audit',10,b'x'*32,adapter),{'status':'unavailable','cursor':0})
+                    cursor.close(); cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None)
                     Receiver.partial=False
                     self.assertEqual(deliver_page(graph.db,cursor,'local-fixture','graph_audit',10,b'x'*32,adapter),{'status':'exported','cursor':1})
                     self.assertEqual(len(Receiver.payloads),2)
+                    identities=[]
                     for path,content_type,payload in Receiver.payloads:
                         self.assertEqual((path,content_type),(PATH,'application/x-protobuf'))
                         self.assertNotIn(b'private',payload)
                         spans=ExportTraceServiceRequest.FromString(payload).resource_spans[0].scope_spans[0].spans
                         self.assertEqual(len(spans),2)
+                        identities.append([(span.trace_id,span.span_id) for span in spans])
+                    self.assertEqual(identities[0],identities[1])
+                    self.assertEqual(deliver_page(graph.db,cursor,'local-fixture','graph_audit',10,b'x'*32,adapter)['status'],'empty')
                 finally: session.close(); cursor.close(); graph.close()
         finally: server.shutdown(); thread.join(); server.server_close()
 
