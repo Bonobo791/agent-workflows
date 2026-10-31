@@ -188,11 +188,39 @@ def read_runtime_config(path):
         return data
     except (OSError,ValueError,UnicodeError): raise ConfigurationError('runtime configuration unavailable') from None
 
+def lock_state_directory(root):
+    import fcntl
+    root.mkdir(mode=0o700,parents=True,exist_ok=True)
+    directory=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        info=os.fstat(directory)
+        if info.st_uid!=os.geteuid() or info.st_mode&0o077: raise ConfigurationError('state directory must be owner-only')
+        fd=os.open('.worker.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600,dir_fd=directory)
+        try:
+            info=os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077 or info.st_nlink!=1: raise ConfigurationError('unsafe worker lock')
+            try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError: raise ConfigurationError('state directory already in use') from None
+            return fd
+        except Exception:
+            os.close(fd); raise
+    finally: os.close(directory)
+
 def main():
     path=os.environ.get('CONTROL_SECRET_FILE')
     if not path: raise ConfigurationError('CONTROL_SECRET_FILE required')
     root=Path(os.environ.get('WORKFLOW_DATA_DIR','/data'))
     secret=read_secret(path)
+    lock=lock_state_directory(root)
+    try:
+        configured=os.environ.get('WORKFLOW_CONTROL_DIR')
+        legacy=root/'control.sock'
+        if configured and Path(configured)!=root and (legacy.exists() or legacy.is_symlink()):
+            raise ConfigurationError('existing state-directory socket requires inspection')
+        return run_worker(root,secret)
+    finally: os.close(lock)
+
+def run_worker(root,secret):
     mode=os.environ.get('WORKFLOW_LIFECYCLE_MODE','disabled')
     if mode not in ('disabled','manual'): raise ConfigurationError('unsupported lifecycle mode')
     factory=None
@@ -239,7 +267,9 @@ def main():
         return build_control(root,secret,docker_config=config,role_config=role_config,command_config=command_config,page_rules=page_rules,task_config=task_config,plan_token=plan_token,github_token=github_token,execution_mode=execution_mode,lifecycle_factory=factory,docker_socket=os.environ.get('DOCKER_CONTROLLER_SOCKET'),docker_image=os.environ.get('DOCKER_WORKER_IMAGE'),local_supervisor_factory=local_factory,github_http=github_http,source_config=source_config,platform_config=platform_config,audio_config=audio_config)
     control.auto_worker=AutoWorker(auto_factory,root) if task_config is not None and mode=='manual' and (config is not None or local_factory is not None) and role_config is not None else None
     try:
-        server=UnixControlServer(root/'control.sock',control)
+        socket_dir=Path(os.environ.get('WORKFLOW_CONTROL_DIR') or root)
+        if os.environ.get('WORKFLOW_CONTROL_DIR'): socket_dir.mkdir(mode=0o700,exist_ok=True)
+        server=UnixControlServer(socket_dir/'control.sock',control)
         try:
             server.timeout=1
             stopping=[False]

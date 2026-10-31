@@ -161,6 +161,37 @@ Recovery is bound to the exact backup generation; legacy interrupted backups
 without a generation remain fenced for inspection.
 No production verifier or control endpoint for that recovery is configured.
 
+The controller image provides a `/data` directory owned by UID/GID 10001 with
+mode 0700. Fresh Podman named volumes copy those permissions from the image;
+existing volumes retain their prior ownership and must be provisioned privately
+for that UID before startup. The control secret must also be an owner-only file
+owned by the worker's mapped UID. Other runtimes and volume drivers require
+independent verification of their copy-up and UID-mapping behavior.
+
+For rootless Podman on the validated host, use `compose.podman.yaml` alongside
+`compose.yaml` to map the host user to UID/GID 10001 and relabel the secret
+bind mount. Run `docker-compose -f compose.yaml -f compose.podman.yaml up -d`
+with `CONTROL_SECRET_PATH` set to a private
+owner-only host file and the Podman socket configured for the Compose provider.
+The override puts the private control socket in container `/tmp` and leaves
+durable state in `/data`. The CLI must use the same `WORKFLOW_CONTROL_DIR`;
+the Compose service sets it to `/tmp/workflow-control`. A state-directory lock
+prevents two current-version workers sharing a volume. Stop any older worker
+before upgrading: a legacy `/data/control.sock` blocks the new socket path and
+requires inspection rather than automatic removal. Do not run mixed versions
+against the same state directory.
+
+On the tested host, startup, stop/start, default restart, restart with
+`--timeout 5`, and explicit start after a killed container preserved a synthetic
+run. These tests used disabled execution; recovery of in-flight work, scopes,
+and remote request outcomes remains unresolved. A separate signed-in host probe
+killed a worker after a turn started, restarted control with a new private socket
+directory, fenced the run and stopped its recorded scope before operator
+confirmation. It does not prove whether the provider completed the turn or
+whether its request was cancelled. Do not remove a legacy socket
+without independently verifying that the previous worker and its work are
+quiescent.
+
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.

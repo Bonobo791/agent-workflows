@@ -10,7 +10,70 @@ import unittest
 from pathlib import Path
 
 class WorkerProcessTests(unittest.TestCase):
+    def test_worker_rejects_symlinked_state_lock(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
+            secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            lock=data/'.worker.lock'; lock.symlink_to('missing')
+            env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_EXECUTION_MODE':'disabled'}
+            result=subprocess.run([sys.executable,'-m','runner.worker'],env=env,capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(result.returncode,0)
+            self.assertTrue(lock.is_symlink())
+
+    def test_separate_control_directory_refuses_existing_legacy_socket_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
+            secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            legacy=data/'control.sock'; legacy.symlink_to('missing')
+            env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_CONTROL_DIR':str(root/'other'),'WORKFLOW_EXECUTION_MODE':'disabled'}
+            result=subprocess.run([sys.executable,'-m','runner.worker'],env=env,capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(result.returncode,0)
+            self.assertTrue(legacy.is_symlink())
+            self.assertFalse((root/'other'/'control.sock').exists())
+
+    def test_distinct_socket_directories_cannot_share_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
+            secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_CONTROL_DIR':str(root/'first'),'WORKFLOW_EXECUTION_MODE':'disabled'}
+            first=subprocess.Popen([sys.executable,'-m','runner.worker'],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            try:
+                path=root/'first'/'control.sock'; deadline=time.monotonic()+10
+                while not path.exists() and first.poll() is None and time.monotonic()<deadline: time.sleep(.02)
+                self.assertTrue(path.is_socket())
+                second=subprocess.run([sys.executable,'-m','runner.worker'],env={**env,'WORKFLOW_CONTROL_DIR':str(root/'second')},capture_output=True,text=True,timeout=5)
+                self.assertNotEqual(second.returncode,0)
+                self.assertFalse((root/'second'/'control.sock').exists())
+            finally:
+                first.terminate(); first.communicate(timeout=10)
+
+    def test_control_socket_can_use_separate_private_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
+            sockets=root/'sockets'
+            secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_CONTROL_DIR':str(sockets),'WORKFLOW_EXECUTION_MODE':'disabled'}
+            process=subprocess.Popen([sys.executable,'-m','runner.worker'],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            try:
+                path=sockets/'control.sock'; deadline=time.monotonic()+10
+                while not path.exists() and process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
+                self.assertTrue(path.is_socket())
+                result=subprocess.run([sys.executable,'-m','runner.cli'],input='{"action":"metrics"}',env=env,capture_output=True,text=True,timeout=5)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertTrue(json.loads(result.stdout)['ok'])
+            finally:
+                process.terminate(); process.communicate(timeout=10)
+            self.assertEqual(process.returncode,0)
+            self.assertFalse(path.exists())
+
     def test_sigterm_fences_an_inflight_automatic_assignment(self):
+        self._exercise_interrupted_worker(False)
+
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_sigkill_can_be_fenced_and_scope_stopped_after_restart(self):
+        self._exercise_interrupted_worker(True)
+
+    def _exercise_interrupted_worker(self,hard_crash):
         import sqlite3
         code="""
 import os, subprocess, time
@@ -65,6 +128,10 @@ def fixture_control(root, secret, **kwargs):
             (Path(root)/'stage-entered').write_text('running')
             time.sleep(60)
             return {'status':'blocked'}
+    if os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1':
+        from types import SimpleNamespace
+        from runner.local_scope import SystemdScopes
+        service.model_supervisor=SimpleNamespace(backend=SystemdScopes(os.environ))
     service.task_intake=Intake(); service.stage_dispatcher=Dispatcher()
     return service,ControlPlane(service,secret)
 worker.build_control=fixture_control
@@ -76,9 +143,10 @@ worker.main()
                 path=root/(name+'.json'); path.write_text(json.dumps(value)); path.chmod(0o600)
             env=os.environ.copy()
             env.update(CONTROL_SECRET_FILE=str(secret),WORKFLOW_DATA_DIR=str(root),WORKFLOW_EXECUTION_MODE='disabled',WORKFLOW_LIFECYCLE_MODE='manual',MANUAL_WORKER_TARGET='fixture',MANUAL_WORKER_INCARNATION='one',WORKFLOW_TASK_CONFIG_FILE=str(root/'task.json'),WORKFLOW_ROLE_CONFIG_FILE=str(root/'roles.json'),DOCKER_RUNTIME_CONFIG_FILE=str(root/'runtime.json'))
+            if hard_crash: env['WORKFLOW_CONTROL_DIR']=str(root/'first-control')
             process=subprocess.Popen([sys.executable,'-c',code],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             try:
-                path=root/'control.sock'; deadline=time.monotonic()+10
+                path=(root/'first-control' if hard_crash else root)/'control.sock'; deadline=time.monotonic()+10
                 while not path.exists() and process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
                 self.assertTrue(path.is_socket())
                 with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
@@ -89,9 +157,33 @@ worker.main()
                 while not (root/'stage-entered').exists() and not (root/'stage-error').exists() and process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
                 failure=(root/'stage-error').read_text() if (root/'stage-error').exists() else 'no stage result'
                 self.assertTrue((root/'stage-entered').exists(),failure)
-                process.terminate(); stdout,stderr=process.communicate(timeout=10)
-                self.assertEqual(process.returncode,0,stderr.decode())
+                if hard_crash: process.kill()
+                else: process.terminate()
+                stdout,stderr=process.communicate(timeout=10)
+                self.assertEqual(process.returncode,-9 if hard_crash else 0,stderr.decode())
                 self.assertNotIn(b'x'*40,stdout+stderr)
+                if hard_crash:
+                    recovered_env={**env,'WORKFLOW_CONTROL_DIR':str(root/'second-control')}
+                    recovered=subprocess.Popen([sys.executable,'-c',code],env=recovered_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                    try:
+                        control=root/'second-control'/'control.sock'; deadline=time.monotonic()+10
+                        while not control.exists() and recovered.poll() is None and time.monotonic()<deadline: time.sleep(.02)
+                        self.assertTrue(control.is_socket())
+                        def action(request):
+                            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+                                client.settimeout(15); client.connect(str(control))
+                                client.sendall(json.dumps({'secret':'x'*40,'request':request}).encode()+b'\n')
+                                with client.makefile('rb') as stream: return json.loads(stream.readline())
+                        result=action({'action':'manual_stop','run':'r'})
+                        self.assertTrue(result['ok'],result)
+                        unit=result['result']['local_scopes'][0]['unit']
+                        result=action({'action':'stop_local_scope','run':'r','unit':unit})
+                        self.assertEqual(result['result'],{'unit':unit,'state':'terminated'})
+                        result=action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})
+                        self.assertTrue(result['ok'],result)
+                    finally:
+                        recovered.terminate(); recovered.communicate(timeout=10)
+                    return
                 with sqlite3.connect(root/'state.db') as db:
                     self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('cancelled',))
                     self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
