@@ -184,7 +184,11 @@ against the same state directory.
 On the tested host, startup, stop/start, default restart, restart with
 `--timeout 5`, and explicit start after a killed container preserved a synthetic
 run. These tests used disabled execution; recovery of in-flight work, scopes,
-and remote request outcomes remains unresolved. Do not remove a legacy socket
+and remote request outcomes remains unresolved. A separate signed-in host probe
+killed a worker after a turn started, restarted control with a new private socket
+directory, fenced the run and stopped its recorded scope before operator
+confirmation. It does not prove whether the provider completed the turn or
+whether its request was cancelled. Do not remove a legacy socket
 without independently verifying that the previous worker and its work are
 quiescent.
 
