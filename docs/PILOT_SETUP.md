@@ -48,6 +48,9 @@ must not contain private skills, credentials, user data or session histories.
   `WORKFLOW_PLAN_LIVE_PROJECT=team.PROJECT WORKFLOW_PLAN_LIVE_NUMBER=1 python -m unittest tests.test_plan_codex.CodexPlanTests.test_signed_in_gateway_reads_issue_attachments_and_activity`
   with an accessible project and issue number. This reads the issue, attachments
   and activity through the existing sign-in.
+  The optional `test_signed_in_gateway_process_group_exits_after_caller_crash`
+  uses the same variables, kills a disposable caller after it sends a tracker
+  request, and checks the original gateway process group for live processes.
   The app-server tool-call interface is experimental; revalidate it when the
   pinned Codex executable or connected account changes.
   The CLI waits up to 180 seconds for a task-admission response. A timeout or

@@ -1,8 +1,12 @@
 import json
 import os
+import select
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,6 +15,75 @@ from runner.plan_codex import CodexAppsPlan, PlanGatewayError
 
 
 class CodexPlanTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('WORKFLOW_PLAN_LIVE_PROJECT') and os.environ.get('WORKFLOW_PLAN_LIVE_NUMBER'),'live read-only tracker test not configured')
+    def test_signed_in_gateway_process_group_exits_after_caller_crash(self):
+        code='''
+import os,shutil,sys
+from pathlib import Path
+from runner.local_config import local_supervisor_factory
+from runner.local_config_inspect import inspect_config
+from runner.plan_codex import CodexAppsPlan
+import runner.plan_codex as gateway
+root=sys.argv[1]
+config=inspect_config(shutil.which('codex'),root,os.environ)
+supervisor=local_supervisor_factory(config,os.environ,root)(None)
+client=CodexAppsPlan(supervisor.executable,supervisor.environment,supervisor.verify_policy,root)
+original=gateway.subprocess.Popen
+def start(*args,**kwargs):
+ p=original(*args,**kwargs); (Path(root)/'gateway-pid').write_text(str(p.pid)); return p
+gateway.subprocess.Popen=start
+original_send=gateway.ProcessTransport.send
+def send(self,message):
+ original_send(self,message)
+ if message.get('method')=='mcpServer/tool/call': (Path(root)/'call-started').write_text('started')
+gateway.ProcessTransport.send=send
+client.get_issue(os.environ['WORKFLOW_PLAN_LIVE_PROJECT'],int(os.environ['WORKFLOW_PLAN_LIVE_NUMBER']))
+'''
+        def group_members(group):
+            result=[]
+            for path in Path('/proc').glob('[0-9]*/stat'):
+                try:
+                    fields=path.read_text().rsplit(')',1)[1].split()
+                    if int(fields[2])==group and fields[0]!='Z': result.append((int(path.parent.name),fields[19]))
+                except (OSError,ValueError,IndexError): pass
+            return result
+        with tempfile.TemporaryDirectory() as root:
+            cwd=Path(__file__).resolve().parents[1]
+            worker=subprocess.Popen([sys.executable,'-c',code,root],cwd=str(cwd),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            fd=None; pid=None; before=[]
+            try:
+                marker=Path(root)/'gateway-pid'; deadline=time.monotonic()+20
+                while time.monotonic()<deadline and not marker.exists() and worker.poll() is None: time.sleep(.02)
+                self.assertTrue(marker.exists(),'gateway did not launch')
+                pid=int(marker.read_text()); fd=os.pidfd_open(pid)
+                marker=Path(root)/'call-started'; deadline=time.monotonic()+30
+                while time.monotonic()<deadline and not marker.exists() and worker.poll() is None: time.sleep(.02)
+                self.assertTrue(marker.exists(),'tracker call did not start')
+                self.assertFalse(select.select([fd],[],[],0)[0],'gateway exited before crash')
+                before=group_members(pid); self.assertTrue(before)
+                worker.kill(); worker.wait(timeout=5)
+                self.assertEqual(worker.returncode,-signal.SIGKILL)
+                self.assertTrue(select.select([fd],[],[],8)[0],'gateway survived caller crash')
+                deadline=time.monotonic()+8
+                while time.monotonic()<deadline and group_members(pid): time.sleep(.05)
+                self.assertEqual(group_members(pid),[],'gateway process group survived caller crash')
+            finally:
+                if worker.poll() is None: worker.kill(); worker.wait(timeout=5)
+                if fd is not None:
+                    try:
+                        if not select.select([fd],[],[],0)[0]:
+                            if os.getpgid(pid)==pid: os.killpg(pid,signal.SIGKILL)
+                            else: signal.pidfd_send_signal(fd,signal.SIGKILL)
+                    except ProcessLookupError: pass
+                    finally: os.close(fd)
+                for child,start in group_members(pid) if pid is not None else []:
+                    if (child,start) in before:
+                        try:
+                            child_fd=os.pidfd_open(child)
+                            try: signal.pidfd_send_signal(child_fd,signal.SIGKILL)
+                            finally: os.close(child_fd)
+                        except ProcessLookupError: pass
+
     def test_unverified_cleanup_cannot_return_a_successful_snapshot(self):
         with tempfile.TemporaryDirectory() as root:
             for failure in ('wait','signal','close'):
