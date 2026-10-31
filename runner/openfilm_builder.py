@@ -126,7 +126,10 @@ class CodexOpenFilmProjectBuilder:
             raw_ref=result['outputs'][0]; project_ref=self.artifacts.put(_attach_media(self.artifacts,raw_ref,brief)); _verify_project(self.artifacts,project_ref,len(brief['assets']))
             if self.local:
                 with closing(sqlite3.connect(self.db_path)) as db:
-                    rows=db.execute("SELECT t.unit FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='asset_production' AND t.session=? AND t.turn=? AND s.state='terminated'",(run,result['session_id'],result['turn_id'])).fetchall()
+                    rows=db.execute("SELECT t.unit,s.invocation,s.cgroup FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='asset_production' AND t.session=? AND t.turn=? AND s.state='terminated'",(run,result['session_id'],result['turn_id'])).fetchall()
+                    from runner.local_scope import valid_scope_identity
+                    if any(not valid_scope_identity(*row) for row in rows): raise ValueError('project assignment unavailable')
+                    rows=[(row[0],) for row in rows]
             else:
                 session_db=Path(self.supervisor.session_root)/'session-state.db'
                 with closing(sqlite3.connect(str(session_db))) as db:
@@ -150,7 +153,10 @@ class CodexOpenFilmProjectBuilder:
             if self.local:
                 expected_binding=self.supervisor._binding(run,'asset_production',proof['skills'],proof['model'])[1]
                 with closing(sqlite3.connect(self.db_path)) as session_db:
-                    binding=session_db.execute("SELECT t.unit FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='asset_production' AND t.session=? AND t.turn=? AND t.binding=? AND s.state='terminated'",(run,proof['session'],proof['turn'],expected_binding)).fetchall()
+                    binding=session_db.execute("SELECT t.unit,s.invocation,s.cgroup FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='asset_production' AND t.session=? AND t.turn=? AND t.binding=? AND s.state='terminated'",(run,proof['session'],proof['turn'],expected_binding)).fetchall()
+                    from runner.local_scope import valid_scope_identity
+                    if any(not valid_scope_identity(*row) for row in binding): return False
+                    binding=[(row[0],) for row in binding]
             else:
                 with closing(sqlite3.connect(str(Path(self.supervisor.session_root)/'session-state.db'))) as session_db:
                     binding=session_db.execute("SELECT c.job FROM homes h JOIN home_claims c ON c.home=h.id WHERE h.run=? AND h.role='asset_production' AND h.session=? AND h.config=? AND h.skills=? AND h.state='idle' AND c.state='released'",(run,proof['session'],self.supervisor.config.policy_hash,self.supervisor._skill_digest(proof['skills'],proof['model']))).fetchall()

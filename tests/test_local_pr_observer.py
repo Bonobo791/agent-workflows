@@ -33,6 +33,9 @@ class ObserverTests(EngineeringWorkspaceTests):
             unit=scopes.reserve('run-1');service.graph.db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,'run-1',action,scope,kind));engine.unit=unit;engine.state='active';scopes.bind('run-1',unit);scopes.stop('run-1',unit)
             http.draft=(kind=='draft');http.title='wrong';self.assertFalse(observer.observe('run-1',action,target,scope)['quiescent']) if kind=='draft' else None
             http.title='Title';result=observer.observe('run-1',action,target,scope);self.assertEqual(result['outcome'],'desired_state_observed')
+            scopes.db.execute('UPDATE local_scopes SET invocation=NULL WHERE unit=?',(unit,))
+            self.assertFalse(observer.observe('run-1',action,target,scope)['quiescent'])
+            scopes.db.execute('UPDATE local_scopes SET invocation=? WHERE unit=?',('a'*32,unit))
             engine.empty=False;self.assertFalse(observer.observe('run-1',action,target,scope)['quiescent']);engine.empty=True
             ledger.resolve_scoped('run-1',action,head,scope,'executed')
     def test_remote_head_requires_exact_stopped_push_and_bundle_scopes(self):

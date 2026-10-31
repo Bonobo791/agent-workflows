@@ -50,6 +50,9 @@ class LocalAssetReviewTests(unittest.TestCase):
             with patch('runner.local_asset_review.CodexExecutor',Executor):
                 result=reviewer.review(run='run',attempt_id='attempt',claim=fixture.claim,subject=subject,inputs=inputs,asset_refs=refs,skills=hashes,skill_contents=contents,model='synthetic')
             self.assertTrue(reviewer.verify_access('run','fresh-1',subject,refs+previews,result['access_ref']))
+            service.graph.db.execute("UPDATE local_scopes SET invocation=NULL WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='fresh-1')")
+            self.assertFalse(reviewer.verify_access('run','fresh-1',subject,refs+previews,result['access_ref']))
+            service.graph.db.execute("UPDATE local_scopes SET invocation=? WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='fresh-1')",('a'*32,))
             self.assertFalse(reviewer.verify_access('run','fresh-1',subject,refs,result['access_ref']))
             service.graph.db.execute("UPDATE completed_turn_outputs SET input_versions='[]'")
             self.assertFalse(reviewer.verify_access('run','fresh-1',subject,refs+previews,result['access_ref']))

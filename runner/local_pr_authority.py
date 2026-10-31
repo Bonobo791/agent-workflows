@@ -33,9 +33,10 @@ class LocalPRObserver:
                 if sorted(row[0] for row in rows)!=['bundle','push'] or binding!=(next(row[1] for row in rows if row[0]=='bundle'),):raise ValueError()
             elif len(rows)!=1 or rows[0][0]!=kind:raise ValueError()
             backend=self.service.model_supervisor.backend
+            from runner.local_scope import valid_scope_identity
             for _,unit,state,cgroup,invocation in rows:
                 observed=backend.inspect(unit)
-                if state!='terminated' or observed.get('id')!=unit or observed.get('active')!='inactive' or observed.get('load') not in ('loaded','not-found') or (observed.get('load')=='loaded' and observed.get('invocation') not in ('',invocation)) or not backend.empty_cgroup(cgroup):raise ValueError()
+                if state!='terminated' or not valid_scope_identity(unit,invocation,cgroup) or observed.get('id')!=unit or observed.get('active')!='inactive' or observed.get('load') not in ('loaded','not-found') or (observed.get('load')=='loaded' and observed.get('invocation') not in ('',invocation)) or not backend.empty_cgroup(cgroup):raise ValueError()
             prefix='/repos/'+target['repo']
             if kind=='push':
                 path=prefix+'/git/ref/heads/'+urllib.parse.quote(target['branch'],safe='/')
