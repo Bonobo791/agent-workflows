@@ -131,12 +131,16 @@ class PRBridge:
                 self.service.graph._lease(run,graph_claim)
                 job=db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
                 if not job or job[0]!='running' or not isinstance(queue_claim,str) or not isinstance(job[1],str) or not secrets.compare_digest(queue_claim,job[1]) or job[2] is None or job[2]<=time.time(): raise PRBridgeError('queue claim unavailable')
-                if db.execute('SELECT run,kind,state FROM pr_bridge_operations WHERE proposal=?',(ref,)).fetchone()!=(run,proposal.get('kind'),'approved') or db.execute('SELECT 1 FROM action_scopes WHERE run=?',(run,)).fetchone(): raise PRBridgeError('unused approval unavailable')
+                operation=db.execute('SELECT run,kind,state FROM pr_bridge_operations WHERE proposal=?',(ref,)).fetchone()
+                if not operation or operation[:2]!=(run,proposal.get('kind')) or operation[2] not in ('approved','proposed') or db.execute('SELECT 1 FROM action_scopes WHERE run=?',(run,)).fetchone(): raise PRBridgeError('unused approval unavailable')
+                if db.execute('SELECT manifest FROM action_bindings WHERE run=? AND action=? AND version=?',(run,proposal['action'],proposal['target']['head'])).fetchone()!=(BoundLedger.encode(proposal['target']),): raise PRBridgeError('approval binding unavailable')
+                if operation[2]=='proposed' and db.execute("SELECT 1 FROM pr_bridge_operations WHERE run=? AND proposal<>? AND (state IS NULL OR state NOT IN ('proposed','not_executed','executed','desired_state_observed','reconciled'))",(run,ref)).fetchone(): raise PRBridgeError('other operation unresolved')
                 prior=db.execute('SELECT COALESCE(MAX(id),0) FROM action_audit').fetchone()[0]
                 if db.execute("UPDATE external_actions SET status='revoked',actor='local-owner',updated=? WHERE run=? AND action=? AND version=? AND status='approved'",(time.time(),run,proposal['action'],proposal['target']['head'])).rowcount!=1: raise PRBridgeError('approval unavailable')
                 if not db.execute("SELECT 1 FROM action_audit WHERE id>? AND run=? AND action=? AND version=? AND status='revoked' AND actor='local-owner'",(prior,run,proposal['action'],proposal['target']['head'])).fetchone(): raise PRBridgeError('approval audit unavailable')
-                if db.execute("UPDATE pr_bridge_operations SET state='proposed' WHERE proposal=? AND state='approved'",(ref,)).rowcount!=1: raise PRBridgeError('proposal changed')
-                if db.execute("INSERT INTO pr_reauthorization_history(proposal,reason,actor,created) VALUES(?,'owner_withdrawn','local-owner',?)",(ref,time.time())).rowcount!=1: raise PRBridgeError('withdrawal history unavailable')
+                if operation[2]=='approved' and db.execute("UPDATE pr_bridge_operations SET state='proposed' WHERE proposal=? AND state='approved'",(ref,)).rowcount!=1: raise PRBridgeError('proposal changed')
+                reason='owner_withdrawn' if operation[2]=='approved' else 'orphaned_approval_withdrawn'
+                if db.execute("INSERT INTO pr_reauthorization_history(proposal,reason,actor,created) VALUES(?,?,'local-owner',?)",(ref,reason,time.time())).rowcount!=1: raise PRBridgeError('withdrawal history unavailable')
                 db.execute('COMMIT');return {'revoked':True,'proposal':ref}
             except Exception: db.execute('ROLLBACK');raise
         except Exception: raise PRBridgeError('approval withdrawal unavailable') from None

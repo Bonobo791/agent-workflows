@@ -232,6 +232,20 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     self.assertIsNone(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone())
                     service.graph.db.execute('DROP TRIGGER expire_graph_during_approval')
                     control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':wrong['proposal'],'expires':time.time()+60})
+                    service.graph.db.execute("UPDATE pr_bridge_operations SET state='proposed' WHERE proposal=?",(wrong['proposal'],))
+                    withdrawal={**base_req,'action':'pr_withdraw','proposal':wrong['proposal']}
+                    for state in ('approved','uncertain','observed','unknown'):
+                        service.graph.db.execute("INSERT INTO pr_bridge_operations VALUES('other','run-1','draft',?,NULL)",(state,))
+                        with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
+                        service.graph.db.execute("DELETE FROM pr_bridge_operations WHERE proposal='other'")
+                    manifest=service.graph.db.execute('SELECT manifest FROM action_bindings WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone()[0]
+                    service.graph.db.execute('UPDATE action_bindings SET manifest=? WHERE run=? AND action=?',('{}','run-1',wrong['action']))
+                    with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
+                    service.graph.db.execute('UPDATE action_bindings SET manifest=? WHERE run=? AND action=?',(manifest,'run-1',wrong['action']))
+                    self.assertTrue(control.handle('x'*40,withdrawal)['revoked'])
+                    self.assertEqual(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone(),('revoked',))
+                    self.assertEqual(service.graph.db.execute('SELECT reason FROM pr_reauthorization_history WHERE proposal=? ORDER BY id DESC LIMIT 1',(wrong['proposal'],)).fetchone(),('orphaned_approval_withdrawn',))
+                    control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':wrong['proposal'],'expires':time.time()+60})
                     with self.assertRaises(ControlError): control.handle('x'*40,{**base_req,'action':'pr_execute','proposal':wrong['proposal']})
                     nonexecution=control.handle('x'*40,{**base_req,'action':'pr_reauthorize','proposal':wrong['proposal']})
                     self.assertEqual(nonexecution['reason'],'confirmed_not_executed')
