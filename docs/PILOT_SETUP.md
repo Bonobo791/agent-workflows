@@ -42,6 +42,8 @@ must not contain private skills, credentials, user data or session histories.
   credential belongs in an owner-only file referenced by `PLAN_TOKEN_FILE`.
   Task intake requires owner fields to be null or nonempty strings and dates
   to be null or canonical `YYYY-MM-DD`; malformed values block admission.
+  The returned issue identifier and blocker IDs must match the requested
+  records, and status IDs must be positive integers rather than booleans.
   In local mode, omit `GITHUB_TOKEN_FILE` to use the existing `gh` sign-in for
   read-only GitHub access; an explicit token file remains supported. Do not put
   credentials in the task JSON, model input or images. When the local worker uses

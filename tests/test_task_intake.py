@@ -14,6 +14,19 @@ class FakePlan:
         return {'ok':True,'data':{'items':[],'nextCursor':None} if name=='list_issue_activity' else []}
 
 class SingleTaskTests(unittest.TestCase):
+    def test_wrong_tracker_issue_never_admits_or_queues_task(self):
+        class WrongIssue(FakePlan):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number); result['data']['identifier']='DEMO-2'; return result
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                intake=SingleTaskIntake(service,WrongIssue(),lambda *_:[],{'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'})
+                with self.assertRaises(PlanError): intake.submit('run','marketing','DEMO',1)
+                self.assertIsNone(service.queue.get('run'))
+                self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_runs WHERE id='run'").fetchone())
+            finally: service.close()
+
     def test_invalid_schedule_never_admits_or_queues_task(self):
         class InvalidSchedule(FakePlan):
             def get_issue(self,project,number):

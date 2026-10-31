@@ -4,11 +4,14 @@ from datetime import date
 class PlanError(RuntimeError): pass
 
 def inspect_issue(client,project_key,number,*,ready_columns,completed_columns,blocker_direction,external_work=None,today=None):
-    if not ready_columns or not completed_columns or blocker_direction not in ('inward','outward'): raise PlanError('project-specific status and relation policy required')
+    if not isinstance(project_key,str) or not project_key or type(number) is not int or number<1: raise PlanError('exact task reference required')
+    if not ready_columns or not completed_columns or any(type(value) is not int or value<1 for value in (*ready_columns,*completed_columns)) or blocker_direction not in ('inward','outward'): raise PlanError('project-specific status and relation policy required')
     result=client.get_issue(project_key,number)
     data=result.get('data') if isinstance(result,dict) and result.get('ok') is True else None
     required=('id','identifier','title','description','columnId','archivedAt','assigneeUserId','delegateUserId','dueDate','startDate','subtasks','links','development','updatedAt')
     if not isinstance(data,dict) or any(key not in data for key in required): raise PlanError('issue snapshot incomplete')
+    expected=project_key.rsplit('.',1)[-1]+'-'+str(number)
+    if not isinstance(data['identifier'],str) or data['identifier'].upper()!=expected.upper() or type(data['id']) is not int or data['id']<1 or type(data['columnId']) is not int or data['columnId']<1: raise PlanError('task identity or status invalid')
     for field in ('assigneeUserId','delegateUserId'):
         value=data[field]
         if value is not None and (not isinstance(value,str) or not value.strip()): raise PlanError('invalid task owner')
@@ -32,9 +35,10 @@ def inspect_issue(client,project_key,number,*,ready_columns,completed_columns,bl
         if link['kind']=='blocks' and link['direction']==blocker_direction:
             try: linked_id=link['issue']['id']
             except (KeyError,TypeError): raise PlanError('invalid blocker') from None
+            if type(linked_id) is not int or linked_id<1: raise PlanError('invalid blocker')
             linked=client.call('get_issue',{'issueId':linked_id})
             item=linked.get('data') if isinstance(linked,dict) and linked.get('ok') is True else None
-            if not isinstance(item,dict) or 'columnId' not in item: raise PlanError('blocker status unavailable')
+            if not isinstance(item,dict) or type(item.get('id')) is not int or item['id']!=linked_id or type(item.get('columnId')) is not int or item['columnId']<1: raise PlanError('blocker status unavailable')
             if item['columnId'] not in completed_columns: dependencies=False
     existing=list(data['development'])+list(attachments['data'])
     if external_work is None: existing=None  # repository/PR and linked-document search not yet confirmed
