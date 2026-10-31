@@ -238,6 +238,13 @@ class EngineeringEntrypointTests(unittest.TestCase):
                         service.graph.db.execute("INSERT INTO pr_bridge_operations VALUES('other','run-1','draft',?,NULL)",(state,))
                         with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
                         service.graph.db.execute("DELETE FROM pr_bridge_operations WHERE proposal='other'")
+                    service.actions.approve('run-1','fixture-other','v1','owner')
+                    service.actions.reserve('run-1','fixture-other','v1')
+                    with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
+                    service.graph.db.execute("UPDATE external_actions SET status='unknown' WHERE run='run-1' AND action='fixture-other'")
+                    with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
+                    service.graph.db.execute("UPDATE external_actions SET status='uncertain' WHERE run='run-1' AND action='fixture-other'")
+                    service.actions.resolve('run-1','fixture-other','v1','not_executed')
                     manifest=service.graph.db.execute('SELECT manifest FROM action_bindings WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone()[0]
                     service.graph.db.execute('UPDATE action_bindings SET manifest=? WHERE run=? AND action=?',('{}','run-1',wrong['action']))
                     with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
