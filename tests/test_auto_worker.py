@@ -52,6 +52,45 @@ class AutoWorkerTests(unittest.TestCase):
                     second.stop()
                     if second.thread:second.thread.join(timeout=5)
 
+    def test_inflight_heartbeat_after_checkpoint_does_not_fence_requeued_run(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);entered=threading.Event();release=threading.Event();calls=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):return {'status':'blocked'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            def heartbeat(*args,**kwargs):
+                calls.append(1)
+                if len(calls)>1:entered.set();release.wait(5)
+                return renew_leases(*args,**kwargs)
+            worker=AutoWorker(factory,root)
+            try:
+                with patch('runner.auto_worker.renew_leases',side_effect=heartbeat):
+                    worker.start();self.assertTrue(entered.wait(15))
+                    self.assertTrue(worker.status()['checkpoint_available']);worker.request_checkpoint('r')
+                    deadline=time.monotonic()+5
+                    while worker.status()['status']!='checkpointed' and time.monotonic()<deadline:time.sleep(.01)
+                    self.assertEqual(worker.status()['status'],'checkpointed');release.set();worker.thread.join(timeout=5)
+                    self.assertFalse(worker.thread.is_alive())
+                with sqlite3.connect(root/'state.db') as db:
+                    self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('queued',))
+                    self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
+            finally:
+                release.set();worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
     def test_stop_during_checkpoint_does_not_fence_requeued_run(self):
         import threading
         from types import SimpleNamespace
