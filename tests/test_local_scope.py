@@ -13,6 +13,46 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    def test_missing_events_in_existing_cgroup_is_not_termination_evidence(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.local_scope import SystemdScopes
+        with tempfile.TemporaryDirectory() as root:
+            base=Path(root); (base/'cgroup.controllers').write_text('cpu')
+            group=base/'user.slice'/'run.scope'; group.mkdir(parents=True)
+            def cgroup_path(value):
+                path=Path(value)
+                return base/path.relative_to('/sys/fs/cgroup') if path.is_relative_to('/sys/fs/cgroup') else path
+            with patch('runner.local_scope.Path',side_effect=cgroup_path):
+                backend=SystemdScopes({})
+                self.assertFalse(backend.empty_cgroup('/user.slice/run.scope'))
+                (group/'cgroup.events').write_text('populated 1\n')
+                self.assertFalse(backend.empty_cgroup('/user.slice/run.scope'))
+                (group/'cgroup.events').write_text('populated 0\n')
+                self.assertTrue(backend.empty_cgroup('/user.slice/run.scope'))
+                (group/'cgroup.events').unlink(); group.rmdir()
+                self.assertTrue(backend.empty_cgroup('/user.slice/run.scope'))
+
+    def test_stop_stays_unresolved_when_cgroup_events_are_missing(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.local_scope import SystemdScopes
+        with tempfile.TemporaryDirectory() as root:
+            base=Path(root)/'cgroups';base.mkdir();(base/'cgroup.controllers').write_text('cpu')
+            backend=Backend();systemd=SystemdScopes({})
+            backend.empty_cgroup=systemd.empty_cgroup
+            scopes=LocalScopes(root+'/state.db',backend)
+            try:
+                unit=scopes.reserve('run');backend.unit=unit;scopes.bind('run',unit)
+                (base/'user.slice'/unit).mkdir(parents=True)
+                def cgroup_path(value):
+                    path=Path(value)
+                    return base/path.relative_to('/sys/fs/cgroup') if path.is_relative_to('/sys/fs/cgroup') else path
+                with patch('runner.local_scope.Path',side_effect=cgroup_path):
+                    with self.assertRaises(ScopeError): scopes.stop('run',unit)
+                self.assertEqual(scopes.state('run',unit),'stopping')
+            finally: scopes.close()
+
     def test_conflicting_legacy_unknown_scope_states_fail_closed_without_data_loss(self):
         with tempfile.TemporaryDirectory() as root:
             path=root+'/state.db';db=sqlite3.connect(path)
