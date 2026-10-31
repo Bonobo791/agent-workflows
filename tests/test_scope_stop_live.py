@@ -40,6 +40,7 @@ scopes.stop('run',sys.argv[2])
             unit = scopes.reserve('run')
             launcher = subprocess.Popen(['/usr/bin/systemd-run', '--user', '--scope', '--quiet', '--unit', unit, '--', '/usr/bin/sleep', '120'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             worker = None
+            worker_errors = tempfile.TemporaryFile()
             try:
                 deadline = time.monotonic() + 10
                 while True:
@@ -51,11 +52,13 @@ scopes.stop('run',sys.argv[2])
                             raise
                         time.sleep(.05)
                 group = backend.inspect(unit)['cgroup']
-                worker = subprocess.Popen([sys.executable, '-c', code, state, unit, str(marker), phase], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                worker = subprocess.Popen([sys.executable, '-c', code, state, unit, str(marker), phase], stdout=subprocess.DEVNULL, stderr=worker_errors)
                 deadline = time.monotonic() + 10
                 while not marker.exists() and worker.poll() is None and time.monotonic() < deadline:
                     time.sleep(.02)
-                self.assertTrue(marker.exists(), 'stop caller did not reach the request boundary')
+                if not marker.exists():
+                    worker_errors.seek(0)
+                    self.fail(f'stop caller did not reach the request boundary (exit={worker.poll()}): {worker_errors.read(2000).decode(errors="replace")}')
                 worker.kill()
                 worker.wait(timeout=5)
                 self.assertEqual(scopes.state('run', unit), 'stopping')
@@ -79,6 +82,7 @@ scopes.stop('run',sys.argv[2])
                 except subprocess.TimeoutExpired:
                     launcher.kill()
                     launcher.wait(timeout=5)
+                worker_errors.close()
                 scopes.close()
 
     def test_killed_with_stop_request_in_flight(self):
@@ -124,6 +128,7 @@ scopes.stop('run',sys.argv[2])
             launcher = subprocess.Popen(['/usr/bin/systemd-run', '--user', '--scope', '--quiet', '--unit', unit, '--', sys.executable, '-c', target_code, str(received), str(release), str(ready)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             worker = None
             fd = None
+            worker_errors = tempfile.TemporaryFile()
             try:
                 deadline = time.monotonic() + 10
                 while not ready.exists() and launcher.poll() is None and time.monotonic() < deadline:
@@ -131,11 +136,13 @@ scopes.stop('run',sys.argv[2])
                 self.assertTrue(ready.exists(), 'scope did not start')
                 scopes.bind('run', unit)
                 group = backend.inspect(unit)['cgroup']
-                worker = subprocess.Popen([sys.executable, '-c', caller_code, state, unit, str(stop_pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                worker = subprocess.Popen([sys.executable, '-c', caller_code, state, unit, str(stop_pid)], stdout=subprocess.DEVNULL, stderr=worker_errors)
                 deadline = time.monotonic() + 10
                 while not (stop_pid.exists() and received.exists()) and worker.poll() is None and time.monotonic() < deadline:
                     time.sleep(.02)
-                self.assertTrue(stop_pid.exists() and received.exists(), 'stop request did not reach the scope')
+                if not (stop_pid.exists() and received.exists()):
+                    worker_errors.seek(0)
+                    self.fail(f'stop request did not reach the scope (exit={worker.poll()}): {worker_errors.read(2000).decode(errors="replace")}')
                 fd = os.pidfd_open(int(stop_pid.read_text()))
                 self.assertFalse(select.select([fd], [], [], 0)[0], 'stop client exited before interruption')
                 worker.kill()
@@ -165,4 +172,5 @@ scopes.stop('run',sys.argv[2])
                 except subprocess.TimeoutExpired:
                     launcher.kill()
                     launcher.wait(timeout=5)
+                worker_errors.close()
                 scopes.close()
