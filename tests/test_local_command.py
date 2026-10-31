@@ -22,6 +22,23 @@ class LocalCommandTests(unittest.TestCase):
             self.assertFalse(backend.verify_terminal('job','run',0))
             self.assertFalse(backend.verify_terminal('job','run',1));self.assertFalse(backend.verify_terminal('job','other',0));self.assertFalse(backend.verify_terminal('other','run',0))
             scopes.close()
+    def test_unbound_reserved_command_cannot_launch(self):
+        import time
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.local_command import _run_scoped
+        with tempfile.TemporaryDirectory() as root:
+            supervisor=SimpleNamespace(db=str(Path(root)/'state.db'),backend=Backend(),environment={'HOME':root})
+            from runner.engineering_workspace import EngineeringWorkspace
+            (Path(root)/'workspaces').mkdir(mode=0o700)
+            registry=EngineeringWorkspace(root);registry.close();LocalCommandBackend(supervisor)
+            scopes=LocalScopes(supervisor.db,supervisor.backend);unit=scopes.reserve('run');scopes.close()
+            with patch('runner.local_command.subprocess.Popen') as launch:
+                with self.assertRaises(LocalCommandError):
+                    _run_scoped(supervisor,'run',root,['/bin/true'],{},time.monotonic()+10,1024,lambda _:None,reserved_command=('job',unit))
+                launch.assert_not_called()
+
     def test_unverified_runtime_fails_before_command_launch(self):
         with tempfile.TemporaryDirectory() as root:
             backend=LocalCommandBackend(Supervisor(root+'/state.db',Backend()))

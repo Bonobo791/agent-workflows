@@ -30,6 +30,19 @@ def reserve_scope(db,run):
     db.execute("INSERT INTO local_scopes(run,unit,state) VALUES(?,?,'starting')",(run,unit))
     return unit
 
+def reserve_for_execution(db,run,backend,workspace,workspace_claim=None):
+    scopes=LocalScopes(db,backend)
+    try:
+        if workspace_claim is None: return scopes.reserve(run)
+        from runner.engineering_workspace import EngineeringWorkspace
+        if not isinstance(workspace_claim,tuple) or len(workspace_claim)!=3 or Path(db).resolve()!=Path(workspace_claim[0]).resolve()/'state.db': raise ScopeError('workspace claim state mismatch')
+        registry=EngineeringWorkspace(workspace_claim[0])
+        try:
+            _,unit=registry.claim_local(run,workspace_claim[1],workspace_claim[2],expected_path=str(workspace))
+            return unit
+        finally: registry.close()
+    finally: scopes.close()
+
 class SystemdScopes:
     def __init__(self, environment):
         self.environment=dict(environment)

@@ -5,7 +5,7 @@ import stat
 import subprocess
 import time
 from runner.adapter import managed_app_server_spec, verify_managed_workspace
-from runner.local_scope import LocalScopes, ScopeError
+from runner.local_scope import LocalScopes, ScopeError, reserve_for_execution
 from runner.process_transport import ProcessTransport
 
 class LocalProcessError(RuntimeError): pass
@@ -50,18 +50,7 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
     except (OSError,TypeError,ValueError): raise LocalProcessError('private canonical workspace required') from None
     manager_env={k:environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in environment}
     manager_env['PATH']='/usr/bin:/bin'
-    scopes=LocalScopes(db,backend)
-    try:
-        if workspace_claim is None: unit=scopes.reserve(run)
-        else:
-            from runner.engineering_workspace import EngineeringWorkspace
-            if not isinstance(workspace_claim,tuple) or len(workspace_claim)!=3 or Path(db).resolve()!=Path(workspace_claim[0]).resolve()/'state.db': raise LocalProcessError('workspace claim state mismatch')
-            registry=EngineeringWorkspace(workspace_claim[0])
-            try:
-                claimed,unit=registry.claim_local(run,workspace_claim[1],workspace_claim[2])
-                if claimed!=str(path): raise LocalProcessError('engineering workspace changed')
-            finally: registry.close()
-    finally: scopes.close()
+    unit=reserve_for_execution(db,run,backend,path,workspace_claim)
     try:
         state=Path(db).parent
         info=state.lstat()

@@ -18,6 +18,15 @@ from runner.otel_audit import OpenTelemetryAuditExporter, OpenTelemetryAuditTrac
 
 
 class AuditExportTests(unittest.TestCase):
+    def test_workspace_scope_binding_projection_correlates_without_raw_ids(self):
+        from runner.otel_audit import _attributes
+        row={'id':1,'schema_version':1,'run':'private-run','assignment':'private-assignment','unit':'private-unit','status':'bound','created':1}
+        event=project_event('workspace_scope_audit',row,b'x'*32)
+        scope=project_event('local_scope_audit',{'id':2,'schema_version':1,'run':'private-run','unit':'private-unit','state':'starting','created':1},b'x'*32)
+        self.assertEqual(event['scope_id'],scope['scope_id'])
+        self.assertIsNotNone(event['execution_id']);self.assertEqual(event['status'],'bound')
+        self.assertNotIn('private',str(event));self.assertEqual(_attributes(event)['kind'],'workspace_scope_audit')
+
     @unittest.skipUnless(OTLPSpanExporter is not None, 'optional OpenTelemetry OTLP exporter unavailable')
     def test_unavailable_otlp_receiver_replays_after_cursor_restart(self):
         import http.server

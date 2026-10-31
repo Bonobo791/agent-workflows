@@ -7,12 +7,12 @@ import sqlite3
 import subprocess
 import time
 from runner.adapter import managed_app_server_spec
-from runner.local_scope import LocalScopes
+from runner.local_scope import LocalScopes, reserve_for_execution
 from runner.process_transport import ProcessTransport
 
 class LocalCommandError(RuntimeError): pass
 
-def run_scoped_sandbox(supervisor,run,workspace,argv,deadline,output_limit,on_reserved,*,output_dir=None,on_started=None,read_dirs=None):
+def run_scoped_sandbox(supervisor,run,workspace,argv,deadline,output_limit,on_reserved,*,output_dir=None,on_started=None,read_dirs=None,workspace_claim=None,reserved_command=None):
     s=supervisor
     if read_dirs is not None:
         try:
@@ -21,14 +21,22 @@ def run_scoped_sandbox(supervisor,run,workspace,argv,deadline,output_limit,on_re
         except (TypeError,ValueError): raise LocalCommandError('read roots must be separate from workspace') from None
     app,child_env=managed_app_server_spec(s.executable,s.environment,disabled_integrations=s.disabled_integrations,output_dir=output_dir,read_dirs=read_dirs)
     sandbox=[app[0],'sandbox','-C',workspace,'-P','workflow_local',*app[4:],'--',*argv]
-    return _run_scoped(s,run,workspace,sandbox,child_env,deadline,output_limit,on_reserved,on_started)
+    return _run_scoped(s,run,workspace,sandbox,child_env,deadline,output_limit,on_reserved,on_started,workspace_claim=workspace_claim,reserved_command=reserved_command)
 
-def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved,on_started=None,*,input_data=None):
+def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved,on_started=None,*,input_data=None,workspace_claim=None,reserved_command=None):
     manager={k:s.environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in s.environment};manager['PATH']='/usr/bin:/bin'
-    scopes=LocalScopes(s.db,s.backend)
-    try: unit=scopes.reserve(run)
-    finally:scopes.close()
-    on_reserved(unit)
+    if reserved_command is None:
+        unit=reserve_for_execution(s.db,run,s.backend,workspace,workspace_claim)
+        on_reserved(unit)
+    else:
+        if workspace_claim is not None or not isinstance(reserved_command,tuple) or len(reserved_command)!=2: raise LocalCommandError('invalid command reservation')
+        assignment,unit=reserved_command
+        db=sqlite3.connect(s.db)
+        try:
+            row=db.execute("SELECT 1 FROM local_command_scopes c JOIN local_scopes x ON x.run=c.run AND x.unit=c.unit JOIN engineering_local_scopes m ON m.run=c.run AND m.assignment=c.assignment AND m.unit=c.unit JOIN engineering_workspaces w ON w.run=c.run AND w.assignment=c.assignment WHERE c.assignment=? AND c.run=? AND c.unit=? AND c.exit_code IS NULL AND x.state='starting' AND w.path=?",(assignment,run,unit,workspace)).fetchone()
+            if not row: raise LocalCommandError('command reservation unavailable')
+        finally: db.close()
+
     relay=str(Path(__file__).with_name('local_command_child.py').resolve(strict=True))
     command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']+[k+'='+v for k,v in child_env.items()]+['/usr/bin/python3','-I',relay]
     process=None; stopped=False
@@ -81,6 +89,11 @@ class LocalCommandBackend:
         try: db.execute('CREATE TABLE IF NOT EXISTS local_command_scopes(assignment TEXT PRIMARY KEY,run TEXT NOT NULL,unit TEXT NOT NULL UNIQUE,exit_code INTEGER)')
         finally:db.close()
     def _db(self): return sqlite3.connect(self.supervisor.db,timeout=10,isolation_level=None)
+    def reserve_local_scope(self,db,assignment,run):
+        from runner.local_scope import reserve_scope
+        unit=reserve_scope(db,run)
+        db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit))
+        db.execute('INSERT INTO local_command_scopes(assignment,run,unit) VALUES(?,?,?)',(assignment,run,unit))
     def verify_terminal(self,assignment,run,exit_code):
         if type(exit_code) is not int:return False
         from runner.local_scope import valid_scope_identity
@@ -101,11 +114,11 @@ class LocalCommandBackend:
             approved=db.execute("SELECT 1 FROM external_actions WHERE run='controller' AND action='command_policy' AND version=? AND status='approved'",(policy,)).fetchone()
             if row!=(run,commit,policy,'uncertain') or bound!=(workspace,s.policy_hash,assignment) or not approved: raise LocalCommandError('exact command and workspace approval required')
         finally:db.close()
-        def record(unit):
-            db=self._db()
-            try:db.execute('INSERT INTO local_command_scopes(assignment,run,unit) VALUES(?,?,?)',(assignment,run,unit))
-            finally:db.close()
-        result=run_scoped_sandbox(s,run,workspace,argv,deadline,output_limit,record)
+        db=self._db()
+        try: row=db.execute('SELECT unit FROM local_command_scopes WHERE assignment=? AND run=? AND exit_code IS NULL',(assignment,run)).fetchone()
+        finally: db.close()
+        if not row: raise LocalCommandError('command reservation unavailable')
+        result=run_scoped_sandbox(s,run,workspace,argv,deadline,output_limit,lambda _:None,reserved_command=(assignment,row[0]))
         unit=result.pop('unit')
         db=self._db()
         try:

@@ -54,6 +54,37 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(assignment,))
             self.assertEqual(self.registry.db.execute('SELECT run,unit FROM engineering_local_scopes WHERE assignment=?',(assignment,)).fetchone(),('run-1',unit))
             self.assertEqual(scopes.state('run-1',unit),'starting')
+            from runner.audit_export import read_events
+            events,cursor=read_events(self.registry.db,'workspace_scope_audit',0,10,b'x'*32)
+            self.assertEqual((cursor,events[0]['status']),(1,'bound'))
+            self.assertNotIn(unit,str(events));self.assertNotIn(assignment,str(events))
+            scope_events,_=read_events(scopes.db,'local_scope_audit',0,10,b'x'*32)
+            self.assertEqual(events[0]['scope_id'],scope_events[0]['scope_id'])
+        finally: scopes.close()
+
+    def test_workspace_scope_audit_failure_rolls_back_reservation(self):
+        import sqlite3
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            self.registry.db.execute("CREATE TRIGGER reject_workspace_scope_audit BEFORE INSERT ON workspace_scope_audit BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+            with self.assertRaises(sqlite3.IntegrityError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy)
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            for table in ('local_scopes','engineering_local_scopes','local_scope_audit','workspace_scope_audit'):
+                self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
+        finally: scopes.close()
+
+    def test_local_claim_rejects_changed_expected_workspace_without_reservation(self):
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            with self.assertRaises(WorkspaceError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy,expected_path=str(self.root/'other'))
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scopes').fetchone(),(0,))
         finally: scopes.close()
 
     def test_interrupted_local_launch_preserves_exact_workspace_scope_binding(self):
@@ -235,17 +266,17 @@ from pathlib import Path
 from runner.engineering_workspace import EngineeringWorkspace
 from runner.local_scope import LocalScopes,SystemdScopes,ScopeError
 root,policy,assignment,ready=sys.argv[1:]
-registry=EngineeringWorkspace(root);registry.claim('run-1',assignment,policy)
+registry=EngineeringWorkspace(root)
 backend=SystemdScopes(os.environ);scopes=LocalScopes(str(Path(root)/'state.db'),backend)
-unit=scopes.reserve('run-1')
+_,unit=registry.claim_local('run-1',assignment,policy)
 launcher=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 deadline=time.monotonic()+10
 while True:
-    try: scopes.bind('run-1',unit);break
-    except ScopeError:
-        if launcher.poll() is not None or time.monotonic()>=deadline: raise
-        time.sleep(.05)
-registry.bind_local_scope('run-1',assignment,unit)
+    try:
+        if backend.inspect(unit)['active']=='active': break
+    except ScopeError: pass
+    if launcher.poll() is not None or time.monotonic()>=deadline: raise RuntimeError('scope did not start')
+    time.sleep(.05)
 Path(ready).write_text(unit)
 time.sleep(60)
 '''
@@ -264,7 +295,7 @@ time.sleep(60)
                 unit=ready.read_text();group=backend.inspect(unit)['cgroup']
                 worker.kill();self.assertEqual(worker.wait(timeout=5),-9)
                 self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
-                self.assertEqual(scopes.state('run-1',unit),'running')
+                self.assertEqual(scopes.state('run-1',unit),'starting')
                 stop=self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
                 self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
                 release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}

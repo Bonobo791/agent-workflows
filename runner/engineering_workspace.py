@@ -24,6 +24,9 @@ class EngineeringWorkspace:
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_workspace_approvals(run TEXT PRIMARY KEY,binding_hash TEXT NOT NULL,actor TEXT NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_local_scopes(run TEXT NOT NULL,assignment TEXT PRIMARY KEY,unit TEXT NOT NULL UNIQUE)')
         self.db.execute('CREATE TABLE IF NOT EXISTS workspace_recovery_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,assignment TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS workspace_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,assignment TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
+        self.db.execute("""CREATE TRIGGER IF NOT EXISTS workspace_scope_audit_insert AFTER INSERT ON engineering_local_scopes BEGIN
+            INSERT INTO workspace_scope_audit(schema_version,run,assignment,unit,status,created) VALUES(1,NEW.run,NEW.assignment,NEW.unit,'bound',(julianday('now')-2440587.5)*86400.0); END""")
     def close(self): self.db.close()
     def _git(self,path,*args):
         try:
@@ -75,11 +78,12 @@ class EngineeringWorkspace:
             path=self._claim(run,assignment,policy)
             self.db.execute('COMMIT'); return path
         except Exception: self.db.execute('ROLLBACK'); raise
-    def claim_local(self,run,assignment,policy):
+    def claim_local(self,run,assignment,policy,*,expected_path=None):
         from runner.local_scope import reserve_scope
         self.db.execute('BEGIN IMMEDIATE')
         try:
             path=self._claim(run,assignment,policy)
+            if expected_path is not None and path!=expected_path: raise WorkspaceError('engineering workspace changed')
             unit=reserve_scope(self.db,run)
             self.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit))
             self.db.execute('COMMIT'); return path,unit

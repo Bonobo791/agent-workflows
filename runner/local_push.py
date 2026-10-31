@@ -51,19 +51,11 @@ class LocalPushTransport:
             if target.get('repo')!=repo or target.get('branch')!=branch or target.get('head')!=head or target.get('diff')!=hashlib.sha256(workspace['diff'].encode()).hexdigest(): raise LocalPushError('approved push target changed')
             db.execute("INSERT INTO local_push_attempts VALUES(?,?,?,?,?,'reserved')",(assignment,self.run,action,scope,head));db.execute('COMMIT')
         except Exception:db.execute('ROLLBACK');raise
-        registry=EngineeringWorkspace(s.engineering_root)
-        try:
-            if registry.claim(self.run,assignment,s.policy_hash)!=workspace['path']:raise LocalPushError('workspace changed')
-        finally:registry.close()
         def record(kind):
             def save(unit): db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,self.run,action,scope,kind))
             return save
-        def bind(unit):
-            registry=EngineeringWorkspace(s.engineering_root)
-            try:registry.bind_local_scope(self.run,assignment,unit)
-            finally:registry.close()
         try:
-            with scoped_git_snapshot(s,self.run,workspace['path'],head,record('bundle'),on_started=bind) as (bare,bundle_unit):
+            with scoped_git_snapshot(s,self.run,workspace['path'],head,record('bundle'),workspace_claim=(s.engineering_root,assignment,s.policy_hash)) as (bare,bundle_unit):
                 require_fast_forward(bare,expected,head)
                 if workspace_snapshot(service,self.run,assignment=assignment)!=workspace or s.fence(self.run) is not True or not service.queue.may_start(self.run,self.queue_claim): raise LocalPushError('workspace or task changed')
                 env=dict(self.gh.environment);env.update({'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0','GIT_NO_REPLACE_OBJECTS':'1'})

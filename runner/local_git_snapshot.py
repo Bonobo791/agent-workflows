@@ -12,7 +12,7 @@ from runner.local_command import run_scoped_sandbox
 class SnapshotError(RuntimeError): pass
 
 @contextmanager
-def scoped_git_snapshot(supervisor,run,workspace,head,on_reserved,*,on_started=None):
+def scoped_git_snapshot(supervisor,run,workspace,head,on_reserved,*,on_started=None,workspace_claim=None):
     if not isinstance(head,str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',head) or not callable(on_reserved): raise SnapshotError('exact commit and scope recorder required')
     try:
         root=Path(supervisor.db).parent;info=root.lstat();work=Path(workspace);winfo=work.lstat()
@@ -24,7 +24,7 @@ def scoped_git_snapshot(supervisor,run,workspace,head,on_reserved,*,on_started=N
         bundle=str(Path(output)/'checkout.bundle')
         args=['/usr/bin/git','--no-replace-objects','-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-c','credential.helper=','bundle','create',bundle,'HEAD']
         try:
-            result=run_scoped_sandbox(supervisor,run,workspace,args,time.monotonic()+60,8192,on_reserved,output_dir=output,on_started=on_started)
+            result=run_scoped_sandbox(supervisor,run,workspace,args,time.monotonic()+60,8192,on_reserved,output_dir=output,on_started=on_started,**({'workspace_claim':workspace_claim} if workspace_claim is not None else {}))
             if result.get('outcome')!='exited' or result.get('exit_code')!=0 or not isinstance(result.get('unit'),str): raise ValueError()
         except Exception: raise SnapshotError('scoped Git bundle unavailable') from None
         with isolated_git_snapshot(bundle,head,str(root)) as bare:
