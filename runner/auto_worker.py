@@ -32,7 +32,12 @@ class AutoWorker:
     def status(self):
         with self.guard: return {**self.state,'last_action':self.last_action,'last_checkpoint':self.last_checkpoint,'checkpoint_available':self.checkpoint_capable and self.at_gate and not self.stop_event.is_set() and not self.checkpoint_pending and self.pending_action is None and self.pending_decision is None}
     def _set(self,**value):
-        with self.guard: self.state=value
+        with self.guard:
+            if value.get('status')!='awaiting_review' and self.pending_decision is not None:
+                self.pending_decision=None
+                reason=value.get('reason')
+                value['reason']='human decision not applied; worker left review'+(f': {reason}' if reason else '')
+            self.state=value
     def start(self):
         with self.guard:
             if self.thread is not None: raise AutoWorkerError('automatic worker already started')

@@ -479,6 +479,43 @@ class AutoWorkerTests(unittest.TestCase):
                 worker.stop()
                 if worker.thread:worker.thread.join(timeout=5)
 
+    def test_leaving_review_discards_pending_decision_and_allows_checkpoint(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for next_state in ('blocked','rate_limited'):
+            with self.subTest(next_state=next_state),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);version='a'*64;decide=Mock();calls=[]
+                def factory():
+                    service,_=checkpoint_fixture(root)
+                    def step(*args):
+                        calls.append(1)
+                        if len(calls)==1:return {'status':'awaiting_review','stage':'assembly','version':version}
+                        return {'status':next_state,'reason':'upstream unavailable'}
+                    service.stage_dispatcher.step=step
+                    service.human_review=SimpleNamespace(current=lambda _:None,decide=decide)
+                    return service,None
+                worker=AutoWorker(factory,root)
+                try:
+                    worker.start();deadline=time.monotonic()+5
+                    while not worker.status().get('checkpoint_available') and time.monotonic()<deadline:time.sleep(.01)
+                    self.assertEqual(worker.status()['status'],'awaiting_review')
+                    worker.request_decision('r',version,'approved')
+                    deadline=time.monotonic()+5
+                    while (worker.status()['status']!=next_state or not worker.status().get('checkpoint_available')) and time.monotonic()<deadline:time.sleep(.01)
+                    status=worker.status()
+                    self.assertEqual(status['status'],next_state)
+                    self.assertTrue(status['checkpoint_available'])
+                    self.assertIn('human decision not applied',status['reason'])
+                    self.assertIn('upstream unavailable',status['reason'])
+                    decide.assert_not_called()
+                    self.assertTrue(worker.request_checkpoint('r')['pending'])
+                    worker.thread.join(timeout=5)
+                    self.assertFalse(worker.thread.is_alive())
+                    self.assertEqual(worker.status()['status'],'checkpointed')
+                finally:
+                    worker.stop()
+                    if worker.thread:worker.thread.join(timeout=5)
+
     def test_automatic_human_decision_requires_current_version(self):
         with tempfile.TemporaryDirectory() as root:
             worker=AutoWorker(lambda:None,Path(root)); version='a'*64
