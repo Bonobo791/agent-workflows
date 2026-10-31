@@ -13,7 +13,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def main():
     data=json.load(sys.stdin)
     parsed=urllib.parse.urlsplit(data['endpoint'])
-    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path.rstrip('/')!='/mcp': raise ValueError()
+    if parsed.scheme!='https' or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment or parsed.path.rstrip('/')!='/mcp': raise ValueError()
     timeout=data['timeout']
     if type(timeout) not in (int,float) or not math.isfinite(timeout) or timeout<=0: raise ValueError()
     signal.signal(signal.SIGALRM,signal.SIG_DFL); signal.setitimer(signal.ITIMER_REAL,timeout)

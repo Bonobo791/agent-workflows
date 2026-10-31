@@ -23,12 +23,16 @@ class FakeTransport:
         return (200,{'Content-Type':'text/event-stream'},('event: message\ndata: '+json.dumps({'jsonrpc':'2.0','id':message['id'],'result':{'structuredContent':{'ok':True,'data':{'identifier':'TEST-1'}}}})+'\n\n').encode())
 
 class MCPTests(unittest.TestCase):
+    def test_endpoint_rejects_empty_user_info(self):
+        with self.assertRaises(MCPError): HTTPSMCP('https://@example.com/mcp','token')
+
     def test_timeout_cleanup_does_not_mask_mcp_error(self):
         from unittest.mock import MagicMock
         process=MagicMock(); process.poll.return_value=None
         process.communicate.side_effect=subprocess.TimeoutExpired('helper',1)
+        client=HTTPSMCP('https://example.com/mcp','token')
         with patch('runner.plan_mcp.subprocess.Popen',return_value=process):
-            with self.assertRaises(MCPError): HTTPSMCP('https://example.com/mcp','token').post({}, {})
+            with self.assertRaises(MCPError): client.post({}, {})
         process.kill.assert_called_once()
         self.assertIsNotNone(process.communicate.call_args.kwargs.get('timeout'))
 

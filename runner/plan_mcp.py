@@ -15,11 +15,23 @@ from pathlib import Path
 
 class MCPError(RuntimeError): pass
 
+def _stop_helper(process):
+    if process is None or process.poll() is not None: return
+    try:
+        try: process.kill()
+        except ProcessLookupError: pass
+        process.communicate(timeout=1)
+    except (OSError,subprocess.TimeoutExpired):
+        for stream in (process.stdin,process.stdout):
+            try:
+                if stream is not None: stream.close()
+            except OSError: pass
+
 class HTTPSMCP:
     TIMEOUT=30
     def __init__(self,endpoint,token):
         parsed=urllib.parse.urlsplit(endpoint)
-        if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path.rstrip('/')!='/mcp': raise MCPError('HTTPS MCP endpoint required')
+        if parsed.scheme!='https' or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment or parsed.path.rstrip('/')!='/mcp': raise MCPError('HTTPS MCP endpoint required')
         if not isinstance(token,str) or not token or '\n' in token or '\r' in token: raise MCPError('credential required')
         self.endpoint,self.token=endpoint,token
     def post(self,message,headers):
@@ -35,17 +47,7 @@ class HTTPSMCP:
             if len(body)>2097152: raise ValueError()
             return result['status'],result['headers'],body
         except Exception: raise MCPError('MCP request failed') from None
-        finally:
-            if process is not None and process.poll() is None:
-                try:
-                    try: process.kill()
-                    except ProcessLookupError: pass
-                    process.communicate(timeout=1)
-                except (OSError,subprocess.TimeoutExpired):
-                    for stream in (process.stdin,process.stdout):
-                        try:
-                            if stream is not None: stream.close()
-                        except OSError: pass
+        finally: _stop_helper(process)
 
 class PlanMCP:
     ALLOWED={'get_issue_by_number','get_issue','list_attachments','list_issues','list_issue_activity'}
