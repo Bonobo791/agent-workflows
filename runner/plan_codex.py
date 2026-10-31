@@ -3,7 +3,9 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
+from pathlib import Path
 from runner.plan_mcp import PlanMCP
 from runner.process_transport import ProcessTransport
 from runner.protocol import AppServer
@@ -27,7 +29,8 @@ class CodexAppsPlan:
         try:
             if self.verify_policy() is not True: raise ValueError()
             deadline=time.monotonic()+self.TIMEOUT
-            process=subprocess.Popen([self.executable,'app-server'],cwd=self.workspace,env=self.environment,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0,start_new_session=True)
+            launcher=str(Path(__file__).with_name('plan_codex_launcher.py'))
+            process=subprocess.Popen([sys.executable,'-I',launcher,str(os.getpid()),self.executable],cwd=self.workspace,env=self.environment,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0,start_new_session=True)
             transport=ProcessTransport(process,deadline,lambda:False); server=AppServer(transport)
             server._request('initialize',{'clientInfo':{'name':'agent_workflows','version':'0.1.0'},'capabilities':{'experimentalApi':True}})
             transport.send({'method':'initialized','params':{}})

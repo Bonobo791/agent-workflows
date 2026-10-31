@@ -51,6 +51,9 @@ must not contain private skills, credentials, user data or session histories.
   The optional `test_signed_in_gateway_process_group_exits_after_caller_crash`
   uses the same variables, kills a disposable caller after it sends a tracker
   request, and checks the original gateway process group for live processes.
+  Gateway mode requires Linux parent-death signalling; if it cannot be set,
+  the gateway fails closed. The watchdog terminates the original process group
+  when its caller dies; it does not prove cleanup of processes that leave it.
   The app-server tool-call interface is experimental; revalidate it when the
   pinned Codex executable or connected account changes.
   The CLI waits up to 180 seconds for a task-admission response. A timeout or
