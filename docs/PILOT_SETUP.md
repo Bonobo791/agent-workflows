@@ -235,6 +235,27 @@ quiescent.
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.
+
+If the stop response includes `local_workspace`, the owner can call
+`release_local_workspace` with the exact `run`, `assignment`, and `unit` after
+the bound local scope is recorded as terminated. The run must remain fenced;
+this only releases that workspace claim and does not confirm worker termination
+or reconcile a remote outcome. A null unit means the claim has no recorded local
+scope binding and cannot be released through this control.
+The recorded claim can be inspected and a terminated bound claim released
+after restart without a local model supervisor. Stopping an active scope still
+requires the configured local supervisor and its systemd backend.
+If `manual_stop` returns `local_scopes_unavailable`, the stored scope schema
+cannot provide unit identities; inspect and reconcile that state before any
+stop confirmation.
+An unknown scope state is treated as unresolved. If an older database contains
+multiple unresolved scopes for one run, the stricter scope index fails closed;
+inspect that state before attempting recovery.
+Manual confirmation and local workspace release also require the recorded
+terminated scope to have a valid invocation ID and matching cgroup path.
+An invalid terminal identity is reported as `unverified` and also blocks a new
+scope reservation, session resume, mutation and correction recovery.
+
 The owner-only control action `inspect_local_scope` takes that exact `run` and
 `unit` and returns the recorded state, invocation and cgroup alongside the
 current systemd observation and whether the recorded cgroup is empty. A null

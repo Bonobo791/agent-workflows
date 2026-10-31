@@ -23,6 +23,7 @@ class EngineeringWorkspace:
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_workspaces(run TEXT PRIMARY KEY,repository TEXT NOT NULL,base TEXT NOT NULL,branch TEXT NOT NULL,owner INTEGER NOT NULL,path TEXT NOT NULL,policy TEXT NOT NULL,assignment TEXT)')
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_workspace_approvals(run TEXT PRIMARY KEY,binding_hash TEXT NOT NULL,actor TEXT NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_local_scopes(run TEXT NOT NULL,assignment TEXT PRIMARY KEY,unit TEXT NOT NULL UNIQUE)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS workspace_recovery_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,assignment TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
     def close(self): self.db.close()
     def _git(self,path,*args):
         try:
@@ -85,11 +86,18 @@ class EngineeringWorkspace:
             if not row: raise WorkspaceError('active local scope binding required')
             self.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit)); self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
-    def release_local(self,run,assignment,unit):
+    def release_local(self,run,assignment,unit,*,fenced=None):
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            row=self.db.execute("SELECT 1 FROM engineering_local_scopes m JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE m.run=? AND m.assignment=? AND m.unit=? AND s.state='terminated'",(run,assignment,unit)).fetchone()
-            if not row: raise WorkspaceError('terminal local scope evidence required')
+            if fenced is not None:
+                if not isinstance(fenced,tuple) or len(fenced)!=2 or any(not isinstance(x,str) or not x for x in fenced): raise WorkspaceError('invalid recovery fence')
+                fence=self.db.execute("SELECT 1 FROM manual_assignments a JOIN manual_workers w ON w.target=a.target JOIN jobs j ON j.run=a.run JOIN graph_runs g ON g.id=a.run WHERE a.run=? AND a.target=? AND a.incarnation=? AND a.state='pending' AND w.incarnation=a.incarnation AND w.state='assigned' AND j.status IN ('cancelling','uncertain') AND g.status='cancelled'",(run,*fenced)).fetchone()
+                if not fence: raise WorkspaceError('recovery fence changed')
+            from runner.local_scope import valid_scope_identity
+            row=self.db.execute("SELECT s.invocation,s.cgroup FROM engineering_local_scopes m JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE m.run=? AND m.assignment=? AND m.unit=? AND s.state='terminated'",(run,assignment,unit)).fetchone()
+            if not row or not valid_scope_identity(unit,*row): raise WorkspaceError('terminal local scope evidence required')
             if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')
+            if fenced is not None:
+                self.db.execute("INSERT INTO workspace_recovery_audit(schema_version,run,assignment,unit,status,created) VALUES(1,?,?,?,'released',(julianday('now')-2440587.5)*86400.0)",(run,assignment,unit))
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise

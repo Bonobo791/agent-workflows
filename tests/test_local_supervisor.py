@@ -13,6 +13,29 @@ class Handle:
 @patch('runner.local_supervisor.scope_preflight',return_value=True)
 @patch('runner.local_supervisor.sandbox_preflight',return_value=True)
 class SupervisorTests(unittest.TestCase):
+    def test_null_scope_state_blocks_session_resume(self,_sandbox,_scope):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            work=Path(root)/'work';work.mkdir(mode=0o700);binary=Path(root)/'codex';binary.write_text('x');binary.chmod(0o700)
+            db=root+'/db';connection=sqlite3.connect(db)
+            connection.execute('CREATE TABLE local_scopes(run TEXT,unit TEXT PRIMARY KEY,invocation TEXT,cgroup TEXT,state TEXT)')
+            connection.execute("INSERT INTO local_scopes(run,unit,state) VALUES('r','unknown.scope',NULL)")
+            connection.commit();connection.close()
+            supervisor=LocalSupervisor(db,str(binary),{'HOME':root},Backend(),lambda run:True,lambda run,role:str(work),lambda:True,{'mcp_servers':[],'plugins':[]})
+            _,binding=supervisor._binding('r','implement',{},'model')
+            connection=supervisor._db()
+            try:connection.execute("INSERT INTO local_sessions VALUES('r','implement','thread',?,'idle')",(binding,))
+            finally:connection.close()
+            self.assertFalse(supervisor.can_resume('r','implement','thread',{},'model'))
+            from runner.local_scope import LocalScopes, ScopeError
+            scopes=LocalScopes(db,Backend())
+            try:
+                with self.assertRaises(ScopeError): scopes.reserve('r')
+                scopes.db.execute("UPDATE local_scopes SET state='terminated',invocation='bad',cgroup='/wrong' WHERE run='r'")
+                self.assertFalse(supervisor.can_resume('r','implement','thread',{},'model'))
+                with self.assertRaises(ScopeError): scopes.reserve('r')
+            finally:scopes.close()
+
     def test_resume_requires_matching_role_model_skills_and_stopped_scope(self,_sandbox,_scope):
         with tempfile.TemporaryDirectory() as root:
             work=Path(root)/'work';work.mkdir(mode=0o700);binary=Path(root)/'codex';binary.write_text('x');binary.chmod(0o700)

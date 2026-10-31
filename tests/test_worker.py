@@ -306,6 +306,40 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(service.queue.get('run')['status'],'cancelling')
             finally: service.lifecycle.close(); service.close()
 
+    def test_manual_stop_reports_incomplete_scope_schema_without_unfencing(self):
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.control import ControlError
+        with tempfile.TemporaryDirectory() as root:
+            service,control=build_control(root,'x'*40,lifecycle_factory=lambda _:ManualLifecycle(root+'/state.db','worker','inc'))
+            try:
+                service.create('run','marketing','task');service.enqueue('run');service.lifecycle.claim()
+                service.graph.db.execute('CREATE TABLE local_scopes(run TEXT,state TEXT)')
+                service.graph.db.execute("INSERT INTO local_scopes VALUES('run','starting')")
+                result=control.handle('x'*40,{'action':'manual_stop','run':'run'})
+                self.assertIs(result['local_scopes_unavailable'],True)
+                with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
+                service.graph.db.execute("UPDATE local_scopes SET state='terminated' WHERE run='run'")
+                with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
+                self.assertEqual(service.queue.get('run')['status'],'cancelling')
+            finally:service.lifecycle.close();service.close()
+
+    def test_null_scope_state_remains_visible_and_blocks_confirmation(self):
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.control import ControlError
+        with tempfile.TemporaryDirectory() as root:
+            service,control=build_control(root,'x'*40,lifecycle_factory=lambda _:ManualLifecycle(root+'/state.db','worker','inc'))
+            try:
+                service.create('run','marketing','task');service.enqueue('run');service.lifecycle.claim()
+                service.graph.db.execute('CREATE TABLE local_scopes(run TEXT,unit TEXT,invocation TEXT,cgroup TEXT,state TEXT)')
+                service.graph.db.execute("INSERT INTO local_scopes VALUES('run','unknown.scope',NULL,NULL,NULL)")
+                result=control.handle('x'*40,{'action':'manual_stop','run':'run'})
+                self.assertEqual(result['local_scopes'],[{'unit':'unknown.scope','state':None}])
+                with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
+                service.graph.db.execute("UPDATE local_scopes SET state='terminated' WHERE run='run'")
+                with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
+                self.assertEqual(service.queue.get('run')['status'],'cancelling')
+            finally:service.lifecycle.close();service.close()
+
     def test_fenced_active_local_scope_can_be_stopped_but_unstarted_cannot(self):
         from runner.local_supervisor import LocalSupervisor
         from runner.local_scope import LocalScopes
@@ -325,6 +359,13 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(scopes.state('run',unit),'starting')
                 backend.unit=unit
                 self.assertEqual(control.handle('x'*40,{'action':'stop_local_scope','run':'run','unit':unit})['state'],'terminated')
+                identity=scopes.db.execute('SELECT invocation,cgroup FROM local_scopes WHERE unit=?',(unit,)).fetchone()
+                for field,bad,value in (('invocation',None,identity[0]),('invocation','bad',identity[0]),('cgroup',None,identity[1]),('cgroup','/wrong',identity[1])):
+                    scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(bad,unit))
+                    status=control.handle('x'*40,{'action':'manual_stop','run':'run'})
+                    self.assertEqual(status['local_scopes'],[{'unit':unit,'state':'unverified'}])
+                    with self.subTest(field=field,bad=bad),self.assertRaises(ControlError): control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
+                    scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(value,unit))
                 self.assertEqual(control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})['status'],'stopped')
                 scopes.close()
             finally: service.lifecycle.close(); service.close()

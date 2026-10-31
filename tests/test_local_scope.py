@@ -13,6 +13,17 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    def test_conflicting_legacy_unknown_scope_states_fail_closed_without_data_loss(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=root+'/state.db';db=sqlite3.connect(path)
+            db.execute('CREATE TABLE local_scopes(run TEXT,unit TEXT PRIMARY KEY,invocation TEXT,cgroup TEXT,state TEXT)')
+            db.executemany('INSERT INTO local_scopes(run,unit,state) VALUES(?,?,?)',[('r','unknown.scope',None),('r','running.scope','running')])
+            db.commit();db.close()
+            with self.assertRaises(ScopeError):LocalScopes(path,Backend())
+            db=sqlite3.connect(path)
+            try:self.assertEqual(db.execute('SELECT unit,state FROM local_scopes ORDER BY unit').fetchall(),[('running.scope','running'),('unknown.scope',None)])
+            finally:db.close()
+
     @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
     def test_control_inspection_observes_real_scope_without_changing_state(self):
         import subprocess

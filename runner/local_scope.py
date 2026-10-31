@@ -10,6 +10,15 @@ import subprocess
 
 class ScopeError(RuntimeError): pass
 
+def valid_scope_identity(unit,invocation,cgroup):
+    return (isinstance(unit,str) and bool(unit) and isinstance(invocation,str) and re.fullmatch(r'[0-9a-f]{32}',invocation) is not None
+            and isinstance(cgroup,str) and cgroup.startswith('/') and cgroup.endswith('/'+unit) and '..' not in PurePosixPath(cgroup).parts)
+
+def unresolved_scope_rows(db,run):
+    rows=db.execute('SELECT unit,invocation,cgroup,state FROM local_scopes WHERE run=? ORDER BY unit',(run,)).fetchall()
+    return [(unit,'unverified' if state=='terminated' else state) for unit,invocation,cgroup,state in rows
+            if state!='terminated' or not valid_scope_identity(unit,invocation,cgroup)]
+
 class SystemdScopes:
     def __init__(self, environment):
         self.environment=dict(environment)
@@ -44,7 +53,9 @@ class LocalScopes:
         self.db=sqlite3.connect(path,timeout=10,isolation_level=None)
         if not self.db.execute('PRAGMA database_list').fetchone()[2]: raise ScopeError('durable database required')
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scopes(run TEXT NOT NULL,unit TEXT PRIMARY KEY,invocation TEXT,cgroup TEXT,state TEXT NOT NULL)')
-        self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS local_scopes_live ON local_scopes(run) WHERE state != 'terminated'")
+        try: self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS local_scopes_live_v2 ON local_scopes(run) WHERE state IS NOT 'terminated'")
+        except sqlite3.IntegrityError:
+            self.db.close(); raise ScopeError('conflicting unresolved scopes') from None
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,unit TEXT NOT NULL,state TEXT NOT NULL,created REAL NOT NULL)')
         self.db.execute("""CREATE TRIGGER IF NOT EXISTS local_scope_audit_insert AFTER INSERT ON local_scopes BEGIN
             INSERT INTO local_scope_audit(schema_version,run,unit,state,created) VALUES(1,NEW.run,NEW.unit,NEW.state,(julianday('now')-2440587.5)*86400.0); END""")
@@ -54,8 +65,15 @@ class LocalScopes:
     def reserve(self,run):
         if not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run): raise ScopeError('invalid run')
         unit='agent-workflows-'+secrets.token_hex(24)+'.scope'
-        try: self.db.execute("INSERT INTO local_scopes(run,unit,state) VALUES(?,?,'starting')",(run,unit))
-        except sqlite3.IntegrityError: raise ScopeError('prior scope unresolved') from None
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            if unresolved_scope_rows(self.db,run): raise ScopeError('prior scope unresolved')
+            self.db.execute("INSERT INTO local_scopes(run,unit,state) VALUES(?,?,'starting')",(run,unit))
+            self.db.execute('COMMIT')
+        except sqlite3.IntegrityError:
+            self.db.execute('ROLLBACK'); raise ScopeError('prior scope unresolved') from None
+        except Exception:
+            self.db.execute('ROLLBACK'); raise
         return unit
     def state(self,run,unit):
         row=self.db.execute('SELECT state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
@@ -71,7 +89,7 @@ class LocalScopes:
     def bind(self,run,unit):
         info=self.backend.inspect(unit)
         group=info.get('cgroup','')
-        if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or not re.fullmatch(r'[0-9a-f]{32}',info.get('invocation','')) or not group.startswith('/') or not group.endswith('/'+unit) or '..' in PurePosixPath(group).parts: raise ScopeError('active scope identity unverified')
+        if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or not valid_scope_identity(unit,info.get('invocation'),group): raise ScopeError('active scope identity unverified')
         changed=self.db.execute("UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit)).rowcount
         if changed!=1: raise ScopeError('scope assignment changed')
     def assert_active(self,run,unit):
