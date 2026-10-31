@@ -7,20 +7,31 @@ from pathlib import Path
 from runner.worker import read_secret, ConfigurationError
 from runner.control import MAX_CONTROL_RESPONSE
 
+ADMISSION_RESPONSE_TIMEOUT=180
+class AdmissionUncertain(ConfigurationError): pass
+
 def request_control(request):
+    """Send a private request and distinguish uncertain task-admission outcomes."""
     secret_path=os.environ.get('CONTROL_SECRET_FILE')
     if not secret_path: raise ConfigurationError('CONTROL_SECRET_FILE required')
     secret=read_secret(secret_path)
     payload=json.dumps({'secret':secret,'request':request},separators=(',',':')).encode()+b'\n'
     if len(payload)>65536: raise ConfigurationError('request too large')
     path=Path(os.environ.get('WORKFLOW_CONTROL_DIR') or os.environ.get('WORKFLOW_DATA_DIR','/data'))/'control.sock'
-    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-        client.settimeout(5); client.connect(str(path)); client.sendall(payload)
-        with client.makefile('rb') as stream:
-            raw=stream.readline(MAX_CONTROL_RESPONSE+1)
-            if not raw.endswith(b'\n') or len(raw)>MAX_CONTROL_RESPONSE: raise ConfigurationError('invalid response')
-            response=json.loads(raw)
-    if not isinstance(response,dict) or type(response.get('ok')) is not bool: raise ConfigurationError('invalid response')
+    admission=isinstance(request,dict) and request.get('action') in ('submit_configured','submit_task')
+    transmitting=False
+    try:
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+            client.settimeout(5); client.connect(str(path)); transmitting=True; client.sendall(payload)
+            if admission: client.settimeout(ADMISSION_RESPONSE_TIMEOUT)
+            with client.makefile('rb') as stream:
+                raw=stream.readline(MAX_CONTROL_RESPONSE+1)
+                if not raw.endswith(b'\n') or len(raw)>MAX_CONTROL_RESPONSE: raise ConfigurationError('invalid response')
+                response=json.loads(raw)
+        if not isinstance(response,dict) or type(response.get('ok')) is not bool: raise ConfigurationError('invalid response')
+    except (OSError,ValueError,ConfigurationError):
+        if admission and transmitting: raise AdmissionUncertain('admission outcome unknown; inspect run status before retrying') from None
+        raise
     return response
 
 def main():
@@ -30,5 +41,7 @@ def main():
 
 if __name__=='__main__':
     try: sys.exit(main())
+    except AdmissionUncertain:
+        print('Admission outcome unknown; inspect run status before retrying.',file=sys.stderr); sys.exit(1)
     except (OSError,ValueError,ConfigurationError):
         print('Control request failed.',file=sys.stderr); sys.exit(1)

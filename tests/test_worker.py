@@ -6,6 +6,36 @@ from pathlib import Path
 from runner.worker import read_secret, ConfigurationError, build_control
 
 class WorkerTests(unittest.TestCase):
+    def test_local_task_can_use_signed_in_tracker_gateway_without_token(self):
+        """Accept either read-only GitHub credentials path and reject mixed tracker credentials."""
+        from runner.local_supervisor import LocalSupervisor
+        from runner.local_scope import SystemdScopes
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.plan_codex import CodexAppsPlan
+        class ReadOnly:
+            def request(self,method,path,body=None): return []
+        task={'run':'run','workflow':'engineering','project':'DEMO','number':1,'ready_columns':[1],'completed_columns':[2],'blocker_direction':'inward','plan_endpoint':'codex-apps','github_owner':'owner','github_repo':'repo','github_branch':'task-1'}
+        with tempfile.TemporaryDirectory() as root:
+            factory=lambda service:LocalSupervisor(root+'/state.db','/unused',{'HOME':root},SystemdScopes({}),lambda run:True,lambda run,role:root,lambda:True,{'mcp_servers':[],'plugins':[]})
+            options={'execution_mode':'local','local_supervisor_factory':factory,'lifecycle_factory':lambda _:ManualLifecycle(root+'/state.db','worker','inc'),'task_config':task,'github_http':ReadOnly()}
+            service,_=build_control(root,'x'*40,**options)
+            try:self.assertIsInstance(service.task_intake.intake.client,CodexAppsPlan)
+            finally:service.lifecycle.close();service.close()
+            with self.assertRaises(ConfigurationError):build_control(root,'x'*40,**{**options,'plan_token':'unexpected'})
+            with self.assertRaises(ConfigurationError):build_control(root,'x'*40,task_config=task,github_token='fixture')
+            token_options={key:value for key,value in options.items() if key!='github_http'}
+            service,_=build_control(root,'x'*40,**token_options,github_token='fixture')
+            try:self.assertIsInstance(service.task_intake.intake.client,CodexAppsPlan)
+            finally:service.lifecycle.close();service.close()
+
+    def test_gateway_rejects_token_file_before_reading_it(self):
+        """Reject a tracker token file before any secret is read in gateway mode."""
+        from unittest.mock import patch
+        from runner.worker import run_worker
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ,{'WORKFLOW_TASK_CONFIG_FILE':'task','PLAN_TOKEN_FILE':'secret'},clear=True), patch('runner.worker.read_runtime_config',return_value={'plan_endpoint':'codex-apps'}), patch('runner.worker.read_secret') as read:
+            with self.assertRaises(ConfigurationError): run_worker(Path(root),'x'*40)
+            read.assert_not_called()
+
     def test_local_execution_requires_explicit_supervisor_and_manual_lifecycle(self):
         from runner.local_supervisor import LocalSupervisor
         from runner.local_scope import SystemdScopes
