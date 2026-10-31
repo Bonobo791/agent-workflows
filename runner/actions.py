@@ -41,12 +41,23 @@ class ActionLedger:
             if self.db.execute('SELECT 1 FROM action_followups WHERE run=?',(run,)).fetchone(): raise ActionConflict('required followup pending')
             if self.db.execute("SELECT 1 FROM external_actions WHERE run=? AND action=? AND status='uncertain'", (run, action)).fetchone(): raise ActionConflict('prior execution unresolved')
             row = self.db.execute('SELECT status FROM external_actions WHERE run=? AND action=? AND version=?', (run, action, version)).fetchone()
-            if row and row[0] != 'not_executed': raise ActionConflict('action already approved or execution unresolved')
+            if row and row[0] not in ('not_executed','revoked'): raise ActionConflict('action already approved or execution unresolved')
             self.db.execute('INSERT OR REPLACE INTO external_actions VALUES (?,?,?,?,?,?)', (run, action, version, actor, 'approved', time.time()))
             self.db.execute('COMMIT')
         except Exception:
             self.db.execute('ROLLBACK')
             raise
+
+    def revoke_freeze(self,run,version):
+        if not all(isinstance(value,str) and value for value in (run,version)): raise ValueError('exact run and version required')
+        db=self.db;db.execute('BEGIN IMMEDIATE')
+        try:
+            prior=db.execute('SELECT COALESCE(MAX(id),0) FROM action_audit').fetchone()[0]
+            cur=db.execute("UPDATE external_actions SET status='revoked',actor='local-owner',updated=? WHERE run=? AND action='freeze' AND version=? AND status='approved'",(time.time(),run,version))
+            if cur.rowcount!=1: raise ActionConflict('unused approval unavailable')
+            if not db.execute("SELECT 1 FROM action_audit WHERE id>? AND run=? AND action='freeze' AND version=? AND status='revoked' AND actor='local-owner'",(prior,run,version)).fetchone(): raise ActionConflict('approval audit unavailable')
+            db.execute('COMMIT')
+        except Exception: db.execute('ROLLBACK');raise
 
     def reauthorize_completed(self,run,action,version,actor):
         if not actor: raise ValueError('actor required')
