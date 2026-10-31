@@ -32,6 +32,8 @@ def checkpoint(service,run,queue_claim,graph_claim):
         now=time.time()
         if not row or row[0]!='running' or row[5:8]!=('active','running','assigned') or row[8:11]!=(lifecycle.target['manual_target'],lifecycle.incarnation,lifecycle.incarnation) or not isinstance(queue_claim,str) or not isinstance(graph_claim,str) or not isinstance(row[1],str) or not isinstance(row[3],str) or not secrets.compare_digest(queue_claim,row[1]) or not secrets.compare_digest(graph_claim,row[3]) or row[2] is None or row[4] is None or row[2]<=now or row[4]<=now: raise CheckpointError('current claims unavailable')
         ensure_quiescent(db,run)
+        now=time.time()
+        if row[2]<=now or row[4]<=now: raise CheckpointError('claims expired during checkpoint')
         job_audit=db.execute('SELECT COALESCE(MAX(id),0) FROM job_audit').fetchone()[0]
         manual_audit=db.execute('SELECT COALESCE(MAX(id),0) FROM manual_lifecycle_audit').fetchone()[0]
         if db.execute("INSERT INTO claim_audit(schema_version,run,task_id,status,created) VALUES(1,?,?,?,?)",(run,row[11],'released',now)).rowcount!=1: raise CheckpointError('claim audit unavailable')
@@ -41,6 +43,8 @@ def checkpoint(service,run,queue_claim,graph_claim):
         if db.execute("UPDATE jobs SET status='queued',worker=NULL,token=NULL,expires=NULL WHERE run=? AND status='running'",(run,)).rowcount!=1: raise CheckpointError('job claim changed')
         if not db.execute("SELECT 1 FROM job_audit WHERE id>? AND run=? AND status='queued'",(job_audit,run)).fetchone() or not db.execute("SELECT 1 FROM manual_lifecycle_audit WHERE id>? AND run=? AND state='checkpointed'",(manual_audit,run)).fetchone(): raise CheckpointError('handoff audit unavailable')
         if db.execute("INSERT INTO checkpoint_audit(schema_version,run,status,created) VALUES(1,?,'checkpointed',?)",(run,now)).rowcount!=1: raise CheckpointError('checkpoint audit unavailable')
+        commit_time=time.time()
+        if row[2]<=commit_time or row[4]<=commit_time: raise CheckpointError('claims expired during checkpoint')
         db.execute('COMMIT');return {'run':run,'state':'checkpointed'}
     except Exception:
         db.execute('ROLLBACK');raise

@@ -133,6 +133,29 @@ class CheckpointHandoffTests(unittest.TestCase):
         self.assertFalse(db.execute("SELECT 1 FROM manual_incarnation_history WHERE incarnation='next'").fetchone())
         self.assertEqual(db.execute("SELECT COUNT(*) FROM checkpoint_audit WHERE status='replacement_registered'").fetchone(),(0,))
 
+    def test_claims_expiring_during_quiescence_block_checkpoint(self):
+        import time
+        from unittest.mock import patch
+        from runner.checkpoint import CheckpointError,checkpoint
+        now=time.time()
+        self.service.graph.db.execute("UPDATE jobs SET expires=? WHERE run='run'",(now+300,))
+        with patch('runner.checkpoint.time.time',side_effect=[now,now+120]):
+            with self.assertRaises(CheckpointError):checkpoint(self.service,'run',self.queue,self.graph)
+        self.assertTrue(self.service.queue.may_start('run',self.queue))
+        self.service.graph._lease('run',self.graph)
+
+    def test_claims_expiring_before_commit_roll_back_handoff(self):
+        import time
+        from unittest.mock import patch
+        from runner.checkpoint import CheckpointError,checkpoint
+        now=time.time()
+        self.service.graph.db.execute("UPDATE graph_claims SET expires=? WHERE run='run'",(now+300,))
+        with patch('runner.checkpoint.time.time',side_effect=[now,now,now+120]):
+            with self.assertRaises(CheckpointError):checkpoint(self.service,'run',self.queue,self.graph)
+        self.assertTrue(self.service.queue.may_start('run',self.queue))
+        self.service.graph._lease('run',self.graph)
+        self.assertEqual(self.service.lifecycle.status('run')['status'],'running')
+
     def test_unresolved_scope_blocks_checkpoint_without_releasing_claims(self):
         from runner.checkpoint import CheckpointError,checkpoint
         scopes=LocalScopes(str(self.root/'state.db'),Backend());self.addCleanup(scopes.close)
