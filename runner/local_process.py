@@ -5,7 +5,7 @@ import stat
 import subprocess
 import time
 from runner.adapter import managed_app_server_spec, verify_managed_workspace
-from runner.local_scope import LocalScopes, ScopeError
+from runner.local_scope import LocalScopes, ScopeError, reserve_for_execution
 from runner.process_transport import ProcessTransport
 
 class LocalProcessError(RuntimeError): pass
@@ -39,7 +39,7 @@ class LocalProcessHandle:
         return True
     def cancel(self): return self.finish()
 
-def start_local_process(db,run,workspace,executable,environment,backend,fence,disabled_integrations,*,allow_git=False):
+def start_local_process(db,run,workspace,executable,environment,backend,fence,disabled_integrations,*,allow_git=False,workspace_claim=None):
     if not callable(fence) or fence() is not True: raise LocalProcessError('active run fence required')
     if type(allow_git) is not bool: raise LocalProcessError('invalid Git policy')
     try:
@@ -50,9 +50,7 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
     except (OSError,TypeError,ValueError): raise LocalProcessError('private canonical workspace required') from None
     manager_env={k:environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in environment}
     manager_env['PATH']='/usr/bin:/bin'
-    scopes=LocalScopes(db,backend)
-    try: unit=scopes.reserve(run)
-    finally: scopes.close()
+    unit=reserve_for_execution(db,run,backend,path,workspace_claim)
     try:
         state=Path(db).parent
         info=state.lstat()

@@ -67,22 +67,11 @@ class LocalSupervisor:
             finally: dbh.close()
             if existing: raise LocalSupervisorError('writer requires exact session resume')
         assignment=None
+        options={}
         if self._engineering(run,role,workspace):
-            from runner.engineering_workspace import EngineeringWorkspace
-            assignment='job-'+secrets.token_hex(24); registry=EngineeringWorkspace(self.engineering_root)
-            try:
-                if registry.claim(run,assignment,self.policy_hash)!=workspace: raise LocalSupervisorError('engineering workspace changed')
-            finally:registry.close()
-        handle=start_local_process(self.db,run,workspace,self.executable,self.environment,self.backend,lambda:self.fence(run),self.disabled_integrations,**({'allow_git':role=='implement'} if assignment else {}))
-        if assignment is not None:
-            registry=EngineeringWorkspace(self.engineering_root)
-            try:
-                try: registry.bind_local_scope(run,assignment,handle.unit)
-                except Exception:
-                    try:handle.cancel()
-                    except Exception:pass
-                    raise
-            finally:registry.close()
+            assignment='job-'+secrets.token_hex(24)
+            options={'allow_git':role=='implement','workspace_claim':(self.engineering_root,assignment,self.policy_hash)}
+        handle=start_local_process(self.db,run,workspace,self.executable,self.environment,self.backend,lambda:self.fence(run),self.disabled_integrations,**options)
         return LocalSessionHandle(self,handle,run,role,session,binding,assignment)
 
 class LocalSessionHandle:

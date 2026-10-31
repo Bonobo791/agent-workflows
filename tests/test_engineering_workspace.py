@@ -37,6 +37,166 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         db=self.registry.db
         db.execute('INSERT INTO docker_assignments VALUES(?,?,?,?)',(a,'id','terminated','fixture')); db.execute('INSERT INTO docker_terminal_evidence VALUES(?,?,?,?)',(a,'id','exited',1))
         self.registry.release('run-1',a); self.assertEqual(self.registry.claim('run-1',b,self.policy),path)
+    def test_git_verification_allows_unrelated_database_writes(self):
+        import sqlite3
+        from unittest.mock import patch
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        scopes=LocalScopes(str(self.root/'state.db'),Backend());scopes.close()
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        other=sqlite3.connect(str(self.root/'state.db'),timeout=.05,isolation_level=None)
+        self.addCleanup(other.close)
+        other.execute('CREATE TABLE claim_probe(value INTEGER)')
+        verify=self.registry.verify
+        def verify_with_write(*args,**kwargs):
+            other.execute('INSERT INTO claim_probe VALUES(1)')
+            return verify(*args,**kwargs)
+        with patch.object(self.registry,'verify',side_effect=verify_with_write):
+            self.registry.claim_local('run-1','job-'+'a'*48,self.policy)
+        self.assertEqual(other.execute('SELECT COUNT(*) FROM claim_probe').fetchone(),(1,))
+
+    def test_claim_rechecks_binding_and_approval_after_git_verification(self):
+        from unittest.mock import patch
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        scopes=LocalScopes(str(self.root/'state.db'),Backend());scopes.close()
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        verify=self.registry.verify
+        for method in (self.registry.claim,self.registry.claim_local):
+            for change in ("UPDATE engineering_workspaces SET branch='changed' WHERE run='run-1'",
+                           "UPDATE engineering_workspace_approvals SET binding_hash='changed' WHERE run='run-1'",
+                           "UPDATE engineering_workspaces SET assignment='other' WHERE run='run-1'",
+                           "UPDATE engineering_workspaces SET assignment='other' WHERE run='run-1'; UPDATE engineering_workspaces SET assignment=NULL WHERE run='run-1'"):
+                with self.subTest(method=method.__name__,change=change):
+                    def verify_then_change(*args,**kwargs):
+                        path=verify(*args,**kwargs)
+                        for statement in change.split(';'): self.registry.db.execute(statement)
+                        return path
+                    with patch.object(self.registry,'verify',side_effect=verify_then_change):
+                        with self.assertRaises(WorkspaceError): method('run-1','job-'+'a'*48,self.policy)
+                    self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM engineering_local_scopes').fetchone(),(0,))
+                    self.registry.db.execute("UPDATE engineering_workspaces SET branch='task-1',assignment=NULL WHERE run='run-1'")
+                    self.registry.db.execute('UPDATE engineering_workspace_approvals SET binding_hash=? WHERE run=?',(self.registry.binding_hash(*self.args),'run-1'))
+
+    def test_local_claim_and_scope_reservation_are_atomic(self):
+        import sqlite3
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        assignment='job-'+'a'*48;scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            self.registry.db.execute("CREATE TRIGGER reject_scope_binding BEFORE INSERT ON engineering_local_scopes BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+            with self.assertRaises(sqlite3.IntegrityError): self.registry.claim_local('run-1',assignment,self.policy)
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            self.assertEqual(scopes.db.execute("SELECT COUNT(*) FROM local_scopes WHERE run='run-1'").fetchone(),(0,))
+            self.registry.db.execute('DROP TRIGGER reject_scope_binding')
+            path,unit=self.registry.claim_local('run-1',assignment,self.policy)
+            self.assertEqual(path,str(self.repo))
+            self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(assignment,))
+            self.assertEqual(self.registry.db.execute('SELECT run,unit FROM engineering_local_scopes WHERE assignment=?',(assignment,)).fetchone(),('run-1',unit))
+            self.assertEqual(scopes.state('run-1',unit),'starting')
+            from runner.audit_export import read_events
+            events,cursor=read_events(self.registry.db,'workspace_scope_audit',0,10,b'x'*32)
+            self.assertEqual((cursor,events[0]['status']),(1,'bound'))
+            self.assertNotIn(unit,str(events));self.assertNotIn(assignment,str(events))
+            scope_events,_=read_events(scopes.db,'local_scope_audit',0,10,b'x'*32)
+            self.assertEqual(events[0]['scope_id'],scope_events[0]['scope_id'])
+        finally: scopes.close()
+
+    def test_push_scope_record_failure_rolls_back_reservation(self):
+        import sqlite3
+        from runner.local_push import LocalPushTransport
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        LocalPushTransport(self.service,'run-1','queue','graph',None)
+        scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            self.registry.db.execute("CREATE TRIGGER reject_push_scope BEFORE INSERT ON local_pr_scopes BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+            with self.assertRaises(sqlite3.IntegrityError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy,pr_scope=('push:x','github:o/r:branch:x','bundle'))
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            for table in ('local_scopes','engineering_local_scopes','local_pr_scopes','workspace_scope_audit'):
+                self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
+        finally: scopes.close()
+
+    def test_workspace_scope_binding_helper_requires_transaction(self):
+        from runner.engineering_workspace import bind_scope_with_audit
+        with self.assertRaises(WorkspaceError): bind_scope_with_audit(self.registry.db,'run-1','job-'+'a'*48,'scope')
+        self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM engineering_local_scopes').fetchone(),(0,))
+
+    def test_missing_workspace_scope_audit_trigger_blocks_reservation(self):
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            self.registry.db.execute('DROP TRIGGER workspace_scope_audit_insert')
+            with self.assertRaises(WorkspaceError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy)
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            for table in ('local_scopes','engineering_local_scopes','workspace_scope_audit'):
+                self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
+        finally: scopes.close()
+
+    def test_workspace_scope_audit_failure_rolls_back_reservation(self):
+        import sqlite3
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            self.registry.db.execute("CREATE TRIGGER reject_workspace_scope_audit BEFORE INSERT ON workspace_scope_audit BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+            with self.assertRaises(sqlite3.IntegrityError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy)
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            for table in ('local_scopes','engineering_local_scopes','local_scope_audit','workspace_scope_audit'):
+                self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
+        finally: scopes.close()
+
+    def test_concurrent_local_claims_serialize_on_shared_database(self):
+        import concurrent.futures
+        import threading
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        scopes=LocalScopes(str(self.root/'state.db'),Backend());scopes.close()
+        gate=threading.Barrier(2)
+        def claim(assignment):
+            registry=EngineeringWorkspace(self.root)
+            try:
+                gate.wait(timeout=5)
+                try: return registry.claim_local('run-1',assignment,self.policy)
+                except WorkspaceError: return None
+            finally: registry.close()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures=[pool.submit(claim,'job-'+digit*48) for digit in ('a','b')]
+            results=[future.result(timeout=15) for future in futures]
+        self.assertEqual(sum(result is not None for result in results),1)
+        for table in ('local_scopes','engineering_local_scopes','workspace_scope_audit'):
+            self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(1,))
+
+    def test_local_claim_rejects_changed_expected_workspace_without_reservation(self):
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            with self.assertRaises(WorkspaceError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy,expected_path=str(self.root/'other'))
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scopes').fetchone(),(0,))
+        finally: scopes.close()
+
+    def test_interrupted_local_launch_preserves_exact_workspace_scope_binding(self):
+        from unittest.mock import patch
+        from runner.local_process import LocalProcessError
+        from runner.local_supervisor import LocalSupervisor
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        binary=self.root/'codex';binary.write_text('synthetic');binary.chmod(0o700)
+        supervisor=LocalSupervisor(str(self.root/'state.db'),str(binary),{'HOME':str(self.root)},Backend(),lambda _:True,lambda *_:str(self.repo),lambda:True,{'mcp_servers':[],'plugins':[]},engineering_root=str(self.root),policy_hash=self.policy)
+        with patch.object(supervisor,'preflight',return_value=True),patch.object(EngineeringWorkspace,'verify',return_value=str(self.repo)),patch('runner.local_process.subprocess.Popen',side_effect=OSError('launch interrupted')):
+            with self.assertRaises(LocalProcessError): supervisor.start_execution('run-1','implement',None,{},'model')
+        row=self.registry.db.execute("SELECT w.assignment,m.unit,s.state FROM engineering_workspaces w LEFT JOIN engineering_local_scopes m ON m.run=w.run AND m.assignment=w.assignment LEFT JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE w.run='run-1'").fetchone()
+        self.assertIsNotNone(row[0]);self.assertIsNotNone(row[1]);self.assertEqual(row[2],'starting')
+
     def test_local_claim_requires_exact_terminal_scope(self):
         from runner.local_scope import LocalScopes
         from tests.test_local_scope import Backend
@@ -203,17 +363,17 @@ from pathlib import Path
 from runner.engineering_workspace import EngineeringWorkspace
 from runner.local_scope import LocalScopes,SystemdScopes,ScopeError
 root,policy,assignment,ready=sys.argv[1:]
-registry=EngineeringWorkspace(root);registry.claim('run-1',assignment,policy)
+registry=EngineeringWorkspace(root)
 backend=SystemdScopes(os.environ);scopes=LocalScopes(str(Path(root)/'state.db'),backend)
-unit=scopes.reserve('run-1')
+_,unit=registry.claim_local('run-1',assignment,policy)
 launcher=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 deadline=time.monotonic()+10
 while True:
-    try: scopes.bind('run-1',unit);break
-    except ScopeError:
-        if launcher.poll() is not None or time.monotonic()>=deadline: raise
-        time.sleep(.05)
-registry.bind_local_scope('run-1',assignment,unit)
+    try:
+        if backend.inspect(unit)['active']=='active': break
+    except ScopeError: pass
+    if launcher.poll() is not None or time.monotonic()>=deadline: raise RuntimeError('scope did not start')
+    time.sleep(.05)
 Path(ready).write_text(unit)
 time.sleep(60)
 '''
@@ -232,7 +392,7 @@ time.sleep(60)
                 unit=ready.read_text();group=backend.inspect(unit)['cgroup']
                 worker.kill();self.assertEqual(worker.wait(timeout=5),-9)
                 self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
-                self.assertEqual(scopes.state('run-1',unit),'running')
+                self.assertEqual(scopes.state('run-1',unit),'starting')
                 stop=self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
                 self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
                 release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
@@ -275,9 +435,12 @@ time.sleep(60)
                 finally:scopes.close()
             def cancel(handle):return handle.finish()
         def start(db,run,workspace,executable,environment,backend_arg,fence,integrations,**kwargs):
-            self.assertEqual(workspace,str(self.repo));self.assertEqual(kwargs,{'allow_git':True})
+            self.assertEqual(workspace,str(self.repo));self.assertTrue(kwargs['allow_git'])
+            root,assignment,policy=kwargs['workspace_claim']
+            self.assertEqual((root,policy),(str(self.root),supervisor.policy_hash))
+            _,unit=self.registry.claim_local(run,assignment,policy)
             scopes=LocalScopes(db,backend)
-            try:unit=scopes.reserve(run);backend.unit=unit;scopes.bind(run,unit)
+            try:backend.unit=unit;scopes.bind(run,unit)
             finally:scopes.close()
             return Handle(unit)
         with patch('runner.local_supervisor.sandbox_preflight',return_value=True),patch('runner.local_supervisor.scope_preflight',return_value=True),patch('runner.local_supervisor.start_local_process',side_effect=start):

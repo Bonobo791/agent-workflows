@@ -23,6 +23,30 @@ def unresolved_scope_rows(db,run):
     return [(unit,'unverified' if state=='terminated' else state) for unit,invocation,cgroup,state in rows
             if state!='terminated' or not valid_scope_identity(unit,invocation,cgroup)]
 
+def reserve_scope(db,run):
+    if not db.in_transaction: raise ScopeError('scope reservation transaction required')
+    if not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run): raise ScopeError('invalid run')
+    if unresolved_scope_rows(db,run): raise ScopeError('prior scope unresolved')
+    unit='agent-workflows-'+secrets.token_hex(24)+'.scope'
+    last=db.execute('SELECT COALESCE(MAX(id),0) FROM local_scope_audit').fetchone()[0]
+    db.execute("INSERT INTO local_scopes(run,unit,state) VALUES(?,?,'starting')",(run,unit))
+    audit=db.execute("SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state='starting'",(last,run,unit)).fetchone()
+    if not audit: raise ScopeError('scope reservation audit unavailable')
+    return unit
+
+def reserve_for_execution(db,run,backend,workspace,workspace_claim=None):
+    scopes=LocalScopes(db,backend)
+    try:
+        if workspace_claim is None: return scopes.reserve(run)
+        from runner.engineering_workspace import EngineeringWorkspace
+        if not isinstance(workspace_claim,tuple) or len(workspace_claim) not in (3,4) or Path(db).resolve()!=Path(workspace_claim[0]).resolve()/'state.db': raise ScopeError('workspace claim state mismatch')
+        registry=EngineeringWorkspace(workspace_claim[0])
+        try:
+            _,unit=registry.claim_local(run,workspace_claim[1],workspace_claim[2],expected_path=str(workspace),pr_scope=workspace_claim[3] if len(workspace_claim)==4 else None)
+            return unit
+        finally: registry.close()
+    finally: scopes.close()
+
 class SystemdScopes:
     def __init__(self, environment):
         self.environment=dict(environment)
@@ -71,18 +95,14 @@ class LocalScopes:
             INSERT INTO local_scope_audit(schema_version,run,unit,state,created) VALUES(1,NEW.run,NEW.unit,NEW.state,(julianday('now')-2440587.5)*86400.0); END""")
     def close(self): self.db.close()
     def reserve(self,run):
-        if not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run): raise ScopeError('invalid run')
-        unit='agent-workflows-'+secrets.token_hex(24)+'.scope'
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            if unresolved_scope_rows(self.db,run): raise ScopeError('prior scope unresolved')
-            self.db.execute("INSERT INTO local_scopes(run,unit,state) VALUES(?,?,'starting')",(run,unit))
-            self.db.execute('COMMIT')
+            unit=reserve_scope(self.db,run)
+            self.db.execute('COMMIT'); return unit
         except sqlite3.IntegrityError:
-            self.db.execute('ROLLBACK'); raise ScopeError('prior scope unresolved') from None
+            self.db.execute('ROLLBACK'); raise ScopeError('scope reservation unavailable') from None
         except Exception:
             self.db.execute('ROLLBACK'); raise
-        return unit
     def state(self,run,unit):
         row=self.db.execute('SELECT state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
         if not row: raise ScopeError('scope assignment unavailable')
@@ -94,12 +114,21 @@ class LocalScopes:
         except ScopeError: observed=None
         return {'recorded':{'unit':unit,'state':row[2],'invocation':row[0],'cgroup':row[1]},
                 'observed':observed,'cgroup_empty':self.backend.empty_cgroup(row[1]) if row[1] and observed is not None else None}
+    def _transition(self,run,unit,state,sql,params):
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            last=self.db.execute('SELECT COALESCE(MAX(id),0) FROM local_scope_audit').fetchone()[0]
+            if self.db.execute(sql,params).rowcount!=1: raise ScopeError('scope assignment changed')
+            event=self.db.execute('SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state=?',(last,run,unit,state)).fetchone()
+            if not event: raise ScopeError('scope transition audit unavailable')
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK'); raise
     def bind(self,run,unit):
         info=self.backend.inspect(unit)
         group=info.get('cgroup','')
         if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or not valid_scope_identity(unit,info.get('invocation'),group): raise ScopeError('active scope identity unverified')
-        changed=self.db.execute("UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit)).rowcount
-        if changed!=1: raise ScopeError('scope assignment changed')
+        self._transition(run,unit,'running',"UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit))
     def assert_active(self,run,unit):
         row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
         if not row or row[2]!='running': raise ScopeError('running scope unavailable')
@@ -109,13 +138,12 @@ class LocalScopes:
     def stop(self,run,unit):
         self.assert_active(run,unit)
         row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
-        changed=self.db.execute("UPDATE local_scopes SET state='stopping' WHERE run=? AND unit=? AND state='running'",(run,unit)).rowcount
-        if changed!=1: raise ScopeError('scope assignment changed')
+        self._transition(run,unit,'stopping',"UPDATE local_scopes SET state='stopping' WHERE run=? AND unit=? AND state='running'",(run,unit))
         try:
             if self.backend.stop(unit) is not True: raise ScopeError('scope stop uncertain')
             after=self.backend.inspect(unit)
             if after.get('id')!=unit or after.get('active')!='inactive' or after.get('load') not in ('loaded','not-found') or (after.get('load')=='loaded' and after.get('invocation') not in ('',row[0])) or not self.backend.empty_cgroup(row[1]): raise ScopeError('scope termination unverified')
-            if self.db.execute("UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND state='stopping'",(run,unit)).rowcount!=1: raise ScopeError('scope assignment changed')
+            self._transition(run,unit,'terminated',"UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND state='stopping'",(run,unit))
             return True
         except Exception: raise ScopeError('scope stop uncertain; run remains fenced') from None
     def reconcile_stop(self,run,unit,verify_quiescent):
@@ -126,6 +154,6 @@ class LocalScopes:
             info=self.backend.inspect(unit)
             if info.get('id')!=unit or info.get('active')!='inactive' or info.get('load') not in ('loaded','not-found') or (info.get('load')=='loaded' and info.get('invocation') not in ('',row[0])) or not self.backend.empty_cgroup(row[1]): raise ScopeError('scope termination unverified')
             if verify_quiescent(run,unit,row[0],row[1]) is not True: raise ScopeError('stop request may still be in flight')
-            if self.db.execute("UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='stopping'",(run,unit,row[0],row[1])).rowcount!=1: raise ScopeError('scope assignment changed')
+            self._transition(run,unit,'terminated',"UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='stopping'",(run,unit,row[0],row[1]))
             return True
         except Exception: raise ScopeError('scope stop remains unresolved') from None

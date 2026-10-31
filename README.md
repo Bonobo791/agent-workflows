@@ -66,6 +66,9 @@ an approved exact command, workspace and commit. The Docker command adapter is
 constructed only from private command configuration and requires separate
 Docker and command-policy approval. Model-written test reports remain role
 assertions; fixture execution is not real host verification.
+New local engineering executions reserve the workspace and its scope together;
+a reservation does not prove launch or termination. Interrupted work remains
+fenced until the owner verifies the exact scope and recovery conditions.
 
 Marketing source checks use a distinct claim/source/evidence register and fresh
 source reviews for the register and current draft. A separately trusted source

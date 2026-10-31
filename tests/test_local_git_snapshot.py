@@ -30,13 +30,17 @@ class LocalGitSnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             root=Path(root);source=root/'source';source.mkdir(mode=0o700);git(source,'init','-q');(source/'file').write_text('synthetic');git(source,'add','file');git(source,'-c','user.name=Synthetic','-c','user.email=synthetic@example.invalid','commit','-qm','fixture')
             head=git(source,'rev-parse','HEAD');supervisor=SimpleNamespace(db=str(root/'state.db'),preflight=lambda:True,fence=lambda run:True)
-            observed=[]
-            def run(s,run,workspace,argv,deadline,limit,on_reserved,*,output_dir,on_started=None):
+            observed=[];claims=[]
+            def run(s,run,workspace,argv,deadline,limit,on_reserved,*,output_dir,on_started=None,workspace_claim=None):
+                claims.append(workspace_claim)
                 on_reserved('scope');git(source,'bundle','create',str(Path(output_dir)/'checkout.bundle'),'HEAD')
                 return {'outcome':'exited','exit_code':0,'stdout':b'','stderr':b'','unit':'scope'}
             with patch('runner.local_git_snapshot.run_scoped_sandbox',side_effect=run):
                 with scoped_git_snapshot(supervisor,'run',str(source),head,observed.append) as (bare,unit):
                     self.assertEqual(unit,'scope');self.assertEqual(git(bare,'rev-parse','refs/heads/snapshot'),head)
                 self.assertEqual(observed,['scope'])
+                binding=(str(root),'job-'+'a'*48,'b'*64)
+                with scoped_git_snapshot(supervisor,'run',str(source),head,lambda _:None,workspace_claim=binding): pass
+                self.assertEqual(claims,[None,binding])
                 with self.assertRaises(SnapshotError):
                     with scoped_git_snapshot(supervisor,'run',str(source),'0'*40,lambda _:None):pass
