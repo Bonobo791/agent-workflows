@@ -31,10 +31,18 @@ def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved
     else:
         if workspace_claim is not None or not isinstance(reserved_command,tuple) or len(reserved_command)!=2: raise LocalCommandError('invalid command reservation')
         assignment,unit=reserved_command
-        db=sqlite3.connect(s.db)
+        db=sqlite3.connect(s.db,timeout=10,isolation_level=None)
         try:
-            row=db.execute("SELECT 1 FROM local_command_scopes c JOIN local_scopes x ON x.run=c.run AND x.unit=c.unit JOIN engineering_local_scopes m ON m.run=c.run AND m.assignment=c.assignment AND m.unit=c.unit JOIN engineering_workspaces w ON w.run=c.run AND w.assignment=c.assignment WHERE c.assignment=? AND c.run=? AND c.unit=? AND c.exit_code IS NULL AND x.state='starting' AND w.path=?",(assignment,run,unit,workspace)).fetchone()
-            if not row: raise LocalCommandError('command reservation unavailable')
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                row=db.execute("SELECT 1 FROM local_command_scopes c JOIN local_scopes x ON x.run=c.run AND x.unit=c.unit JOIN engineering_local_scopes m ON m.run=c.run AND m.assignment=c.assignment AND m.unit=c.unit JOIN engineering_workspaces w ON w.run=c.run AND w.assignment=c.assignment WHERE c.assignment=? AND c.run=? AND c.unit=? AND c.exit_code IS NULL AND x.state='starting' AND w.path=?",(assignment,run,unit,workspace)).fetchone()
+                if not row: raise LocalCommandError('command reservation unavailable')
+                db.execute('INSERT INTO local_command_launches VALUES(?,?,?)',(assignment,run,unit))
+                db.execute('COMMIT')
+            except sqlite3.IntegrityError:
+                db.execute('ROLLBACK'); raise LocalCommandError('command launch unavailable') from None
+            except Exception:
+                db.execute('ROLLBACK'); raise
         finally: db.close()
 
     relay=str(Path(__file__).with_name('local_command_child.py').resolve(strict=True))
@@ -86,7 +94,12 @@ class LocalCommandBackend:
     def __init__(self,supervisor):
         self.supervisor=supervisor
         db=self._db()
-        try: db.execute('CREATE TABLE IF NOT EXISTS local_command_scopes(assignment TEXT PRIMARY KEY,run TEXT NOT NULL,unit TEXT NOT NULL UNIQUE,exit_code INTEGER)')
+        try:
+            db.execute('CREATE TABLE IF NOT EXISTS local_command_scopes(assignment TEXT PRIMARY KEY,run TEXT NOT NULL,unit TEXT NOT NULL UNIQUE,exit_code INTEGER)')
+            db.execute('CREATE TABLE IF NOT EXISTS local_command_launches(assignment TEXT PRIMARY KEY,run TEXT NOT NULL,unit TEXT NOT NULL UNIQUE)')
+            db.execute('CREATE TABLE IF NOT EXISTS local_command_launch_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,assignment TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
+            db.execute("""CREATE TRIGGER IF NOT EXISTS local_command_launch_audit_insert AFTER INSERT ON local_command_launches BEGIN
+                INSERT INTO local_command_launch_audit(schema_version,run,assignment,unit,status,created) VALUES(1,NEW.run,NEW.assignment,NEW.unit,'starting',(julianday('now')-2440587.5)*86400.0); END""")
         finally:db.close()
     def _db(self): return sqlite3.connect(self.supervisor.db,timeout=10,isolation_level=None)
     def reserve_local_scope(self,db,assignment,run):
