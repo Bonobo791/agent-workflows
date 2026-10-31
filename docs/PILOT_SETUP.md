@@ -168,6 +168,16 @@ for that UID before startup. The control secret must also be an owner-only file
 owned by the worker's mapped UID. Other runtimes and volume drivers require
 independent verification of their copy-up and UID-mapping behavior.
 
+For rootless Podman on the validated host, use `compose.podman.yaml` alongside
+`compose.yaml` to map the host user to UID/GID 10001 and relabel the secret
+bind mount. Run `docker-compose -f compose.yaml -f compose.podman.yaml up -d`
+with `CONTROL_SECRET_PATH` set to a private
+owner-only host file and the Podman socket configured for the Compose provider.
+Startup with a synthetic secret was tested; a Compose restart on that host
+left `control.sock` behind and the worker failed to restart. Treat restart as
+unresolved and do not remove the socket without independently verifying that
+the previous worker and its work are quiescent.
+
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.
