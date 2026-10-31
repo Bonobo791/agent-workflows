@@ -54,19 +54,44 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
             self.assertIn(b'OpenFilm render or verification failed',result.stderr)
             self.assertFalse(list(output.iterdir()))
 
+    def _render_backend(self,fixture,engine):
+        from runner.docker_config import DockerConfig
+        from runner.docker_controller import DockerAssignments
+        from runner.docker_supervisor import DockerSupervisor
+        from runner.docker_openfilm import DockerOpenFilmBackend
+        jobs=fixture.root/'state'/'jobs'; jobs.mkdir(mode=0o700)
+        config=DockerConfig({'socket':engine.path,'image':os.environ['OPENFILM_PODMAN_IMAGE'],'network':'none','job_root':str(jobs),'engine':'podman-rootless'},fixture.root/'state')
+        archive=io.BytesIO(); source=Path(__file__).parent/'fixtures'/'openfilm'
+        with zipfile.ZipFile(archive,'w') as z:
+            for file in source.iterdir(): z.write(file,file.name)
+        project=fixture.service.artifacts.put(archive.getvalue()); proof=fixture.terminal
+        class Builder:
+            def ready(self): return True
+            def supports(self,brief): return True
+            def build(self,**kwargs): return {'project_ref':project,'proof_ref':proof}
+            def verify(self,run,attempt_id,brief_ref,project_ref,proof_ref): return project_ref==project and proof_ref==proof
+            def cancel(self,*args): pass
+        assignments=DockerAssignments(str(fixture.root/'state'/'state.db'),engine,config.image)
+        try:
+            supervisor=DockerSupervisor(assignments,config,lambda run:True); fixture.service.docker_supervisor=supervisor
+            backend=DockerOpenFilmBackend(supervisor,fixture.service.artifacts,Builder(),lambda policy:True,timeout_seconds=120)
+            fixture.service.openfilm_backend=backend
+            fixture.service.approve('controller','docker_config',config.policy_hash,'synthetic')
+            fixture.service.approve('controller','openfilm_policy',backend.policy_hash,'synthetic')
+            return assignments,supervisor,backend
+        except BaseException:
+            assignments.close(); fixture.service.docker_supervisor=None
+            raise
+
     def test_cancellation_stops_real_render_without_committing_result(self):
         import concurrent.futures
         import sqlite3
         import threading
         from tests.test_openfilm_stage import OpenFilmStageTests
-        from runner.docker_config import DockerConfig
-        from runner.docker_controller import DockerAssignments, DockerError, UnixEngine
-        from runner.docker_supervisor import DockerSupervisor
-        from runner.docker_openfilm import DockerOpenFilmBackend
+        from runner.docker_controller import DockerError, UnixEngine
         fixture=OpenFilmStageTests('test_production_ingests_actual_output_but_requires_review')
         fixture.setUp(); assignments=None; pool=None
         try:
-            jobs=fixture.root/'state'/'jobs'; jobs.mkdir(mode=0o700)
             started=threading.Event(); raw=UnixEngine(os.environ['OPENFILM_PODMAN_SOCKET'])
             class Engine:
                 path=raw.path
@@ -74,23 +99,7 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
                     if path.endswith('/wait?condition=not-running') and timeout is not None: started.set()
                     return raw.request(method,path,body,timeout=timeout)
             engine=Engine()
-            config=DockerConfig({'socket':engine.path,'image':os.environ['OPENFILM_PODMAN_IMAGE'],'network':'none','job_root':str(jobs),'engine':'podman-rootless'},fixture.root/'state')
-            archive=io.BytesIO(); source=Path(__file__).parent/'fixtures'/'openfilm'
-            with zipfile.ZipFile(archive,'w') as z:
-                for file in source.iterdir(): z.write(file,file.name)
-            project=fixture.service.artifacts.put(archive.getvalue()); proof=fixture.terminal
-            class Builder:
-                def ready(self): return True
-                def supports(self,brief): return True
-                def build(self,**kwargs): return {'project_ref':project,'proof_ref':proof}
-                def verify(self,run,attempt_id,brief_ref,project_ref,proof_ref): return project_ref==project and proof_ref==proof
-                def cancel(self,*args): pass
-            assignments=DockerAssignments(str(fixture.root/'state'/'state.db'),engine,config.image)
-            supervisor=DockerSupervisor(assignments,config,lambda run:True);fixture.service.docker_supervisor=supervisor
-            backend=DockerOpenFilmBackend(supervisor,fixture.service.artifacts,Builder(),lambda policy:True,timeout_seconds=120)
-            fixture.service.openfilm_backend=backend
-            fixture.service.approve('controller','docker_config',config.policy_hash,'synthetic')
-            fixture.service.approve('controller','openfilm_policy',backend.policy_hash,'synthetic')
+            assignments,supervisor,backend=self._render_backend(fixture,engine)
             count=fixture.service.graph.begin_attempt('run','asset_production','cancel-probe',fixture.claim,2)
             attempt=hashlib.sha256(json.dumps(['run','asset_production','cancel-probe',count],separators=(',',':')).encode()).hexdigest()
             pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -117,32 +126,12 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
 
     def test_render_and_independent_terminal_verification(self):
         from tests.test_openfilm_stage import OpenFilmStageTests
-        from runner.docker_config import DockerConfig
-        from runner.docker_controller import DockerAssignments, UnixEngine
-        from runner.docker_supervisor import DockerSupervisor
-        from runner.docker_openfilm import DockerOpenFilmBackend
+        from runner.docker_controller import UnixEngine
         fixture=OpenFilmStageTests('test_production_ingests_actual_output_but_requires_review')
         fixture.setUp(); assignments=None
         try:
-            jobs=fixture.root/'state'/'jobs'; jobs.mkdir(mode=0o700)
             engine=UnixEngine(os.environ['OPENFILM_PODMAN_SOCKET'])
-            config=DockerConfig({'socket':engine.path,'image':os.environ['OPENFILM_PODMAN_IMAGE'],'network':'none','job_root':str(jobs),'engine':'podman-rootless'},fixture.root/'state')
-            archive=io.BytesIO(); source=Path(__file__).parent/'fixtures'/'openfilm'
-            with zipfile.ZipFile(archive,'w') as z:
-                for file in source.iterdir(): z.write(file,file.name)
-            project=fixture.service.artifacts.put(archive.getvalue()); proof=fixture.terminal
-            class Builder:
-                def ready(self): return True
-                def supports(self,brief): return True
-                def build(self,**kwargs): return {'project_ref':project,'proof_ref':proof}
-                def verify(self,run,attempt_id,brief_ref,project_ref,proof_ref): return project_ref==project and proof_ref==proof
-                def cancel(self,*args): pass
-            assignments=DockerAssignments(str(fixture.root/'state'/'state.db'),engine,config.image)
-            supervisor=DockerSupervisor(assignments,config,lambda run:True); fixture.service.docker_supervisor=supervisor
-            backend=DockerOpenFilmBackend(supervisor,fixture.service.artifacts,Builder(),lambda policy:True,timeout_seconds=120)
-            fixture.service.openfilm_backend=backend
-            fixture.service.approve('controller','docker_config',config.policy_hash,'synthetic')
-            fixture.service.approve('controller','openfilm_policy',backend.policy_hash,'synthetic')
+            assignments,supervisor,backend=self._render_backend(fixture,engine)
             count=fixture.service.graph.begin_attempt('run','asset_production','probe',fixture.claim,2)
             attempt=hashlib.sha256(json.dumps(['run','asset_production','probe',count],separators=(',',':')).encode()).hexdigest()
             result=backend.execute(run='run',attempt_id=attempt,brief_ref=fixture.brief_ref,brief=fixture.brief,canonical='Approved synthetic statement.',graph_claim=fixture.claim,queue_claim=fixture.queue)
