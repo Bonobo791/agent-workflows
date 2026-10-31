@@ -175,7 +175,12 @@ worker.main()
                 if hard_crash:
                     if unbound:
                         with sqlite3.connect(root/'state.db') as db:
-                            self.assertEqual(db.execute("SELECT state,invocation,cgroup FROM local_scopes WHERE run='r'").fetchone(),('starting',None,None))
+                            row=db.execute("SELECT unit,state,invocation,cgroup FROM local_scopes WHERE run='r'").fetchone()
+                            self.assertEqual(row[1:],('starting',None,None))
+                        from runner.local_scope import SystemdScopes
+                        backend=SystemdScopes(os.environ); observed=backend.inspect(row[0])
+                        self.assertEqual((observed['id'],observed['load'],observed['active']),(row[0],'loaded','active'))
+                        self.assertTrue(observed['cgroup']); self.assertTrue(observed['invocation'])
                     recovered_env={**env,'WORKFLOW_CONTROL_DIR':str(root/'second-control')}
                     recovered=subprocess.Popen([sys.executable,'-c',code],env=recovered_env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                     try:
@@ -196,6 +201,10 @@ worker.main()
                             self.assertFalse(premature['ok'])
                         result=action({'action':'stop_local_scope','run':'r','unit':unit})
                         self.assertEqual(result['result'],{'unit':unit,'state':'terminated'})
+                        if unbound:
+                            self.assertEqual(unit,row[0])
+                            self.assertEqual(backend.inspect(unit)['active'],'inactive')
+                            self.assertTrue(backend.empty_cgroup(observed['cgroup']))
                         result=action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})
                         self.assertTrue(result['ok'],result)
                     finally:
