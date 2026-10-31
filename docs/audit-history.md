@@ -198,8 +198,10 @@ fails that request only.
 
 For a private node-exporter textfile collector, an operator can create an
 owner-only directory and explicitly run `python -m runner.metrics_textfile DIR`
-with the same control environment. The publisher writes `workflow.prom`
-atomically with mode 0600 and rejects concurrent publishers. The collector must
+with the same control environment. Supply an absolute directory path without
+dot components or symlinks. The publisher opens each path component without
+following symlinks, writes `workflow.prom` atomically with mode 0600, and
+rejects concurrent publishers. The collector must
 run as the same user and read that directory; choose a private listener and
 restrict access to it separately. If collection or writing fails before the
 atomic replacement, the last snapshot retains its original timestamp so the

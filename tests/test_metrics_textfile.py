@@ -69,3 +69,13 @@ class MetricsTextfileTests(unittest.TestCase):
                 link=Path(root)/'link'; link.symlink_to(directory,target_is_directory=True)
                 with self.assertRaises((ValueError,OSError)): publish(str(link))
             self.assertEqual(list(directory.iterdir()),[])
+
+    def test_rejects_traversal_and_symlinked_ancestors(self):
+        with tempfile.TemporaryDirectory() as root:
+            private=Path(root)/'private'; private.mkdir(mode=0o700)
+            child=private/'child'; child.mkdir(mode=0o700)
+            alias=Path(root)/'alias'; alias.symlink_to(private,target_is_directory=True)
+            with patch('runner.metrics_textfile.read_metrics',return_value='metric 1\n'):
+                with self.assertRaises(ValueError): publish(str(child)+'/..')
+                with self.assertRaises(ValueError): publish(str(alias/'child'))
+            self.assertEqual(list(child.iterdir()),[])

@@ -9,7 +9,17 @@ from runner.worker import ConfigurationError
 
 
 def publish(directory):
-    fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    path=os.fspath(directory)
+    if not isinstance(path,str) or not os.path.isabs(path) or '\x00' in path: raise ValueError('absolute metrics directory required')
+    parts=[part for part in path.split('/') if part]
+    if any(part in ('.','..') for part in parts): raise ValueError('canonical metrics directory required')
+    fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for part in parts:
+            child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd); fd=child
+    except OSError:
+        os.close(fd); raise ValueError('metrics directory unavailable') from None
     temporary=None
     try:
         info=os.fstat(fd)
