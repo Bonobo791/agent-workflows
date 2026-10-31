@@ -19,7 +19,7 @@ import uuid
 
 @unittest.skipUnless(os.environ.get('WORKFLOW_ALERT_ROUTING_TEST')=='1','local alert routing test not configured')
 class AlertRoutingTests(unittest.TestCase):
-    def test_uncertain_stale_and_missing_alerts_fire_and_resolve(self):
+    def test_all_workflow_alerts_fire_and_resolve(self):
         from runner.metrics_textfile import publish
         from runner.service import Service
         notifications=queue.Queue()
@@ -45,6 +45,7 @@ class AlertRoutingTests(unittest.TestCase):
                 service=Service(data)
                 try:
                     service.create('r','marketing','t'); service.enqueue('r')
+                    service.create('e','engineering','et'); service.enqueue('e')
                     service.graph.db.execute("UPDATE jobs SET status='uncertain' WHERE run='r'")
                 finally: service.close()
                 env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_EXECUTION_MODE':'disabled'}
@@ -58,7 +59,7 @@ class AlertRoutingTests(unittest.TestCase):
                     with patch.dict(os.environ,env,clear=True): publish(str(metrics))
                     nodeport,amport,promport=port(),port(),port()
                     rules=(Path(__file__).resolve().parents[1]/'observability'/'alerts.yml').read_text()
-                    (config/'rules.yml').write_text(rules.replace('for: 5m','for: 1s').replace('for: 10m','for: 1s'))
+                    (config/'rules.yml').write_text(rules.replace('for: 5m','for: 1s').replace('for: 10m','for: 1s').replace('for: 15m','for: 1s').replace('for: 1h','for: 1s'))
                     (config/'alertmanager.yml').write_text(f"route:\n  receiver: local\n  group_wait: 0s\n  group_interval: 1s\n  repeat_interval: 1h\nreceivers:\n  - name: local\n    webhook_configs:\n      - url: http://127.0.0.1:{server.server_port}/alerts\n        send_resolved: true\n")
                     (config/'prometheus.yml').write_text(f"global:\n  scrape_interval: 1s\n  evaluation_interval: 1s\nrule_files:\n  - /config/rules.yml\nscrape_configs:\n  - job_name: workflow\n    static_configs:\n      - targets: ['127.0.0.1:{nodeport}']\nalerting:\n  alertmanagers:\n    - static_configs:\n        - targets: ['127.0.0.1:{amport}']\n")
                     prefix='workflow-alert-'+uuid.uuid4().hex[:12]
@@ -82,6 +83,33 @@ class AlertRoutingTests(unittest.TestCase):
                     with sqlite3.connect(data/'state.db') as db: db.execute("UPDATE jobs SET status='completed' WHERE run='r'")
                     with patch.dict(os.environ,env,clear=True): publish(str(metrics))
                     expect('WorkflowUncertainExecution','resolved')
+                    since=time.time()-1
+                    with sqlite3.connect(data/'state.db') as db: db.execute("UPDATE jobs SET status='running',expires=1 WHERE run='r'")
+                    with patch.dict(os.environ,env,clear=True): publish(str(metrics))
+                    expect('WorkflowExpiredLease','firing',since)
+                    with sqlite3.connect(data/'state.db') as db: db.execute("UPDATE jobs SET status='completed' WHERE run='r'")
+                    with patch.dict(os.environ,env,clear=True): publish(str(metrics))
+                    expect('WorkflowExpiredLease','resolved',since)
+                    since=time.time()-1
+                    with sqlite3.connect(data/'state.db') as db: db.execute("INSERT INTO quota_pauses VALUES('scope','r','asset_production')")
+                    with patch.dict(os.environ,env,clear=True): publish(str(metrics))
+                    expect('WorkflowQuotaPaused','firing',since)
+                    with sqlite3.connect(data/'state.db') as db: db.execute("DELETE FROM quota_pauses WHERE run='r'")
+                    with patch.dict(os.environ,env,clear=True): publish(str(metrics))
+                    expect('WorkflowQuotaPaused','resolved',since)
+                    since=time.time()-1
+                    with sqlite3.connect(data/'state.db') as db:
+                        expires=time.time()+3600
+                        db.execute("UPDATE jobs SET status='running',expires=? WHERE run='e'",(expires,))
+                        db.execute("INSERT INTO graph_claims VALUES('et','e','token',?)",(expires,))
+                        claim=db.execute("INSERT INTO claim_audit(schema_version,run,task_id,status,created) VALUES(1,'e','et','claimed',1)").lastrowid
+                        db.execute("INSERT INTO graph_stages VALUES('e','qa','passed','version',7)")
+                        db.execute("INSERT INTO approval_waits VALUES('e','open_draft','qa','version',7,?)",(claim,))
+                    with patch.dict(os.environ,env,clear=True): publish(str(metrics))
+                    expect('WorkflowAwaitingApproval','firing',since)
+                    with sqlite3.connect(data/'state.db') as db: db.execute("DELETE FROM approval_waits WHERE run='e'")
+                    with patch.dict(os.environ,env,clear=True): publish(str(metrics))
+                    expect('WorkflowAwaitingApproval','resolved',since)
                     target=metrics/'workflow.prom'; temporary=metrics/'stale.tmp'
                     text=target.read_text()
                     stale,count=re.subn(r'(?m)^workflow_snapshot_timestamp_seconds [0-9]+$', 'workflow_snapshot_timestamp_seconds 1',text)

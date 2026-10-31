@@ -72,7 +72,19 @@ class MetricsTextfileTests(unittest.TestCase):
             with patch('runner.metrics_textfile.read_metrics',return_value='new 1\n'), patch('runner.metrics_textfile.os.replace',side_effect=OSError('unavailable')):
                 with self.assertRaises(OSError): publish(root)
             self.assertEqual(target.read_text(),'workflow_snapshot_timestamp_seconds 123\n')
+            with patch('runner.metrics_textfile.read_metrics',return_value='new 1\n'), patch('runner.metrics_textfile.os.fsync',side_effect=OSError('unavailable')):
+                with self.assertRaises(OSError): publish(root)
+            self.assertEqual(target.read_text(),'workflow_snapshot_timestamp_seconds 123\n')
             self.assertEqual({p.name for p in Path(root).iterdir()},{'workflow.prom'})
+
+    def test_file_sync_precedes_replacement_and_directory_sync(self):
+        with tempfile.TemporaryDirectory() as root:
+            calls=[]; sync=os.fsync; replace=os.replace
+            def record_sync(fd): calls.append('sync'); return sync(fd)
+            def record_replace(*args,**kwargs): calls.append('replace'); return replace(*args,**kwargs)
+            with patch('runner.metrics_textfile.read_metrics',return_value='metric 1\n'), patch('runner.metrics_textfile.os.fsync',side_effect=record_sync), patch('runner.metrics_textfile.os.replace',side_effect=record_replace):
+                publish(root)
+            self.assertEqual(calls,['sync','replace','sync'])
 
     def test_rejects_nonprivate_directory_and_symlink(self):
         with tempfile.TemporaryDirectory() as root:
@@ -81,6 +93,14 @@ class MetricsTextfileTests(unittest.TestCase):
                 with self.assertRaises(ValueError): publish(str(directory))
                 link=Path(root)/'link'; link.symlink_to(directory,target_is_directory=True)
                 with self.assertRaises((ValueError,OSError)): publish(str(link))
+            self.assertEqual(list(directory.iterdir()),[])
+
+    def test_rejects_final_symlink_to_private_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory=Path(root)/'private'; directory.mkdir(mode=0o700)
+            link=Path(root)/'link'; link.symlink_to(directory,target_is_directory=True)
+            with patch('runner.metrics_textfile.read_metrics',return_value='metric 1\n'):
+                with self.assertRaises(ValueError): publish(str(link))
             self.assertEqual(list(directory.iterdir()),[])
 
     def test_rejects_traversal_and_symlinked_ancestors(self):
