@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+rule_files:
+  - /config/alerts.yml
+scrape_configs:
+  - job_name: workflow
+    authorization:
+      credentials_file: /config/scrape-token
+    static_configs:
+      - targets: ['127.0.0.1:19190']
+alerting:
+  alertmanagers:
+    - basic_auth:
+        username: workflow
+        password_file: /config/alertmanager-password
+      static_configs:
+        - targets: ['127.0.0.1:19093']

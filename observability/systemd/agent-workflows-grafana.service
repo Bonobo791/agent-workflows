@@ -1,0 +1,16 @@
+[Unit]
+Description=Agent Workflows private Grafana dashboard
+After=agent-workflows-prometheus.service
+Wants=agent-workflows-prometheus.service
+
+[Service]
+Type=simple
+KillMode=mixed
+ExecStart=/usr/bin/podman run --rm --pull=never --name=agent-workflows-grafana --network=host --userns=keep-id --user=%U:%G --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp -v %h/.config/agent-workflows/grafana:/etc/workflow-grafana:ro,Z -v %h/.local/share/agent-workflows-monitor/grafana:/var/lib/grafana:rw,Z -e GF_SERVER_HTTP_ADDR=127.0.0.1 -e GF_SERVER_HTTP_PORT=13000 -e GF_SECURITY_ADMIN_USER=workflow -e GF_SECURITY_ADMIN_PASSWORD__FILE=/etc/workflow-grafana/admin-password -e GF_SECURITY_SECRET_KEY__FILE=/etc/workflow-grafana/secret-key -e GF_PATHS_PROVISIONING=/etc/workflow-grafana/provisioning -e GF_PATHS_LOGS=/tmp/log -e GF_LOG_MODE=console -e GF_AUTH_ANONYMOUS_ENABLED=false -e GF_USERS_ALLOW_SIGN_UP=false -e GF_UNIFIED_ALERTING_ENABLED=false -e GF_PLUGINS_PREINSTALL_DISABLED=true -e GF_PLUGINS_PREINSTALL_AUTO_UPDATE=false -e GF_PLUGINS_PLUGIN_ADMIN_ENABLED=false -e GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true -e GF_ANALYTICS_REPORTING_ENABLED=false -e GF_ANALYTICS_CHECK_FOR_UPDATES=false docker.io/grafana/grafana@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
