@@ -147,8 +147,9 @@ adapter with `deliver_page` and separate private cursor storage; constructing it
 does not start a worker or send data. Its strict acknowledgement and privacy
 behavior have been tested with in-memory and loopback HTTP fixtures, not with an
 Opik server or a verified access-control and retention configuration. The
-loopback fixture checks serialized spans, partial acknowledgements, and cursor
-retry over a real local HTTP socket; it does not verify an Opik backend.
+loopback fixtures check serialized spans, partial acknowledgements, receiver
+unavailability, and replay after reopening the cursor database. Replayed spans
+retain their trace and span identifiers. They do not verify an Opik backend.
 `OpenTelemetryAuditTraceExporter` can also send a bounded projected batch as
 synthetic snapshot traces, grouped by keyed run ID. Each trace has a root and
 zero-duration child spans at the recorded event timestamps. These are audit
