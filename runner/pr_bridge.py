@@ -115,8 +115,9 @@ class PRBridge:
         try:
             proposal,state=self._load(loop,run,ref)
             if state!='proposed': raise PRBridgeError('proposal not available')
-            loop.ledger.approve_bound(run,proposal['action'],proposal['target'],'local-owner',expires)
-            self.service.graph.db.execute("UPDATE pr_bridge_operations SET state='approved' WHERE proposal=? AND state='proposed'",(ref,))
+            def record(db):
+                if db.execute("UPDATE pr_bridge_operations SET state='approved' WHERE proposal=? AND run=? AND state='proposed'",(ref,run)).rowcount!=1: raise PRBridgeError('proposal changed')
+            loop.ledger.approve_bound(run,proposal['action'],proposal['target'],'local-owner',expires,record=record)
             return {'approved':True,'proposal':ref,'action':proposal['action']}
         finally: loop.ledger.db.close()
     def withdraw(self,run,queue_claim,graph_claim,ref):

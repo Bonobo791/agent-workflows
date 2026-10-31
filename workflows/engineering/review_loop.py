@@ -18,7 +18,8 @@ class BoundLedger(ActionLedger):
         fields={'task','repo','branch','base','head','diff'}
         if not isinstance(target,dict) or set(target)!=fields or any(not isinstance(v,str) or not v.strip() for v in target.values()) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',target['head']) or not re.fullmatch(r'[0-9a-f]{64}',target['diff']): raise LoopError('invalid target')
         return json.dumps(target,sort_keys=True,separators=(',',':'))
-    def approve_bound(self,run,action,target,actor,expires):
+    def approve_bound(self,run,action,target,actor,expires,record=None):
+        if record is not None and not callable(record): raise ValueError('approval recorder must be callable')
         manifest=self.encode(target)
         if not isinstance(actor,str) or not actor.strip() or type(expires) not in (int,float) or not math.isfinite(expires) or expires<=self.clock() or self.lock_check(run) is not True or self.workspace(run)!=target: raise LoopError('approval evidence unavailable')
         self.db.execute('BEGIN IMMEDIATE')
@@ -29,6 +30,7 @@ class BoundLedger(ActionLedger):
             self.db.execute('INSERT OR REPLACE INTO external_actions VALUES(?,?,?,?,?,?)',(run,action,target['head'],actor,'approved',self.clock()))
             self.db.execute('INSERT OR REPLACE INTO action_bindings VALUES(?,?,?,?,?)',(run,action,target['head'],manifest,expires))
             self.db.execute('INSERT INTO action_authorization_history VALUES(?,?,?,?,?)',(run,action,target['head'],actor,self.clock()))
+            if record is not None: record(self.db)
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
     def reserve_scoped(self,run,action,version,scope):

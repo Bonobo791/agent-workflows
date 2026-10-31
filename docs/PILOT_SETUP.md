@@ -243,7 +243,9 @@ withdraw an unused freeze approval with `revoke_freeze_approval`, specifying its
 exact `run` and `version`; a started or uncertain action cannot be withdrawn.
 For an unused GitHub proposal approval, submit `pr_withdraw` with the exact
 proposal and current claims (or through `automatic_control`). Both records are
-withdrawn atomically; uncertain actions still require reconciliation. If the
+withdrawn atomically; uncertain actions still require reconciliation. Approval
+and proposal state now commit together; a pre-existing mismatched record requires
+manual inspection and is not repaired by this procedure. If the
 withdrawal response is lost, inspect the private approval records before retrying.
 If a checkpoint
 response is lost, inspect status before retrying; do not infer success from a
