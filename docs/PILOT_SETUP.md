@@ -314,6 +314,13 @@ empty cgroup. The current control cannot establish that its launch request is
 quiescent; do not treat the empty observation as permission to confirm the stop
 or replay work. A trusted quiescence verifier and recovery control remain needed.
 
+An opt-in real sandbox probe can check the specific parent cgroup file and user
+D-Bus socket on the local host:
+`WORKFLOW_TEST_SYSTEMD=1 CODEX_TEST_EXECUTABLE=/absolute/path/to/codex python -m unittest tests.test_scope_isolation_live`.
+It uses a disposable scope and attempts no cgroup write or D-Bus request. A
+passing result covers only those paths, not all possible descendant escapes or
+the quiescence of an interrupted launch.
+
 Marketing source review requires either the configured local snapshot authority
 or an independently authenticated source-tool authority. Missing, stale or
 unavailable evidence blocks approval. The local snapshot path has focused tests
