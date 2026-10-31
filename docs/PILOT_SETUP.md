@@ -317,7 +317,10 @@ or replay work. A trusted quiescence verifier and recovery control remain needed
 An opt-in real sandbox probe can check the specific parent cgroup file and user
 D-Bus socket on the local host:
 `WORKFLOW_TEST_SYSTEMD=1 CODEX_TEST_EXECUTABLE=/absolute/path/to/codex python -m unittest tests.test_scope_isolation_live`.
-It uses a disposable scope and attempts no cgroup write or D-Bus request. A
+It verifies that the host paths exist and the user bus accepts a connection
+before requiring a permission, read-only, or hidden-path error inside the
+sandbox. It uses a recorded disposable scope and attempts no cgroup write or
+D-Bus request. A
 passing result covers only those paths, not all possible descendant escapes or
 the quiescence of an interrupted launch.
 
