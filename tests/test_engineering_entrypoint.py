@@ -220,6 +220,30 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(wrong['proposal'],)).fetchone(),('proposed',))
                     initial=control.handle('x'*40,{**base_req,'action':'pr_propose','kind':'push','parameters':{'expected_remote':'a'*40}})
                     control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':initial['proposal'],'expires':time.time()+60})
+                    withdrawal={**base_req,'action':'pr_withdraw','proposal':initial['proposal']}
+                    with self.assertRaises(ControlError):control.handle('wrong',withdrawal)
+                    with self.assertRaises(ControlError):control.handle('x'*40,{**withdrawal,'queue_claim':'stale'})
+                    audit_trigger=service.graph.db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='action_audit_update'").fetchone()[0]
+                    service.graph.db.execute('DROP TRIGGER action_audit_update')
+                    with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
+                    self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(initial['proposal'],)).fetchone(),('approved',))
+                    service.graph.db.execute(audit_trigger)
+                    service.graph.db.execute("CREATE TRIGGER reject_withdrawal BEFORE INSERT ON pr_reauthorization_history BEGIN SELECT RAISE(IGNORE); END")
+                    with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
+                    self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(initial['proposal'],)).fetchone(),('approved',))
+                    service.graph.db.execute('DROP TRIGGER reject_withdrawal')
+                    self.assertTrue(control.handle('x'*40,withdrawal)['revoked'])
+                    with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
+                    self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(initial['proposal'],)).fetchone(),('proposed',))
+                    self.assertEqual(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',initial['action'])).fetchone(),('revoked',))
+                    with self.assertRaises(ControlError):control.handle('x'*40,{**base_req,'action':'pr_execute','proposal':initial['proposal']})
+                    service.model_supervisor=SimpleNamespace(db=root+'/state.db')
+                    checkpoint(service,'run-1',q['token'],g)
+                    service.lifecycle.register_checkpoint_replacement('run-1','inc-next','inc-third')
+                    service.lifecycle.close();service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc-third')
+                    q=service.lifecycle.claim();g=service.claim('run-1');service.model_supervisor=None
+                    base_req.update(queue_claim=q['token'],graph_claim=g);req.update(queue_claim=q['token'],graph_claim=g)
+                    control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':initial['proposal'],'expires':time.time()+60})
                     service.graph.db.execute('UPDATE action_bindings SET expires=0 WHERE run=? AND action=?',('run-1',initial['action']))
                     expired=control.handle('x'*40,{**base_req,'action':'pr_reauthorize','proposal':initial['proposal']})
                     self.assertEqual(expired['reason'],'expired')
@@ -228,6 +252,7 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     service.pr_authority.http.fail_before=True
                     with self.assertRaises(ControlError): control.handle('x'*40,{**base_req,'action':'pr_execute','proposal':initial['proposal']})
                     with self.assertRaises(ControlError): control.handle('x'*40,{**base_req,'action':'pr_reauthorize','proposal':initial['proposal']})
+                    with self.assertRaises(ControlError):control.handle('x'*40,{**base_req,'action':'pr_withdraw','proposal':initial['proposal']})
                     service.pr_authority.quiescent=True; service.pr_authority.outcome='not_executed'
                     result=control.handle('x'*40,{**base_req,'action':'pr_reconcile','proposal':initial['proposal']})
                     self.assertEqual(result['outcome'],'not_executed')

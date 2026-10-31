@@ -150,6 +150,17 @@ class CheckpointHandoffTests(unittest.TestCase):
         self.assertTrue(self.service.queue.may_start('run',self.queue))
         self.assertEqual(self.service.actions.db.execute("SELECT status FROM external_actions WHERE run='run'").fetchone(),('uncertain',))
 
+    def test_partially_recorded_remote_action_blocks_checkpoint(self):
+        from runner.checkpoint import CheckpointError,checkpoint
+        db=self.service.graph.db
+        db.execute('CREATE TABLE pr_bridge_operations(proposal TEXT PRIMARY KEY,run TEXT,kind TEXT,state TEXT,result TEXT)')
+        db.execute("INSERT INTO pr_bridge_operations VALUES('proposal','run','draft','observed','result')")
+        for state in ('observed','uncertain','approved',None,'unknown'):
+            with self.subTest(state=state):
+                db.execute("UPDATE pr_bridge_operations SET state=? WHERE proposal='proposal'",(state,))
+                with self.assertRaises(CheckpointError):checkpoint(self.service,'run',self.queue,self.graph)
+                self.assertTrue(self.service.queue.may_start('run',self.queue))
+
     def test_unknown_session_state_blocks_checkpoint(self):
         from runner.checkpoint import CheckpointError,checkpoint
         db=self.service.graph.db
@@ -186,6 +197,19 @@ class CheckpointHandoffTests(unittest.TestCase):
         with self.assertRaises(CheckpointError): checkpoint(self.service,'run',self.queue,self.graph)
         self.assertTrue(self.service.queue.may_start('run',self.queue));self.service.graph._lease('run',self.graph)
         self.assertEqual(self.service.lifecycle.status('run')['status'],'running')
+
+    def test_owner_can_withdraw_unused_freeze_approval_before_checkpoint(self):
+        from runner.checkpoint import CheckpointError,checkpoint
+        from runner.control import ControlError,ControlPlane
+        self.service.actions.approve('run','freeze','review-version','owner')
+        with self.assertRaises(CheckpointError):checkpoint(self.service,'run',self.queue,self.graph)
+        control=ControlPlane(self.service,'secret')
+        request={'action':'revoke_freeze_approval','run':'run','version':'review-version'}
+        with self.assertRaises(ControlError):control.handle('wrong',request)
+        self.assertTrue(control.handle('secret',request)['revoked'])
+        self.assertEqual(checkpoint(self.service,'run',self.queue,self.graph)['state'],'checkpointed')
+        self.assertEqual(self.service.actions.db.execute("SELECT status FROM external_actions WHERE run='run' AND action='freeze'").fetchone(),('revoked',))
+        with self.assertRaises(ControlError):control.handle('secret',request)
 
     def test_unconsumed_approval_blocks_checkpoint(self):
         from runner.checkpoint import CheckpointError,checkpoint

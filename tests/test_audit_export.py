@@ -49,6 +49,13 @@ class AuditExportTests(unittest.TestCase):
                 self.assertEqual(deliver_page(*args,accept)['status'],'empty')
             finally:cursor.close();service.lifecycle.close();service.close()
 
+    def test_revoked_approval_projects_as_revoked_without_private_fields(self):
+        from runner.otel_audit import _attributes
+        event=project_event('action_audit',{'id':1,'schema_version':1,'run':'private-run','action':'private-action','version':'private-version','actor':'private-owner','status':'revoked','created':1},b'x'*32)
+        self.assertEqual(event['status'],'revoked')
+        self.assertEqual(_attributes(event)['status'],'revoked')
+        self.assertNotIn('private',str(event))
+
     @unittest.skipUnless(OTLPSpanExporter is not None, 'optional OpenTelemetry OTLP exporter unavailable')
     def test_unavailable_otlp_receiver_replays_after_cursor_restart(self):
         import http.server

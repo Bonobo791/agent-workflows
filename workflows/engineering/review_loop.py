@@ -25,7 +25,7 @@ class BoundLedger(ActionLedger):
         try:
             if self.db.execute('SELECT 1 FROM action_followups WHERE run=?',(run,)).fetchone() or self.db.execute("SELECT 1 FROM external_actions WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise ActionConflict('prior action unresolved')
             row=self.db.execute('SELECT status FROM external_actions WHERE run=? AND action=? AND version=?',(run,action,target['head'])).fetchone()
-            if row and row[0]!='not_executed': raise ActionConflict('approval exists')
+            if row and row[0] not in ('not_executed','revoked'): raise ActionConflict('approval exists')
             self.db.execute('INSERT OR REPLACE INTO external_actions VALUES(?,?,?,?,?,?)',(run,action,target['head'],actor,'approved',self.clock()))
             self.db.execute('INSERT OR REPLACE INTO action_bindings VALUES(?,?,?,?,?)',(run,action,target['head'],manifest,expires))
             self.db.execute('INSERT INTO action_authorization_history VALUES(?,?,?,?,?)',(run,action,target['head'],actor,self.clock()))

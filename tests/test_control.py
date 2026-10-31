@@ -48,6 +48,23 @@ class ControlTests(unittest.TestCase):
                     with self.assertRaises(ReplacementUncertain):request_control({'action':'register_checkpoint_replacement','run':'run'})
             finally:thread.join(2);listener.close()
 
+    def test_lost_withdrawal_response_is_uncertain(self):
+        import socket,threading
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.cli import WithdrawalUncertain,request_control
+        for action in ('revoke_freeze_approval','pr_withdraw','automatic_control'):
+            with self.subTest(action=action),tempfile.TemporaryDirectory() as root:
+                secret=Path(root)/'secret';secret.write_text('x'*40);secret.chmod(0o600)
+                listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);listener.bind(str(Path(root)/'control.sock'));listener.listen()
+                def respond():
+                    with listener.accept()[0] as client:client.recv(65536);client.sendall(b'not-json\n')
+                thread=threading.Thread(target=respond);thread.start()
+                try:
+                    with patch.dict('os.environ',{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}):
+                        with self.assertRaises(WithdrawalUncertain):request_control({'action':action,'operation':'pr_withdraw','run':'run'})
+                finally:thread.join(2);listener.close()
+
     def test_lost_admission_response_is_uncertain(self):
         """Treat an invalid post-transmission admission reply as an unknown outcome."""
         import os, socket, threading

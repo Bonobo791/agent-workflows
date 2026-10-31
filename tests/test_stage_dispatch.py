@@ -362,6 +362,11 @@ class StageDispatchTests(unittest.TestCase):
             scopes=LocalScopes(root+'/state.db',Backend());scopes.close()
             service.graph.db.execute('CREATE TABLE local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
             service.model_supervisor=SimpleNamespace(db=root+'/state.db')
+            review_version=service.graph.get('r','canonical_review')['version']
+            service.approve('r','freeze',review_version,'operator')
+            from runner.control import ControlPlane
+            control=ControlPlane(service,'secret')
+            self.assertTrue(control.handle('secret',{'action':'revoke_freeze_approval','run':'r','version':review_version})['revoked'])
             old_queue,old_claim=queue['token'],claim
             checkpoint(service,'r',old_queue,old_claim)
             with self.assertRaises(StageError): dispatcher.step('r',old_queue,old_claim)

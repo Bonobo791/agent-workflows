@@ -43,7 +43,7 @@ class AutoWorker:
             self.pending_decision={'run':run,'version':version,'decision':decision}
         return {'pending':True,'version':version}
     def request_action(self,run,operation,parameters):
-        allowed={'engineering_workspace_binding','bind_engineering_workspace','pr_propose','pr_approve','pr_execute','pr_review','pr_request_qa','pr_post_ready','pr_reconcile','pr_reauthorize'}
+        allowed={'engineering_workspace_binding','bind_engineering_workspace','pr_propose','pr_approve','pr_execute','pr_review','pr_request_qa','pr_post_ready','pr_reconcile','pr_reauthorize','pr_withdraw'}
         if operation not in allowed or not isinstance(parameters,dict) or any(key in parameters for key in ('action','run','queue_claim','graph_claim','secret')): raise AutoWorkerError('invalid automatic action')
         with self.guard:
             if self.state.get('run')!=run or self.state.get('status') not in ('blocked','awaiting_approval','awaiting_review','awaiting_merge_review','no_runnable_stage') or self.pending_action is not None or self.checkpoint_pending or self.stop_event.is_set(): raise AutoWorkerError('automatic task unavailable or busy')

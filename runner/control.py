@@ -130,12 +130,13 @@ class ControlPlane:
             if action=='human_review_status':
                 if self.service.human_review is None: raise ControlError('human review unavailable')
                 return {'decision':self.service.human_review.current(request['run'])}
-            if action in ('pr_propose','pr_approve','pr_execute','pr_review','pr_post_ready','pr_reconcile','pr_request_qa','pr_reauthorize'):
+            if action in ('pr_propose','pr_approve','pr_execute','pr_review','pr_post_ready','pr_reconcile','pr_request_qa','pr_reauthorize','pr_withdraw'):
                 bridge=self.service.pr_bridge
                 if bridge is None: raise ControlError('PR bridge unavailable')
                 args=(request['run'],request['queue_claim'],request['graph_claim'])
                 if action=='pr_propose': return bridge.propose(*args,request['kind'],request['parameters'])
                 if action=='pr_reauthorize': return bridge.reauthorize(*args,request['proposal'])
+                if action=='pr_withdraw': return bridge.withdraw(*args,request['proposal'])
                 if action=='pr_approve': return bridge.approve(*args,request['proposal'],request['expires'])
                 if action=='pr_execute': return bridge.execute(*args,request['proposal'])
                 if action=='pr_review': return bridge.review(*args,request['number'],request['dispositions'])
@@ -164,6 +165,7 @@ class ControlPlane:
                 data=self.service.artifacts.get(request['reference'])
                 if len(data)>1048576: raise ControlError('artifact too large')
                 return {'artifact':json.loads(data)}
+            if action=='revoke_freeze_approval': self.service.actions.revoke_freeze(request['run'],request['version']); return {'revoked':True}
             if action=='approve': self.service.approve(request['run'],request['approval'],request['version'],'local-owner'); return {'approved':True}
             if action=='complete' and self.fixture_mode: return {'result':self.service.complete(request['run'],request['stage'],request['claim'],request['evidence'])}
         except Exception: raise ControlError('request failed') from None
