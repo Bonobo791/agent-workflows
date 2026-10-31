@@ -40,6 +40,8 @@ must not contain private skills, credentials, user data or session histories.
   `blocker_direction`, `plan_endpoint`, `github_owner`, `github_repo` and
   `github_branch`; marketing also requires `task_format`. The Plan and GitHub
   credential belongs in an owner-only file referenced by `PLAN_TOKEN_FILE`.
+  Task intake requires owner fields to be null or nonempty strings and dates
+  to be null or canonical `YYYY-MM-DD`; malformed values block admission.
   In local mode, omit `GITHUB_TOKEN_FILE` to use the existing `gh` sign-in for
   read-only GitHub access; an explicit token file remains supported. Do not put
   credentials in the task JSON, model input or images. When the local worker uses

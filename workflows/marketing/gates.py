@@ -31,7 +31,9 @@ def intake_issues(task, today=None):
         issues.append('due date unknown')
     elif task['due'] is not None:
         try:
-            if date.fromisoformat(task['due']) < (today or date.today()):
+            due=date.fromisoformat(task['due'])
+            if due.isoformat()!=task['due']: raise ValueError()
+            if due < (today or date.today()):
                 issues.append('overdue requires review')
         except (TypeError, ValueError):
             issues.append('invalid due date')

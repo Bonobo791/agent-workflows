@@ -9,6 +9,24 @@ class FakeMCP:
         raise AssertionError(name)
 
 class PlanAdapterTests(unittest.TestCase):
+    def test_malformed_owner_is_not_treated_as_unassigned(self):
+        for field in ('assigneeUserId','delegateUserId'):
+            for invalid in ('',False,0):
+                class Malformed(FakeMCP):
+                    def get_issue(self,project,number):
+                        result=super().get_issue(project,number); result['data'][field]=invalid; return result
+                with self.subTest(field=field,invalid=invalid), self.assertRaises(PlanError):
+                    inspect_issue(Malformed(),'DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[],today='2026-10-31')
+
+    def test_malformed_schedule_fields_are_not_unscheduled(self):
+        for field in ('startDate','dueDate'):
+            for invalid in ('',False,0,'20261031','2026-02-30'):
+                class Malformed(FakeMCP):
+                    def get_issue(self,project,number):
+                        result=super().get_issue(project,number); result['data'][field]=invalid; return result
+                with self.subTest(field=field,invalid=invalid), self.assertRaises(PlanError):
+                    inspect_issue(Malformed(),'DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[],today='2026-10-31')
+
     def test_normalizes_only_confirmed_ready_leaf(self):
         value=inspect_issue(FakeMCP(),'DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[])
         self.assertTrue(value['ready']); self.assertTrue(value['leaf']); self.assertTrue(value['dependencies_complete'])

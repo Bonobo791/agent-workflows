@@ -9,6 +9,15 @@ def inspect_issue(client,project_key,number,*,ready_columns,completed_columns,bl
     data=result.get('data') if isinstance(result,dict) and result.get('ok') is True else None
     required=('id','identifier','title','description','columnId','archivedAt','assigneeUserId','delegateUserId','dueDate','startDate','subtasks','links','development','updatedAt')
     if not isinstance(data,dict) or any(key not in data for key in required): raise PlanError('issue snapshot incomplete')
+    for field in ('assigneeUserId','delegateUserId'):
+        value=data[field]
+        if value is not None and (not isinstance(value,str) or not value.strip()): raise PlanError('invalid task owner')
+    for field in ('startDate','dueDate'):
+        value=data[field]
+        if value is not None:
+            try:
+                if not isinstance(value,str) or date.fromisoformat(value).isoformat()!=value: raise ValueError()
+            except ValueError: raise PlanError('invalid task schedule') from None
     if not all(isinstance(data[key],list) for key in ('subtasks','links','development')): raise PlanError('issue relationships unavailable')
     if any(not isinstance(child,dict) or type(child.get('archived')) is not bool for child in data['subtasks']): raise PlanError('invalid subtask status')
     attachments=client.call('list_attachments',{'issueId':data['id']})

@@ -2,6 +2,10 @@ import unittest
 from workflows.marketing import gates
 
 class MarketingGatesTests(unittest.TestCase):
+    def test_noncanonical_due_date_is_rejected(self):
+        task=dict(leaf=True,ready=True,dependencies_complete=True,owner=None,existing_work=[],due='20261030',format='guide',task_id='T-1')
+        self.assertIn('invalid due date',gates.intake_issues(task))
+
     def test_intake_fails_closed_for_missing_evidence(self):
         self.assertTrue(gates.intake_issues({}))
         task = dict(leaf=True, ready=True, dependencies_complete=True, owner=None,
