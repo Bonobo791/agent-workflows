@@ -14,6 +14,17 @@ class FakePlan:
         return {'ok':True,'data':{'items':[],'nextCursor':None} if name=='list_issue_activity' else []}
 
 class SingleTaskTests(unittest.TestCase):
+    def test_legacy_display_only_admission_remains_fenced(self):
+        from runner.task_intake import IntakeError
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('legacy','engineering','DEMO-1')
+                intake=SingleTaskIntake(service,FakePlan(),lambda *_:[],{'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'})
+                with self.assertRaisesRegex(IntakeError,'task already admitted'): intake.submit('new','engineering','team.DEMO',1)
+                self.assertIsNone(service.queue.get('new'))
+            finally: service.close()
+
     def test_wrong_tracker_issue_never_admits_or_queues_task(self):
         class WrongIssue(FakePlan):
             def get_issue(self,project,number):
@@ -61,7 +72,9 @@ class SingleTaskTests(unittest.TestCase):
             with self.assertRaises(ControlError): control.handle('wrong',req)
             value=control.handle('secret',req)
             self.assertEqual(value['source_version'],'v1')
-            self.assertEqual(json.loads(service.artifacts.get(value['artifact_ref']))['task_id'],'DEMO-1')
+            snapshot=json.loads(service.artifacts.get(value['artifact_ref']))
+            self.assertEqual(snapshot['task_id'],'plan:1')
+            self.assertEqual(snapshot['identifier'],'DEMO-1')
             self.assertEqual(service.queue.get('run1')['status'],'queued')
             with self.assertRaises(ControlError): control.handle('secret',{**req,'run':'run2'})
             rows=service.graph.db.execute('SELECT run,status,reasons,artifact_ref FROM task_admission_audit ORDER BY id').fetchall()

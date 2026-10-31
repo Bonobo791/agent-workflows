@@ -8,6 +8,7 @@ class TaskTests(unittest.TestCase):
         import json
         from runner.plan_mcp import PlanMCP
         from runner.service import Service
+        from runner.task_intake import IntakeError
         from tests.test_plan_mcp import FakeTransport
         class Transport(FakeTransport):
             def post(self,message,headers):
@@ -17,6 +18,7 @@ class TaskTests(unittest.TestCase):
                 if name=='get_issue_by_number':
                     self.assert_project=message['params']['arguments']['projectKey']
                     data={'id':1,'identifier':'DEMO-1','title':'Synthetic','description':'Example','columnId':10,'archivedAt':None,'assigneeUserId':None,'delegateUserId':None,'dueDate':None,'startDate':None,'subtasks':[],'links':[],'development':[],'updatedAt':'v1'}
+                    if self.assert_project=='other.DEMO': data['id']=2
                 elif name=='list_issue_activity': data={'items':[],'nextCursor':None}
                 else: data=[]
                 result={'jsonrpc':'2.0','id':message['id'],'result':{'structuredContent':{'ok':True,'data':data}}}
@@ -31,6 +33,20 @@ class TaskTests(unittest.TestCase):
                 self.assertEqual(result['task'],'DEMO-1')
                 self.assertEqual(transport.assert_project,'team.DEMO')
                 self.assertEqual(service.queue.get('run-1')['status'],'queued')
+                other=ConfiguredTask(service,{**CONFIG,'run':'run-2','project':'other.DEMO'},PlanMCP(Transport()),GitHub())
+                second=other.submit_configured()
+                self.assertEqual(second['task'],'DEMO-1')
+                self.assertEqual(service.queue.get('run-2')['status'],'queued')
+                tasks=[json.loads(service.artifacts.get(item['artifact_ref'])) for item in (result,second)]
+                self.assertEqual([task['identifier'] for task in tasks],['DEMO-1','DEMO-1'])
+                self.assertEqual([task['task_id'] for task in tasks],['plan:1','plan:2'])
+                claims=[service.claim(run) for run in ('run-1','run-2')]
+                self.assertEqual(service.graph.db.execute('SELECT task_id FROM graph_claims ORDER BY task_id').fetchall(),[('plan:1',),('plan:2',)])
+                for run,claim in zip(('run-1','run-2'),claims): service.release(run,claim)
+                for project in ('DEMO','team.DEMO'):
+                    alias=ConfiguredTask(service,{**CONFIG,'run':'duplicate','project':project},PlanMCP(Transport()),GitHub())
+                    with self.subTest(project=project),self.assertRaisesRegex(IntakeError,'task already admitted'): alias.submit_configured()
+                self.assertIsNone(service.queue.get('duplicate'))
                 with self.assertRaises(ConfiguredTaskError): ConfiguredTask(service,{**CONFIG,'project':'team..DEMO'},PlanMCP(Transport()),GitHub())
             finally: service.close()
 

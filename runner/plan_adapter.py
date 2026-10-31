@@ -48,7 +48,7 @@ def inspect_issue(client,project_key,number,*,ready_columns,completed_columns,bl
         try: started = today is not None and date.fromisoformat(data['startDate']) <= date.fromisoformat(today)
         except (ValueError,TypeError): raise PlanError('invalid task start date') from None
     else: started=True
-    return {'task_id':data['identifier'],'title':data['title'],'description':data['description'],
+    return {'task_id':'plan:'+str(data['id']),'identifier':data['identifier'],'title':data['title'],'description':data['description'],
             'ready':data['archivedAt'] is None and data['columnId'] in ready_columns and started,
             'leaf':not any(not child.get('archived',False) for child in data['subtasks']),
             'dependencies_complete':dependencies,'owner':data['assigneeUserId'] or data['delegateUserId'],

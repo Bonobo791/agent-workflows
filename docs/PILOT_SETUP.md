@@ -47,6 +47,12 @@ must not contain private skills, credentials, user data or session histories.
   to be null or canonical `YYYY-MM-DD`; malformed values block admission.
   The returned issue identifier and blocker IDs must match the requested
   records, and status IDs must be positive integers rather than booleans.
+  Durable task and claim identities use `plan:<internal issue ID>`, so matching
+  display identifiers in different teams remain distinct and qualified/unqualified
+  aliases of one issue cannot be admitted twice. The snapshot's `identifier` and
+  admission response retain the tracker display identifier. Use one tracker
+  instance per state directory. Older display-only admissions and snapshots stay
+  fenced for inspection; this change does not rewrite existing runs or approvals.
   In local mode, omit `GITHUB_TOKEN_FILE` to use the existing `gh` sign-in for
   read-only GitHub access; an explicit token file remains supported. Do not put
   credentials in the task JSON, model input or images. When the local worker uses
