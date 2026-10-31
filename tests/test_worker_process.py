@@ -118,7 +118,16 @@ worker.main()
                                 self.assertIn(observed['load'],('loaded','not-found'))
                                 active=False
                             if active:
-                                self.assertTrue(scopes.stop('r',unit))
+                                from types import SimpleNamespace
+                                from runner.control import ControlPlane
+                                from runner.service import Service
+                                service=Service(root,lifecycle=lifecycle)
+                                service.model_supervisor=SimpleNamespace(backend=backend)
+                                try:
+                                    control=ControlPlane(service,'x'*40)
+                                    result=control.handle('x'*40,{'action':'stop_local_scope','run':'r','unit':unit})
+                                    self.assertEqual(result,{'unit':unit,'state':'terminated'})
+                                finally: service.close()
                                 self.assertEqual(scopes.state('r',unit),'terminated')
                             if os.environ.get('WORKFLOW_TEST_CODEX'): print('Codex scope active after worker shutdown:',active)
                         finally: scopes.close()
