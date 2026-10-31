@@ -64,8 +64,10 @@ class LocalScopes:
     def inspect(self,run,unit):
         row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
         if not row: raise ScopeError('scope assignment unavailable')
+        try: observed=self.backend.inspect(unit)
+        except ScopeError: observed=None
         return {'recorded':{'unit':unit,'state':row[2],'invocation':row[0],'cgroup':row[1]},
-                'observed':self.backend.inspect(unit),'cgroup_empty':self.backend.empty_cgroup(row[1]) if row[1] else None}
+                'observed':observed,'cgroup_empty':self.backend.empty_cgroup(row[1]) if row[1] and observed is not None else None}
     def bind(self,run,unit):
         info=self.backend.inspect(unit)
         group=info.get('cgroup','')

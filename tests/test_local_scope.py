@@ -81,7 +81,9 @@ class ScopeTests(unittest.TestCase):
                     self.assertIs(changed['cgroup_empty'],False)
                     self.assertEqual(scopes.state('run',unit),'running')
                     with patch.object(backend,'inspect',side_effect=ScopeError('unavailable')):
-                        with self.assertRaises(ControlError): control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
+                        unavailable=control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
+                    self.assertEqual(unavailable['recorded'],result['recorded'])
+                    self.assertIsNone(unavailable['observed']);self.assertIsNone(unavailable['cgroup_empty'])
                     self.assertEqual(scopes.state('run',unit),'running')
                     with self.assertRaises(ControlError): control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':'other.scope'})
                     with self.assertRaises(ControlError): control.handle('secret',{'action':'inspect_local_scope','run':'other','unit':unit})

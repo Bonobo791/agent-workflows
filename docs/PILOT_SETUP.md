@@ -238,7 +238,8 @@ with that run and unit: it binds an observed active scope and verifies terminati
 The owner-only control action `inspect_local_scope` takes that exact `run` and
 `unit` and returns the recorded state, invocation and cgroup alongside the
 current systemd observation and whether the recorded cgroup is empty. A null
-empty result means no cgroup was recorded. These observations are not atomic
+observation means systemd inspection failed; a null empty result means no cgroup
+was recorded or systemd inspection failed. These observations are not atomic
 and do not prove a launch or stop request is quiescent; inspection changes no
 recovery state.
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
