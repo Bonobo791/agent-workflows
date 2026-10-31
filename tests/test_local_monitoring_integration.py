@@ -53,6 +53,14 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             data, config = root / 'data', root / 'config'
             data.mkdir(mode=0o700)
             config.mkdir(mode=0o700)
+            if os.environ.get('WORKFLOW_GRAFANA_TEST') == '1':
+                from runner.service import Service
+                fixture_service = Service(data)
+                try:
+                    fixture_service.create('synthetic', 'engineering', 'synthetic-task')
+                    fixture_service.enqueue('synthetic')
+                finally:
+                    fixture_service.close()
             prom_store, alert_store = root / 'prom-store', root / 'alert-store'
             prom_store.mkdir(mode=0o700)
             alert_store.mkdir(mode=0o700)
@@ -230,6 +238,22 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                         self.assertNotIn('error', query)
                         frames += len(query.get('frames', []))
                 self.assertGreater(frames, 0, 'Grafana did not return any dashboard data')
+                if os.environ.get('WORKFLOW_GRAFANA_BROWSER_TEST') == '1':
+                    fixture_dir = root / 'browser-fixture'
+                    fixture_dir.mkdir(mode=0o700)
+                    shutil.copyfile(Path(__file__).with_name('grafana_browser.cjs'), fixture_dir / 'browser.cjs')
+                    output = Path(os.environ.get('WORKFLOW_GRAFANA_SCREENSHOTS_DIR', root / 'browser-output'))
+                    output.mkdir(mode=0o700, exist_ok=True)
+                    browser = subprocess.run(['podman', 'run', '--rm', '--pull=never', '--network=host',
+                        '--userns=keep-id', '--user', f'{os.getuid()}:{os.getgid()}', '--read-only',
+                        '--cap-drop=ALL', '--security-opt=no-new-privileges', '--tmpfs', '/tmp',
+                        '-e', 'HOME=/tmp', '-e', 'XDG_CONFIG_HOME=/tmp', '-e', 'XDG_CACHE_HOME=/tmp',
+                        '--shm-size=256m', '-v', str(fixture_dir) + ':/fixture:ro,Z',
+                        '-v', str(output) + ':/output:rw,Z', '--entrypoint', '/usr/bin/node',
+                        'dbebc6c0a0f3d3137cab34190d5cf5b73051aae7d2a8b79963413d6f30b894fe',
+                        '/fixture/browser.cjs', f'http://127.0.0.1:{grafana_port}'],
+                        capture_output=True, text=True, timeout=90)
+                    self.assertEqual(browser.returncode, 0, browser.stderr[-2000:])
                 restart = ['systemctl', '--user', 'restart', grafana_name] if systemd_mode else ['podman', 'restart', grafana_name]
                 subprocess.run(restart, check=True, capture_output=True, timeout=30)
                 wait_grafana()

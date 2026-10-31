@@ -32,6 +32,8 @@ The example user units in `observability/systemd` read paths and ports from
 absolute `PYTHONPATH` pointing to the checkout, and the desktop service needs
 the user's graphical session environment. Keep that file owner-only. The
 units are examples, not an installation or a complete monitoring deployment.
+`observability/local/monitor.env.example` lists the required paths and ports;
+replace its placeholders in a private copy, without putting token values in it.
 
 ## Collector and router configuration
 
@@ -118,7 +120,11 @@ times.
 With `WORKFLOW_GRAFANA_TEST=1`, it also starts the pinned Grafana service,
 provisions the dashboard and authenticated datasource with synthetic secrets,
 queries every panel expression, and checks the dashboard after restart. This
-is API-level validation, not a visual or accessibility review.
+includes API-level validation. The additional browser test uses the pinned
+local OpenFilm renderer image to sign in, verify a synthetic queued-job series,
+and check that the evidence explanation is not clipped on a mobile viewport.
+It captures desktop and mobile screenshots in temporary storage; it is not a
+complete accessibility review.
 
 To exercise the optional local integrations, make the Prometheus v3.4.2 and
 Alertmanager v0.28.1 images available for the first two tests, and the pinned
@@ -131,6 +137,7 @@ WORKFLOW_DESKTOP_ALERT_TEST=1 python -m unittest tests.test_desktop_alert_receiv
 WORKFLOW_LOCAL_MONITORING_TEST=1 python -m unittest tests.test_local_monitoring_integration
 WORKFLOW_LOCAL_MONITORING_TEST=1 WORKFLOW_MONITOR_SYSTEMD_TEST=1 python -m unittest tests.test_local_monitoring_integration
 WORKFLOW_LOCAL_MONITORING_TEST=1 WORKFLOW_MONITOR_SYSTEMD_TEST=1 WORKFLOW_GRAFANA_TEST=1 python -m unittest tests.test_local_monitoring_integration
+WORKFLOW_LOCAL_MONITORING_TEST=1 WORKFLOW_MONITOR_SYSTEMD_TEST=1 WORKFLOW_GRAFANA_TEST=1 WORKFLOW_GRAFANA_BROWSER_TEST=1 python -m unittest tests.test_local_monitoring_integration
 ```
 
 These tests use temporary synthetic credentials and loopback containers. The
