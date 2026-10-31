@@ -84,6 +84,15 @@ scope identifier to correlate these records without exposing the scope unit;
 the binding does not imply that earlier unbound attempts completed. Existing
 scope states and turn bindings are not backfilled; `starting` and `stopping`
 do not establish a process outcome.
+`local_command_launch_audit` records the single launch claim for a reserved
+local command in the same transaction. A failed audit write prevents launch;
+the claim does not establish whether a later launch succeeded. Older commands
+are not backfilled. Export correlates its scope and assignment using keyed IDs.
+`workspace_scope_audit` records each new local workspace-to-scope binding in
+the binding transaction. Its projection correlates the assignment and scope
+using keyed identifiers; failure to record the binding rolls back the claim and
+scope reservation. Older bindings are not backfilled. A binding is not proof
+that the scope launched or terminated.
 `workspace_recovery_audit` records a fenced operator release of a local
 workspace claim in the same transaction as the release. Export correlates the
 assignment and scope with keyed identifiers without exposing their raw values;

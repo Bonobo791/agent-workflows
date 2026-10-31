@@ -52,7 +52,10 @@ class CommandSupervisor:
             if not job or job[0]!='running' or not secrets.compare_digest(job[1],queue_claim) or job[2]<=time.time(): raise CommandError('queue claim unavailable')
             if db.execute("SELECT 1 FROM supervised_commands WHERE run=? AND state='uncertain'",(run,)).fetchone(): raise CommandError('previous command outcome uncertain')
             if db.execute('UPDATE engineering_workspaces SET assignment=? WHERE run=? AND assignment IS NULL',(assignment,run)).rowcount!=1: raise CommandError('workspace already claimed')
-            db.execute('INSERT INTO supervised_commands VALUES(?,?,?,?,?,?,NULL,?)',(assignment,run,current['head'],workspace_hash,self.policy_hash,'uncertain',started)); db.execute('COMMIT')
+            db.execute('INSERT INTO supervised_commands VALUES(?,?,?,?,?,?,NULL,?)',(assignment,run,current['head'],workspace_hash,self.policy_hash,'uncertain',started))
+            reserve=getattr(self.backend,'reserve_local_scope',None)
+            if callable(reserve): reserve(db,assignment,run)
+            db.execute('COMMIT')
         except Exception: db.execute('ROLLBACK'); raise
         try:
             from runner.codex_executor import _bounded

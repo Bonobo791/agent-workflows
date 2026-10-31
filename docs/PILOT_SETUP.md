@@ -273,6 +273,11 @@ For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.
 
+For new local model executions, approved commands, and push snapshots, the
+workspace claim and its reserved scope are recorded together. A reserved scope
+is not proof of a launch; an absent or ambiguous launch still remains fenced.
+Older claims without a scope binding are not backfilled.
+
 If the stop response includes `local_workspace`, the owner can call
 `release_local_workspace` with the exact `run`, `assignment`, and `unit` after
 the bound local scope is recorded as terminated. The run must remain fenced;
