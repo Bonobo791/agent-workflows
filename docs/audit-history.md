@@ -84,6 +84,11 @@ scope identifier to correlate these records without exposing the scope unit;
 the binding does not imply that earlier unbound attempts completed. Existing
 scope states and turn bindings are not backfilled; `starting` and `stopping`
 do not establish a process outcome.
+`workspace_recovery_audit` records a fenced operator release of a local
+workspace claim in the same transaction as the release. Export correlates the
+assignment and scope with keyed identifiers without exposing their raw values;
+an audit write failure rolls back the release. Normal non-recovery releases and
+claims predating this record are not backfilled.
 `lifecycle_audit` separately labels an observer-verified stop as independently
 verified; it does not export observer evidence or target identifiers.
 `review_audit` records the opening and resolution of an engineering PR blocker

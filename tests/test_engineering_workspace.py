@@ -91,8 +91,21 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             with self.assertRaises(ControlError): self.control.handle('x'*40,request)
             self.registry.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',('run-1',assignment,unit))
             self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+            self.registry.db.execute("CREATE TRIGGER reject_workspace_recovery_audit BEFORE INSERT ON workspace_recovery_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+            with self.assertRaises(ControlError): self.control.handle('x'*40,request)
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+            self.registry.db.execute('DROP TRIGGER reject_workspace_recovery_audit')
             self.assertEqual(self.control.handle('x'*40,request),{'released':True})
             self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            from runner.audit_export import read_events
+            events,cursor=read_events(self.registry.db,'workspace_recovery_audit',0,10,b'x'*32)
+            scopes_audit,_=read_events(self.registry.db,'local_scope_audit',0,10,b'x'*32)
+            self.assertEqual(cursor,1);self.assertEqual(events[0]['status'],'released')
+            self.assertEqual(events[0]['scope_id'],scopes_audit[-1]['scope_id'])
+            from runner.otel_audit import _attributes
+            self.assertEqual(_attributes(events[0])['scope_id'],events[0]['scope_id'])
+            self.assertIsNotNone(events[0]['execution_id'])
+            self.assertNotIn(assignment,str(events));self.assertNotIn(unit,str(events))
             with self.assertRaises(ControlError): self.control.handle('x'*40,request)
         finally: scopes.close()
 
