@@ -64,8 +64,9 @@ class UnixTransportTests(unittest.TestCase):
                     with self.subTest(slow_header=slow_header):
                         server.slow_header=slow_header
                         started=time.monotonic()
+                        engine=UnixEngine(path)
                         with self.assertRaises(DockerError):
-                            UnixEngine(path).request('POST','/containers/'+ID+'/wait?condition=not-running',timeout=.25)
+                            engine.request('POST','/containers/'+ID+'/wait?condition=not-running',timeout=.25)
                         self.assertLess(time.monotonic()-started,.8)
             finally: server.shutdown(); thread.join(); server.server_close()
 
@@ -88,7 +89,7 @@ class UnixTransportTests(unittest.TestCase):
                 started=time.monotonic()
                 with self.assertRaises(DockerError): engine.request('POST','/containers/'+ID+'/wait?condition=not-running',timeout=.05)
                 self.assertLess(time.monotonic()-started,.6)
-                with self.assertRaises(DockerError): engine.request('GET','/containers/'+ID+'/json',timeout=1)
+                with self.assertRaisesRegex(DockerError,'invalid Engine wait timeout'): engine.request('GET','/containers/'+ID+'/json',timeout=1)
                 for timeout in (0,-1,601,True,float('nan'),float('inf')):
                     with self.subTest(timeout=timeout),self.assertRaises(DockerError):
                         engine.request('POST','/containers/'+ID+'/wait?condition=not-running',timeout=timeout)
