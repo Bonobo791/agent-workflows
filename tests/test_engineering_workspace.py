@@ -37,6 +37,47 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         db=self.registry.db
         db.execute('INSERT INTO docker_assignments VALUES(?,?,?,?)',(a,'id','terminated','fixture')); db.execute('INSERT INTO docker_terminal_evidence VALUES(?,?,?,?)',(a,'id','exited',1))
         self.registry.release('run-1',a); self.assertEqual(self.registry.claim('run-1',b,self.policy),path)
+    def test_git_verification_allows_unrelated_database_writes(self):
+        import sqlite3
+        from unittest.mock import patch
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        scopes=LocalScopes(str(self.root/'state.db'),Backend());scopes.close()
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        other=sqlite3.connect(str(self.root/'state.db'),timeout=.05,isolation_level=None)
+        self.addCleanup(other.close)
+        other.execute('CREATE TABLE claim_probe(value INTEGER)')
+        verify=self.registry.verify
+        def verify_with_write(*args,**kwargs):
+            other.execute('INSERT INTO claim_probe VALUES(1)')
+            return verify(*args,**kwargs)
+        with patch.object(self.registry,'verify',side_effect=verify_with_write):
+            self.registry.claim_local('run-1','job-'+'a'*48,self.policy)
+        self.assertEqual(other.execute('SELECT COUNT(*) FROM claim_probe').fetchone(),(1,))
+
+    def test_claim_rechecks_binding_and_approval_after_git_verification(self):
+        from unittest.mock import patch
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        scopes=LocalScopes(str(self.root/'state.db'),Backend());scopes.close()
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        verify=self.registry.verify
+        for method in (self.registry.claim,self.registry.claim_local):
+            for change in ("UPDATE engineering_workspaces SET branch='changed' WHERE run='run-1'",
+                           "UPDATE engineering_workspace_approvals SET binding_hash='changed' WHERE run='run-1'",
+                           "UPDATE engineering_workspaces SET assignment='other' WHERE run='run-1'",
+                           "UPDATE engineering_workspaces SET assignment='other' WHERE run='run-1'; UPDATE engineering_workspaces SET assignment=NULL WHERE run='run-1'"):
+                with self.subTest(method=method.__name__,change=change):
+                    def verify_then_change(*args,**kwargs):
+                        path=verify(*args,**kwargs)
+                        for statement in change.split(';'): self.registry.db.execute(statement)
+                        return path
+                    with patch.object(self.registry,'verify',side_effect=verify_then_change):
+                        with self.assertRaises(WorkspaceError): method('run-1','job-'+'a'*48,self.policy)
+                    self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM engineering_local_scopes').fetchone(),(0,))
+                    self.registry.db.execute("UPDATE engineering_workspaces SET branch='task-1',assignment=NULL WHERE run='run-1'")
+                    self.registry.db.execute('UPDATE engineering_workspace_approvals SET binding_hash=? WHERE run=?',(self.registry.binding_hash(*self.args),'run-1'))
+
     def test_local_claim_and_scope_reservation_are_atomic(self):
         import sqlite3
         from runner.local_scope import LocalScopes

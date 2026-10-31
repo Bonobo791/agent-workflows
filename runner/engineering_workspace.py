@@ -28,6 +28,9 @@ class EngineeringWorkspace:
         if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode & 0o077 or self.allowed.resolve(strict=True)!=self.allowed: raise WorkspaceError('private workspace root required')
         self.db=sqlite3.connect(str(self.root/'state.db'),timeout=10,isolation_level=None)
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_workspaces(run TEXT PRIMARY KEY,repository TEXT NOT NULL,base TEXT NOT NULL,branch TEXT NOT NULL,owner INTEGER NOT NULL,path TEXT NOT NULL,policy TEXT NOT NULL,assignment TEXT)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS engineering_workspace_versions(run TEXT PRIMARY KEY,version INTEGER NOT NULL)')
+        self.db.execute("""CREATE TRIGGER IF NOT EXISTS engineering_workspace_version_update AFTER UPDATE ON engineering_workspaces BEGIN
+            INSERT INTO engineering_workspace_versions VALUES(NEW.run,1) ON CONFLICT(run) DO UPDATE SET version=version+1; END""")
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_workspace_approvals(run TEXT PRIMARY KEY,binding_hash TEXT NOT NULL,actor TEXT NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS engineering_local_scopes(run TEXT NOT NULL,assignment TEXT PRIMARY KEY,unit TEXT NOT NULL UNIQUE)')
         self.db.execute('CREATE TABLE IF NOT EXISTS workspace_recovery_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,assignment TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
@@ -70,26 +73,35 @@ class EngineeringWorkspace:
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise WorkspaceError('workspace binding already exists') from None
         return path
-    def _claim(self,run,assignment,policy):
+    def _claim_binding(self,run,assignment,policy):
         if not re.fullmatch(r'job-[0-9a-f]{48}',assignment): raise WorkspaceError('invalid assignment')
-        row=self.db.execute('SELECT repository,base,branch,owner,path,policy,assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
+        row=self.db.execute('SELECT repository,base,branch,owner,path,policy,assignment,COALESCE((SELECT version FROM engineering_workspace_versions v WHERE v.run=engineering_workspaces.run),0) FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
         if not row or row[5]!=policy or row[6] is not None: raise WorkspaceError('workspace unavailable or already claimed')
         approved=self.db.execute('SELECT binding_hash FROM engineering_workspace_approvals WHERE run=?',(run,)).fetchone()
         if approved!=(self.binding_hash(run,*row[:4],policy),): raise WorkspaceError('workspace approval mismatch')
+        return row
+    def _verified_claim_binding(self,run,assignment,policy):
+        row=self._claim_binding(run,assignment,policy)
         if self.verify(run,*row[:4],policy)!=row[4]: raise WorkspaceError('workspace binding changed')
+        return row
+    def _claim(self,run,assignment,policy,verified):
+        row=self._claim_binding(run,assignment,policy)
+        if row!=verified: raise WorkspaceError('workspace binding changed')
         self.db.execute('UPDATE engineering_workspaces SET assignment=? WHERE run=? AND assignment IS NULL',(assignment,run))
         return row[4]
     def claim(self,run,assignment,policy):
+        verified=self._verified_claim_binding(run,assignment,policy)
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            path=self._claim(run,assignment,policy)
+            path=self._claim(run,assignment,policy,verified)
             self.db.execute('COMMIT'); return path
         except Exception: self.db.execute('ROLLBACK'); raise
     def claim_local(self,run,assignment,policy,*,expected_path=None,pr_scope=None):
         from runner.local_scope import reserve_scope
+        verified=self._verified_claim_binding(run,assignment,policy)
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            path=self._claim(run,assignment,policy)
+            path=self._claim(run,assignment,policy,verified)
             if expected_path is not None and path!=expected_path: raise WorkspaceError('engineering workspace changed')
             unit=reserve_scope(self.db,run)
             bind_scope_with_audit(self.db,run,assignment,unit)

@@ -23,30 +23,56 @@ def run_scoped_sandbox(supervisor,run,workspace,argv,deadline,output_limit,on_re
     sandbox=[app[0],'sandbox','-C',workspace,'-P','workflow_local',*app[4:],'--',*argv]
     return _run_scoped(s,run,workspace,sandbox,child_env,deadline,output_limit,on_reserved,on_started,workspace_claim=workspace_claim,reserved_command=reserved_command)
 
+def _claim_command_launch(s,run,workspace,reserved_command,workspace_claim):
+    if workspace_claim is not None or not isinstance(reserved_command,tuple) or len(reserved_command)!=2: raise LocalCommandError('invalid command reservation')
+    assignment,unit=reserved_command
+    db=sqlite3.connect(s.db,timeout=10,isolation_level=None)
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        try:
+            row=db.execute("SELECT 1 FROM local_command_scopes c JOIN local_scopes x ON x.run=c.run AND x.unit=c.unit JOIN engineering_local_scopes m ON m.run=c.run AND m.assignment=c.assignment AND m.unit=c.unit JOIN engineering_workspaces w ON w.run=c.run AND w.assignment=c.assignment WHERE c.assignment=? AND c.run=? AND c.unit=? AND c.exit_code IS NULL AND x.state='starting' AND w.path=?",(assignment,run,unit,workspace)).fetchone()
+            if not row: raise LocalCommandError('command reservation unavailable')
+            last=db.execute('SELECT COALESCE(MAX(id),0) FROM local_command_launch_audit').fetchone()[0]
+            db.execute('INSERT INTO local_command_launches VALUES(?,?,?)',(assignment,run,unit))
+            audit=db.execute("SELECT 1 FROM local_command_launch_audit WHERE id>? AND schema_version=1 AND run=? AND assignment=? AND unit=? AND status='starting'",(last,run,assignment,unit)).fetchone()
+            if not audit: raise LocalCommandError('command launch audit unavailable')
+            db.execute('COMMIT')
+        except sqlite3.IntegrityError:
+            db.execute('ROLLBACK'); raise LocalCommandError('command launch unavailable') from None
+        except Exception:
+            db.execute('ROLLBACK'); raise
+    finally: db.close()
+    return unit
+
+def _read_command_result(transport,s,run,output_limit):
+    out=transport.receive()
+    if set(out)!={'stdout'}: raise LocalCommandError('command result unavailable')
+    err=transport.receive()
+    if set(err)!={'stderr'}: raise LocalCommandError('command result unavailable')
+    result=transport.receive()
+    if set(result)!={'exit_code'} or type(result['exit_code']) is not int: raise LocalCommandError('command result unavailable')
+    stdout=base64.b64decode(out['stdout'],validate=True);stderr=base64.b64decode(err['stderr'],validate=True)
+    if len(stdout)>output_limit or len(stderr)>output_limit or s.fence(run) is not True: raise LocalCommandError('command evidence unavailable')
+    return result['exit_code'],stdout,stderr
+
+def _cleanup_command(s,run,unit,process,stopped):
+    if process is not None:
+        if not stopped:
+            try:
+                scopes=LocalScopes(s.db,s.backend)
+                try:scopes.stop(run,unit)
+                finally:scopes.close()
+            except Exception:pass
+        for stream in (process.stdin,process.stdout):
+            if stream is not None:stream.close()
+
 def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved,on_started=None,*,input_data=None,workspace_claim=None,reserved_command=None):
     manager={k:s.environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in s.environment};manager['PATH']='/usr/bin:/bin'
     if reserved_command is None:
         unit=reserve_for_execution(s.db,run,s.backend,workspace,workspace_claim)
         on_reserved(unit)
     else:
-        if workspace_claim is not None or not isinstance(reserved_command,tuple) or len(reserved_command)!=2: raise LocalCommandError('invalid command reservation')
-        assignment,unit=reserved_command
-        db=sqlite3.connect(s.db,timeout=10,isolation_level=None)
-        try:
-            db.execute('BEGIN IMMEDIATE')
-            try:
-                row=db.execute("SELECT 1 FROM local_command_scopes c JOIN local_scopes x ON x.run=c.run AND x.unit=c.unit JOIN engineering_local_scopes m ON m.run=c.run AND m.assignment=c.assignment AND m.unit=c.unit JOIN engineering_workspaces w ON w.run=c.run AND w.assignment=c.assignment WHERE c.assignment=? AND c.run=? AND c.unit=? AND c.exit_code IS NULL AND x.state='starting' AND w.path=?",(assignment,run,unit,workspace)).fetchone()
-                if not row: raise LocalCommandError('command reservation unavailable')
-                last=db.execute('SELECT COALESCE(MAX(id),0) FROM local_command_launch_audit').fetchone()[0]
-                db.execute('INSERT INTO local_command_launches VALUES(?,?,?)',(assignment,run,unit))
-                audit=db.execute("SELECT 1 FROM local_command_launch_audit WHERE id>? AND schema_version=1 AND run=? AND assignment=? AND unit=? AND status='starting'",(last,run,assignment,unit)).fetchone()
-                if not audit: raise LocalCommandError('command launch audit unavailable')
-                db.execute('COMMIT')
-            except sqlite3.IntegrityError:
-                db.execute('ROLLBACK'); raise LocalCommandError('command launch unavailable') from None
-            except Exception:
-                db.execute('ROLLBACK'); raise
-        finally: db.close()
+        unit=_claim_command_launch(s,run,workspace,reserved_command,workspace_claim)
 
     relay=str(Path(__file__).with_name('local_command_child.py').resolve(strict=True))
     command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']+[k+'='+v for k,v in child_env.items()]+['/usr/bin/python3','-I',relay]
@@ -67,31 +93,16 @@ def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved
             if not isinstance(input_data,bytes) or len(input_data)>32768:raise LocalCommandError('command input invalid')
             request['stdin_b64']=base64.b64encode(input_data).decode('ascii')
         transport.send(request)
-        out=transport.receive()
-        if set(out)!={'stdout'}: raise LocalCommandError('command result unavailable')
-        err=transport.receive()
-        if set(err)!={'stderr'}: raise LocalCommandError('command result unavailable')
-        result=transport.receive()
-        if set(result)!={'exit_code'} or type(result['exit_code']) is not int: raise LocalCommandError('command result unavailable')
-        stdout=base64.b64decode(out['stdout'],validate=True);stderr=base64.b64decode(err['stderr'],validate=True)
-        if len(stdout)>output_limit or len(stderr)>output_limit or s.fence(run) is not True: raise LocalCommandError('command evidence unavailable')
+        exit_code,stdout,stderr=_read_command_result(transport,s,run,output_limit)
         scopes=LocalScopes(s.db,s.backend)
         try: stopped=scopes.stop(run,unit) is True
         finally:scopes.close()
         if not stopped: raise LocalCommandError('scope termination unavailable')
         process.wait(timeout=max(.01,deadline-time.monotonic()))
-        return {'outcome':'exited','exit_code':result['exit_code'],'stdout':stdout,'stderr':stderr,'unit':unit}
+        return {'outcome':'exited','exit_code':exit_code,'stdout':stdout,'stderr':stderr,'unit':unit}
     except Exception: raise LocalCommandError('local command outcome uncertain') from None
     finally:
-        if process is not None:
-            if not stopped:
-                try:
-                    scopes=LocalScopes(s.db,s.backend)
-                    try:scopes.stop(run,unit)
-                    finally:scopes.close()
-                except Exception:pass
-            for stream in (process.stdin,process.stdout):
-                if stream is not None:stream.close()
+        _cleanup_command(s,run,unit,process,stopped)
 
 class LocalCommandBackend:
     def __init__(self,supervisor):
