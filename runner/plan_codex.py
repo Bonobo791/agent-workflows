@@ -12,6 +12,20 @@ from runner.protocol import AppServer
 
 class PlanGatewayError(RuntimeError): pass
 
+def _stop_gateway(process):
+    if process is None: return
+    cleanup_failed=False
+    try: os.killpg(process.pid,signal.SIGKILL)
+    except ProcessLookupError: pass
+    except OSError: cleanup_failed=True
+    try: process.wait(timeout=2)
+    except subprocess.TimeoutExpired: cleanup_failed=True
+    for stream in (process.stdin,process.stdout):
+        try:
+            if stream is not None: stream.close()
+        except OSError: cleanup_failed=True
+    if cleanup_failed: raise PlanGatewayError('tracker gateway cleanup unresolved')
+
 class CodexAppsPlan:
     TIMEOUT=30
     def __init__(self,executable,environment,verify_policy,workspace):
@@ -41,16 +55,4 @@ class CodexAppsPlan:
             if result.get('isError') is not False or not isinstance(data,dict) or data.get('ok') is not True or self.verify_policy() is not True: raise ValueError()
             return data
         except Exception: raise PlanGatewayError('tracker gateway unavailable') from None
-        finally:
-            if process is not None:
-                cleanup_failed=False
-                try: os.killpg(process.pid,signal.SIGKILL)
-                except ProcessLookupError: pass
-                except OSError: cleanup_failed=True
-                try: process.wait(timeout=2)
-                except subprocess.TimeoutExpired: cleanup_failed=True
-                for stream in (process.stdin,process.stdout):
-                    try:
-                        if stream is not None: stream.close()
-                    except OSError: cleanup_failed=True
-                if cleanup_failed: raise PlanGatewayError('tracker gateway cleanup unresolved')
+        finally: _stop_gateway(process)

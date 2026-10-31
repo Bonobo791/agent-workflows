@@ -27,8 +27,14 @@ class CodexPlanTests(unittest.TestCase):
     def test_launcher_refuses_to_start_without_parent_death_fence(self):
         from runner import plan_codex_launcher
         libc=MagicMock();libc.prctl.return_value=-1
-        with patch.object(sys,'argv',['launcher',str(os.getpid()),'/usr/bin/true']),patch.object(plan_codex_launcher.signal,'signal'),patch.object(plan_codex_launcher.ctypes,'CDLL',return_value=libc),patch.object(plan_codex_launcher.subprocess,'Popen') as launch:
+        with patch.object(sys,'argv',['launcher',str(os.getpid()),'/usr/bin/true']),patch.object(plan_codex_launcher.os,'getpgrp',return_value=os.getpid()),patch.object(plan_codex_launcher.os,'getsid',return_value=os.getpid()),patch.object(plan_codex_launcher.signal,'signal'),patch.object(plan_codex_launcher.signal,'pthread_sigmask'),patch.object(plan_codex_launcher.ctypes,'CDLL',return_value=libc),patch.object(plan_codex_launcher.subprocess,'Popen') as launch:
             with self.assertRaises(OSError):plan_codex_launcher.main()
+            launch.assert_not_called()
+
+    def test_launcher_rejects_shared_process_group(self):
+        from runner import plan_codex_launcher
+        with patch.object(sys,'argv',['launcher',str(os.getpid()),'/usr/bin/true']),patch.object(plan_codex_launcher.os,'getpgrp',return_value=-1),patch.object(plan_codex_launcher.subprocess,'Popen') as launch:
+            with self.assertRaises(ValueError):plan_codex_launcher.main()
             launch.assert_not_called()
 
     def test_launcher_rejects_parent_lost_before_fence(self):
@@ -41,6 +47,12 @@ class CodexPlanTests(unittest.TestCase):
             self.assertFalse(marker.exists())
 
     def test_caller_crash_kills_gateway_that_ignores_pipe_closure(self):
+        self._exercise_gateway_crash(False)
+
+    def test_caller_crash_kills_gateway_with_inherited_blocked_signal(self):
+        self._exercise_gateway_crash(True)
+
+    def _exercise_gateway_crash(self,block_signal):
         with tempfile.TemporaryDirectory() as root:
             root=Path(root); executable=root/'codex'
             executable.write_text('''#!/usr/bin/python3
@@ -55,16 +67,17 @@ for line in sys.stdin:
  print(json.dumps({'id':m['id'],'result':result}),flush=True)
 ''' % str(root/'ready')); executable.chmod(0o700)
             code='''
-import os,sys
+import os,signal,sys
 from pathlib import Path
 import runner.plan_codex as gateway
 root=sys.argv[1]; original=gateway.subprocess.Popen
+if sys.argv[2]=='blocked':signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})
 def start(*args,**kwargs):
  p=original(*args,**kwargs); (Path(root)/'pid').write_text(str(p.pid)); return p
 gateway.subprocess.Popen=start
 gateway.CodexAppsPlan(str(Path(root)/'codex'),{'HOME':root},lambda:True,root).get_issue('TOOLS',34)
 '''
-            worker=subprocess.Popen([sys.executable,'-c',code,str(root)],cwd=str(Path(__file__).resolve().parents[1]),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            worker=subprocess.Popen([sys.executable,'-c',code,str(root),'blocked' if block_signal else 'normal'],cwd=str(Path(__file__).resolve().parents[1]),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             fd=None; pid=None; before=[]
             try:
                 deadline=time.monotonic()+10
