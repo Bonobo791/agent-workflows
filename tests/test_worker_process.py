@@ -406,8 +406,8 @@ worker.main()
                     path=Path(root)/'control.sock';deadline=time.monotonic()+10
                     while not path.exists() and process.poll() is None and time.monotonic()<deadline:time.sleep(.02)
                     self.assertTrue(path.is_socket())
-                    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-                        client.settimeout(3);client.connect(str(path));request={'action':'create','run':'r','workflow':'marketing','task':'t'} if create else {'action':'status','run':'r','stage':'intake'}
+                    with connect_control(path,3) as client:
+                        request={'action':'create','run':'r','workflow':'marketing','task':'t'} if create else {'action':'status','run':'r','stage':'intake'}
                         client.sendall(json.dumps({'secret':'x'*40,'request':request}).encode()+b'\n')
                         with client.makefile('rb') as stream:self.assertTrue(json.loads(stream.readline())['ok'])
                 finally:
@@ -431,8 +431,8 @@ worker.main()
                 path=Path(root)/'control.sock';deadline=time.monotonic()+10
                 while not path.exists() and process.poll() is None and time.monotonic()<deadline:time.sleep(.02)
                 self.assertTrue(path.is_socket())
-                with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-                    client.settimeout(3);client.connect(str(path));client.sendall(json.dumps({'secret':'x'*40,'request':{'action':'create','run':'r','workflow':'marketing','task':'t'}}).encode()+b'\n')
+                with connect_control(path,3) as client:
+                    client.sendall(json.dumps({'secret':'x'*40,'request':{'action':'create','run':'r','workflow':'marketing','task':'t'}}).encode()+b'\n')
                     with client.makefile('rb') as stream:self.assertTrue(json.loads(stream.readline())['ok'])
             finally:
                 process.terminate()
@@ -452,8 +452,7 @@ worker.main()
                 while not Path(path).exists() and process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
                 self.assertTrue(Path(path).is_socket(), 'worker socket was not created')
                 def request(token,body):
-                    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-                        client.settimeout(3); client.connect(path)
+                    with connect_control(path,3) as client:
                         client.sendall(json.dumps({'secret':token,'request':body}).encode()+b'\n')
                         with client.makefile('rb') as stream: return json.loads(stream.readline())
                 self.assertFalse(request('wrong',{'action':'create','run':'r','workflow':'marketing','task':'t'})['ok'])
