@@ -15,6 +15,15 @@ STAGE_DEPENDENCIES = {
 
 def intake_issues(task, today=None):
     issues = []
+    try:
+        if today is None: reference=date.today()
+        elif type(today) is date: reference=today
+        elif isinstance(today,str):
+            reference=date.fromisoformat(today)
+            if reference.isoformat()!=today: raise ValueError()
+        else: raise ValueError()
+    except ValueError:
+        reference=None; issues.append('invalid reference date')
     for field in ('leaf', 'ready', 'dependencies_complete'):
         if task.get(field) is not True:
             issues.append(f'{field} not confirmed')
@@ -33,7 +42,7 @@ def intake_issues(task, today=None):
         try:
             due=date.fromisoformat(task['due'])
             if due.isoformat()!=task['due']: raise ValueError()
-            if due < (today or date.today()):
+            if reference is not None and due < reference:
                 issues.append('overdue requires review')
         except (TypeError, ValueError):
             issues.append('invalid due date')

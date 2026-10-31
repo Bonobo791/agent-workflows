@@ -2,6 +2,12 @@ import unittest
 from workflows.marketing import gates
 
 class MarketingGatesTests(unittest.TestCase):
+    def test_intake_reference_date_accepts_iso_and_rejects_invalid(self):
+        task=dict(leaf=True,ready=True,dependencies_complete=True,owner=None,existing_work=[],due='2026-10-30',format='guide',task_id='T-1')
+        self.assertIn('overdue requires review',gates.intake_issues(task,today='2026-10-31'))
+        self.assertNotIn('invalid due date',gates.intake_issues(task,today='2026-10-31'))
+        self.assertIn('invalid reference date',gates.intake_issues(task,today='not-a-date'))
+
     def test_noncanonical_due_date_is_rejected(self):
         task=dict(leaf=True,ready=True,dependencies_complete=True,owner=None,existing_work=[],due='20261030',format='guide',task_id='T-1')
         self.assertIn('invalid due date',gates.intake_issues(task))
