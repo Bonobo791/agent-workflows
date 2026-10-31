@@ -106,7 +106,9 @@ class PlatformReviewer:
             inputs=[brief_ref,register,bundle];turn_row=graph.db.execute('SELECT input_versions,output_refs FROM completed_turn_outputs WHERE run=? AND role=? AND session=? AND turn=?',(run,'platform_review',session,turn)).fetchone()
             if not turn_row or json.loads(turn_row[0])!=inputs or json.loads(turn_row[1])!=[report_ref]: return False
             model=self.service.model_policy.for_role('platform_review')['model'];binding=self.service.model_supervisor._binding(run,'platform_review',skills,model)[1]
-            if not graph.db.execute("SELECT 1 FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='platform_review' AND t.session=? AND t.turn=? AND t.binding=? AND s.state='terminated'",(run,session,turn,binding)).fetchone(): return False
+            from runner.local_scope import valid_scope_identity
+            scope=graph.db.execute("SELECT t.unit,s.invocation,s.cgroup FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='platform_review' AND t.session=? AND t.turn=? AND t.binding=? AND s.state='terminated'",(run,session,turn,binding)).fetchone()
+            if not scope or not valid_scope_identity(*scope): return False
             parsed=parse_marketing_result(self.service.artifacts.get(response_ref).decode(),'platform_review')
             proof=json.loads(self.service.artifacts.get(proof_ref));report=json.loads(self.service.artifacts.get(report_ref))
             if parsed['input_versions']!=inputs or parsed['outputs']!=[report_ref] or not isinstance(report,dict) or set(report)!={'assets'}: return False

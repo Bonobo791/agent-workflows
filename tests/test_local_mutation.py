@@ -12,6 +12,11 @@ from workflows.engineering.github import GitHub
 
 class MutationTests(EngineeringWorkspaceTests):
     def test_draft_requires_exact_approval_and_sends_body_over_private_pipe(self):
+        self._exercise_mutation(False)
+    def test_mutation_with_invalid_terminal_scope_stays_uncertain(self):
+        self._exercise_mutation(True)
+    def _exercise_mutation(self,corrupt):
+        from runner.local_mutation import LocalMutationError
         service=self.service;service.create('run-1','engineering','task');service.enqueue('run-1');queue=service.lifecycle.claim();claim=service.claim('run-1')
         binary=self.root/'codex';binary.write_bytes(b'synthetic');binary.chmod(0o700)
         config={'codex_executable':str(binary),'codex_sha256':hashlib.sha256(b'synthetic').hexdigest(),'disabled_integrations':{'mcp_servers':[],'plugins':[]}}
@@ -47,9 +52,14 @@ class MutationTests(EngineeringWorkspaceTests):
                 scopes=LocalScopes(s.db,engine)
                 try:
                     unit=scopes.reserve(run);on_reserved(unit);engine.unit=unit;engine.state='active';scopes.bind(run,unit);on_started(unit);scopes.stop(run,unit)
+                    if corrupt:scopes.db.execute('UPDATE local_scopes SET invocation=NULL WHERE unit=?',(unit,))
                     return {'outcome':'exited','exit_code':0,'stdout':json.dumps({'data':{'markPullRequestReadyForReview':{'pullRequest':{'id':'node','isDraft':False}}}}).encode(),'stderr':b'','unit':unit}
                 finally:scopes.close()
             with patch('runner.local_command._run_scoped',side_effect=run_ready) as launched:
                 with self.assertRaises(Exception):transport.execute('ready','owner/repo',{'node':'other'})
                 self.assertEqual(launched.call_count,0)
-                self.assertEqual(transport.execute('ready','owner/repo',{'node':'node'}),{'id':'node','isDraft':False})
+                if corrupt:
+                    with self.assertRaises(LocalMutationError):transport.execute('ready','owner/repo',{'node':'node'})
+                    self.assertEqual(service.graph.db.execute("SELECT state FROM local_mutation_attempts WHERE kind='ready'").fetchone(),('reserved',))
+                    self.assertEqual(service.graph.db.execute('SELECT status FROM external_actions WHERE action=?',(ready_action,)).fetchone(),('uncertain',))
+                else:self.assertEqual(transport.execute('ready','owner/repo',{'node':'node'}),{'id':'node','isDraft':False})

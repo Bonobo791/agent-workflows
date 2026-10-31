@@ -46,12 +46,18 @@ class PlatformReviewerTests(unittest.TestCase):
                 with patch.object(authority.fetcher,'fetch',side_effect=fetch),patch('runner.platform_reviewer.CodexExecutor',Executor):
                     proof=authority.check_for_claim('run',brief_ref,brief,claim,job['token'])
                 self.assertTrue(authority.verify('run',brief_ref,brief,proof))
+                service.graph.db.execute("UPDATE local_scopes SET invocation=NULL WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='session-1')")
+                self.assertFalse(authority.verify('run',brief_ref,brief,proof))
+                service.graph.db.execute("UPDATE local_scopes SET invocation=? WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='session-1')",('a'*32,))
                 self.assertTrue(verify_platform(service,'run',brief_ref,brief,proof,5,lambda:False))
                 Executor.blocked=True;Executor.supported=False
                 with patch.object(authority.fetcher,'fetch',side_effect=fetch),patch('runner.platform_reviewer.CodexExecutor',Executor):
                     blocked=authority.check_for_claim('run',brief_ref,brief,claim,job['token'])
                 self.assertEqual(set(blocked),{'blocked_ref'})
                 self.assertTrue(authority.verify_blocked('run',brief_ref,brief,blocked['blocked_ref']))
+                service.graph.db.execute("UPDATE local_scopes SET invocation=NULL WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='session-2')")
+                self.assertFalse(authority.verify_blocked('run',brief_ref,brief,blocked['blocked_ref']))
+                service.graph.db.execute("UPDATE local_scopes SET invocation=? WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='session-2')",('a'*32,))
                 self.assertFalse(authority.verify('run',brief_ref,brief,blocked['blocked_ref']))
                 self.assertFalse(authority.verify_blocked('other',brief_ref,brief,blocked['blocked_ref']))
                 evidence=json.loads(service.artifacts.get(blocked['blocked_ref']))

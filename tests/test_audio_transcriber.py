@@ -79,9 +79,20 @@ class AudioReportTests(unittest.TestCase):
                     with patch('runner.audio_transcriber.run_scoped_sandbox', side_effect=execute):
                         receipt = transcriber.transcribe('run', claim, subject, video, 'instagram')
                     self.assertTrue(transcriber.verify('run', subject, video, 'instagram', receipt))
+                    service.graph.db.execute("UPDATE local_scopes SET invocation=NULL WHERE unit=(SELECT unit FROM local_audio_transcripts WHERE receipt_ref=?)", (receipt,))
+                    self.assertFalse(transcriber.verify('run', subject, video, 'instagram', receipt))
+                    service.graph.db.execute("UPDATE local_scopes SET invocation=? WHERE unit=(SELECT unit FROM local_audio_transcripts WHERE receipt_ref=?)", ('a'*32,receipt))
                     self.assertFalse(transcriber.verify('run', subject, video, 'linkedin', receipt))
                     service.graph.db.execute("UPDATE local_scopes SET state='running' WHERE unit=(SELECT unit FROM local_audio_transcripts WHERE receipt_ref=?)", (receipt,))
                     self.assertFalse(transcriber.verify('run', subject, video, 'instagram', receipt))
+                    service.graph.db.execute("UPDATE local_scopes SET state='terminated' WHERE unit=(SELECT unit FROM local_audio_transcripts WHERE receipt_ref=?)", (receipt,))
+                    def broken_scope(*args,**kwargs):
+                        result=execute(*args,**kwargs)
+                        service.graph.db.execute('UPDATE local_scopes SET invocation=NULL WHERE unit=?',(result['unit'],))
+                        return result
+                    with patch('runner.audio_transcriber.run_scoped_sandbox',side_effect=broken_scope):
+                        with self.assertRaises(AudioTranscriptionError): transcriber.transcribe('run',claim,subject,video,'instagram')
+                    self.assertEqual(service.graph.db.execute("SELECT COUNT(*) FROM local_audio_transcripts WHERE state='reserved'").fetchone(),(1,))
             finally:
                 service.close()
 

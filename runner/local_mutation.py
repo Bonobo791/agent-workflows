@@ -67,7 +67,8 @@ class LocalMutationTransport:
                     if value.get('errors'):raise ValueError()
                     output=value['data']['markPullRequestReadyForReview']['pullRequest']
                     if output!={'id':payload['node'],'isDraft':False}:raise ValueError()
-                terminal=db.execute("SELECT 1 FROM local_pr_scopes p JOIN local_scopes x ON x.unit=p.unit AND x.run=p.run WHERE p.assignment=? AND p.kind=? AND p.unit=? AND x.state='terminated'",(assignment,kind,result['unit'])).fetchone()
-                if not terminal or db.execute("UPDATE local_mutation_attempts SET state='terminated' WHERE assignment=? AND state='reserved'",(assignment,)).rowcount!=1:raise ValueError()
+                from runner.local_scope import valid_scope_identity
+                terminal=db.execute("SELECT x.invocation,x.cgroup FROM local_pr_scopes p JOIN local_scopes x ON x.unit=p.unit AND x.run=p.run WHERE p.assignment=? AND p.kind=? AND p.unit=? AND x.state='terminated'",(assignment,kind,result['unit'])).fetchone()
+                if not terminal or not valid_scope_identity(result['unit'],*terminal) or db.execute("UPDATE local_mutation_attempts SET state='terminated' WHERE assignment=? AND state='reserved'",(assignment,)).rowcount!=1:raise ValueError()
                 return output
         except Exception:raise LocalMutationError('mutation outcome requires inspection') from None

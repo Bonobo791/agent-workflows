@@ -74,8 +74,9 @@ class LocalPushTransport:
                     if not live or self.gh._digest()!=self.gh.digest or workspace_snapshot(service,self.run,assignment=assignment)!=workspace or s.fence(self.run) is not True or not service.queue.may_start(self.run,self.queue_claim): raise LocalPushError('push authorization changed')
                 result=_run_scoped(s,self.run,bare,command,env,time.monotonic()+60,8192,record('push'),before_push)
                 if result['exit_code']!=0:raise LocalPushError('push outcome uncertain')
-                row=db.execute("SELECT 1 FROM local_pr_scopes p JOIN local_scopes x ON x.unit=p.unit AND x.run=p.run WHERE p.assignment=? AND p.kind='push' AND p.unit=? AND x.state='terminated'",(assignment,result['unit'])).fetchone()
-                if not row:raise LocalPushError('push termination unverified')
+                from runner.local_scope import valid_scope_identity
+                row=db.execute("SELECT x.invocation,x.cgroup FROM local_pr_scopes p JOIN local_scopes x ON x.unit=p.unit AND x.run=p.run WHERE p.assignment=? AND p.kind='push' AND p.unit=? AND x.state='terminated'",(assignment,result['unit'])).fetchone()
+                if not row or not valid_scope_identity(result['unit'],*row):raise LocalPushError('push termination unverified')
                 if db.execute("UPDATE local_push_attempts SET state='terminated' WHERE assignment=? AND state='reserved'",(assignment,)).rowcount!=1:raise LocalPushError('push assignment changed')
                 registry=EngineeringWorkspace(s.engineering_root)
                 try:registry.release_local(self.run,assignment,bundle_unit)

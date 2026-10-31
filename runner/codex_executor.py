@@ -83,7 +83,7 @@ class CodexExecutor:
             db.execute('INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,?,?,?,?,?,?)',(run,role,execution,'requested',model,time.time()))
             db.execute('COMMIT')
         except Exception: db.execute('ROLLBACK'); raise
-        handle=None; finished=False; starting=False
+        handle=None; finished=False; starting=False; termination_unverified=False
         try:
             starting=True
             starter=getattr(self.supervisor,'start_execution',None)
@@ -128,8 +128,12 @@ class CodexExecutor:
                 if not self.provenance.verify(run,role,result['session_id'],skills): raise ExecutorError('session provenance unavailable')
                 from runner.local_supervisor import LocalSessionHandle
                 if isinstance(handle,LocalSessionHandle):
+                    from runner.local_scope import valid_scope_identity
                     unit=handle.handle.unit
-                    if (handle.run,handle.role)!=(run,role) or db.execute("SELECT 1 FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,unit)).fetchone() is None: raise ExecutorError('local scope termination evidence unavailable')
+                    identity=db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,unit)).fetchone()
+                    if (handle.run,handle.role)!=(run,role) or not identity or not valid_scope_identity(unit,*identity):
+                        termination_unverified=True
+                        raise ExecutorError('local scope termination evidence unavailable')
                     db.execute('INSERT INTO local_turn_scopes VALUES(?,?,?,?,?,?)',(run,role,result['session_id'],result['turn_id'],unit,handle.binding))
                 if image_refs is not None:
                     db.execute('INSERT INTO execution_image_inputs VALUES(?,?,?,?,?)',(run,role,result['session_id'],result['turn_id'],json.dumps(image_refs)))
@@ -147,10 +151,12 @@ class CodexExecutor:
                 if handle is not None and not finished:
                     threading.Thread(target=handle.cancel,daemon=True).start()
                     self.fence(run)
+                elif termination_unverified:
+                    self.fence(run)
                 elif handle is None and starting:
                     self.fence(run)
             finally:
-                try: db.execute('INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,?,?,?,?,?,?)',(run,role,execution,'failed' if finished else 'uncertain',model,time.time()))
+                try: db.execute('INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,?,?,?,?,?,?)',(run,role,execution,'failed' if finished and not termination_unverified else 'uncertain',model,time.time()))
                 except Exception: pass
             raise
     def review(self,*,subject,**kwargs):

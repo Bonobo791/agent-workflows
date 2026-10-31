@@ -18,6 +18,8 @@ class LocalCommandTests(unittest.TestCase):
             finally:connection.close()
             self.assertFalse(backend.verify_terminal('job','run',0))
             self.assertTrue(scopes.stop('run',unit));self.assertTrue(backend.verify_terminal('job','run',0))
+            scopes.db.execute('UPDATE local_scopes SET invocation=NULL WHERE unit=?',(unit,))
+            self.assertFalse(backend.verify_terminal('job','run',0))
             self.assertFalse(backend.verify_terminal('job','run',1));self.assertFalse(backend.verify_terminal('job','other',0));self.assertFalse(backend.verify_terminal('other','run',0))
             scopes.close()
     def test_unverified_runtime_fails_before_command_launch(self):

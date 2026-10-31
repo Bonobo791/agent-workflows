@@ -80,7 +80,8 @@ class VideoSamples:
                 if _png_dimensions(image)!=(1290,968): raise VideoSampleError('invalid sample layout')
                 sample_ref=store.put(image);unit=result['unit']
                 graph._lease(run,claim)
-                if not graph.db.execute("SELECT 1 FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,unit)).fetchone(): raise VideoSampleError('video scope not terminated')
+                from runner.local_scope import valid_terminated_scope
+                if not valid_terminated_scope(graph.db,run,unit): raise VideoSampleError('video scope not terminated')
                 receipt={'run':run,'subject':subject,'asset_ref':asset_ref,'sample_ref':sample_ref,'unit':unit,'duration':float(duration),'timestamps':timestamps,'policy_hash':self.policy_hash,'coverage':'12 evenly spaced sampled frames'}
                 receipt_ref=store.put(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode())
                 if graph.db.execute("UPDATE local_video_samples SET sample_ref=?,receipt_ref=?,state='complete' WHERE id=? AND run=? AND unit=? AND state='reserved'",(sample_ref,receipt_ref,operation,run,unit)).rowcount!=1: raise VideoSampleError('video receipt unavailable')
@@ -97,8 +98,9 @@ class VideoSamples:
             if not isinstance(times,list) or len(times)!=12 or any(type(value) not in (int,float) or not math.isfinite(value) or abs(value-index*duration/12)>max(.01,duration*.002) for index,value in enumerate(times)): return False
             matches=[item for item in manifest['assets'] if item.get('artifact_ref')==asset_ref and item.get('kind')=='mp4']
             if not matches or any(item['duration_seconds']!=receipt['duration'] for item in matches): return False
-            row=graph.db.execute("SELECT 1 FROM local_video_samples v JOIN local_scopes s ON s.run=v.run AND s.unit=v.unit WHERE v.run=? AND v.subject=? AND v.asset_ref=? AND v.unit=? AND v.policy_hash=? AND v.duration=? AND v.sample_ref=? AND v.receipt_ref=? AND v.state='complete' AND s.state='terminated'",(run,subject,asset_ref,receipt['unit'],self.policy_hash,receipt['duration'],receipt['sample_ref'],receipt_ref)).fetchone()
+            row=graph.db.execute("SELECT s.invocation,s.cgroup FROM local_video_samples v JOIN local_scopes s ON s.run=v.run AND s.unit=v.unit WHERE v.run=? AND v.subject=? AND v.asset_ref=? AND v.unit=? AND v.policy_hash=? AND v.duration=? AND v.sample_ref=? AND v.receipt_ref=? AND v.state='complete' AND s.state='terminated'",(run,subject,asset_ref,receipt['unit'],self.policy_hash,receipt['duration'],receipt['sample_ref'],receipt_ref)).fetchone()
             store.get(asset_ref);image=store.get(receipt['sample_ref'])
-            return bool(row and _png_dimensions(image)==(1290,968))
+            from runner.local_scope import valid_scope_identity
+            return bool(row and valid_scope_identity(receipt['unit'],*row) and _png_dimensions(image)==(1290,968))
         except Exception:return False
         finally:graph.close()
