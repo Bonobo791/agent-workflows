@@ -10,6 +10,62 @@ import unittest
 from pathlib import Path
 
 class WorkerProcessTests(unittest.TestCase):
+    def test_worker_rejects_symlinked_state_lock(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
+            secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            lock=data/'.worker.lock'; lock.symlink_to('missing')
+            env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_EXECUTION_MODE':'disabled'}
+            result=subprocess.run([sys.executable,'-m','runner.worker'],env=env,capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(result.returncode,0)
+            self.assertTrue(lock.is_symlink())
+
+    def test_separate_control_directory_refuses_existing_legacy_socket_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
+            secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            legacy=data/'control.sock'; legacy.symlink_to('missing')
+            env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_CONTROL_DIR':str(root/'other'),'WORKFLOW_EXECUTION_MODE':'disabled'}
+            result=subprocess.run([sys.executable,'-m','runner.worker'],env=env,capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(result.returncode,0)
+            self.assertTrue(legacy.is_symlink())
+            self.assertFalse((root/'other'/'control.sock').exists())
+
+    def test_distinct_socket_directories_cannot_share_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
+            secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_CONTROL_DIR':str(root/'first'),'WORKFLOW_EXECUTION_MODE':'disabled'}
+            first=subprocess.Popen([sys.executable,'-m','runner.worker'],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            try:
+                path=root/'first'/'control.sock'; deadline=time.monotonic()+10
+                while not path.exists() and first.poll() is None and time.monotonic()<deadline: time.sleep(.02)
+                self.assertTrue(path.is_socket())
+                second=subprocess.run([sys.executable,'-m','runner.worker'],env={**env,'WORKFLOW_CONTROL_DIR':str(root/'second')},capture_output=True,text=True,timeout=5)
+                self.assertNotEqual(second.returncode,0)
+                self.assertFalse((root/'second'/'control.sock').exists())
+            finally:
+                first.terminate(); first.communicate(timeout=10)
+
+    def test_control_socket_can_use_separate_private_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root); data=root/'data'; data.mkdir(mode=0o700)
+            sockets=root/'sockets'
+            secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            env={**os.environ,'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':str(data),'WORKFLOW_CONTROL_DIR':str(sockets),'WORKFLOW_EXECUTION_MODE':'disabled'}
+            process=subprocess.Popen([sys.executable,'-m','runner.worker'],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            try:
+                path=sockets/'control.sock'; deadline=time.monotonic()+10
+                while not path.exists() and process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
+                self.assertTrue(path.is_socket())
+                result=subprocess.run([sys.executable,'-m','runner.cli'],input='{"action":"metrics"}',env=env,capture_output=True,text=True,timeout=5)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertTrue(json.loads(result.stdout)['ok'])
+            finally:
+                process.terminate(); process.communicate(timeout=10)
+            self.assertEqual(process.returncode,0)
+            self.assertFalse(path.exists())
+
     def test_sigterm_fences_an_inflight_automatic_assignment(self):
         import sqlite3
         code="""

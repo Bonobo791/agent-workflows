@@ -13,7 +13,7 @@ def request_control(request):
     secret=read_secret(secret_path)
     payload=json.dumps({'secret':secret,'request':request},separators=(',',':')).encode()+b'\n'
     if len(payload)>65536: raise ConfigurationError('request too large')
-    path=Path(os.environ.get('WORKFLOW_DATA_DIR','/data'))/'control.sock'
+    path=Path(os.environ.get('WORKFLOW_CONTROL_DIR') or os.environ.get('WORKFLOW_DATA_DIR','/data'))/'control.sock'
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
         client.settimeout(5); client.connect(str(path)); client.sendall(payload)
         with client.makefile('rb') as stream:

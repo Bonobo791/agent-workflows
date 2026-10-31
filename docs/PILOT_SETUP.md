@@ -173,13 +173,20 @@ For rootless Podman on the validated host, use `compose.podman.yaml` alongside
 bind mount. Run `docker-compose -f compose.yaml -f compose.podman.yaml up -d`
 with `CONTROL_SECRET_PATH` set to a private
 owner-only host file and the Podman socket configured for the Compose provider.
-Startup and a graceful Compose stop followed by start passed with a synthetic
-secret and persisted run. A Compose restart with `--timeout 5` also passed.
-A restart without an explicit timeout on
-that host left `control.sock` behind and the worker failed to restart, even with
-a configured service grace period. Hard-crash recovery remains unresolved; do
-not remove the socket without independently verifying that the previous worker
-and its work are quiescent.
+The override puts the private control socket in container `/tmp` and leaves
+durable state in `/data`. The CLI must use the same `WORKFLOW_CONTROL_DIR`;
+the Compose service sets it to `/tmp/workflow-control`. A state-directory lock
+prevents two current-version workers sharing a volume. Stop any older worker
+before upgrading: a legacy `/data/control.sock` blocks the new socket path and
+requires inspection rather than automatic removal. Do not run mixed versions
+against the same state directory.
+
+On the tested host, startup, stop/start, default restart, restart with
+`--timeout 5`, and explicit start after a killed container preserved a synthetic
+run. These tests used disabled execution; recovery of in-flight work, scopes,
+and remote request outcomes remains unresolved. Do not remove a legacy socket
+without independently verifying that the previous worker and its work are
+quiescent.
 
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`

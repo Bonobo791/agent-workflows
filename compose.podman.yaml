@@ -1,5 +1,7 @@
 services:
   workflow:
     userns_mode: "keep-id:uid=10001,gid=10001"
+    environment:
+      WORKFLOW_CONTROL_DIR: /tmp/workflow-control
     volumes:
       - ${CONTROL_SECRET_PATH:?Set a private owner-only secret file}:/run/private/control-secret:ro,Z
