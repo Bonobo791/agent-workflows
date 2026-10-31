@@ -1,0 +1,16 @@
+[Unit]
+Description=Agent Workflows authenticated local metrics endpoint
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/agent-workflows/monitor.env
+ExecStart=/usr/bin/python3 -m runner.metrics_http
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target
