@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 import tempfile
 import time
@@ -86,7 +87,7 @@ class AutoWorkerTests(unittest.TestCase):
                     while worker.status()['status']!='checkpointed' and time.monotonic()<deadline:time.sleep(.01)
                     self.assertEqual(worker.status()['status'],'checkpointed');release.set();worker.thread.join(timeout=5)
                     self.assertFalse(worker.thread.is_alive())
-                with sqlite3.connect(root/'state.db') as db:
+                with closing(sqlite3.connect(root/'state.db')) as db:
                     self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('queued',))
                     self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
             finally:
@@ -118,7 +119,7 @@ class AutoWorkerTests(unittest.TestCase):
                     worker.wake.set();worker.thread.join(timeout=2)
                     self.assertTrue(worker.thread.is_alive(),'heartbeat contention fenced the running task')
                     self.assertNotEqual(worker.status()['status'],'inspection_required')
-                    with sqlite3.connect(root/'state.db') as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
+                    with closing(sqlite3.connect(root/'state.db')) as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
             finally:
                 release.set();worker.stop()
                 if worker.thread:worker.thread.join(timeout=5)
@@ -148,7 +149,7 @@ class AutoWorkerTests(unittest.TestCase):
                     self.assertEqual(worker.status()['last_checkpoint']['status'],'rejected')
                     release_heartbeat.set();time.sleep(.2);worker.wake.set();worker.thread.join(timeout=2)
                     self.assertTrue(worker.thread.is_alive(),'late busy response fenced the running task')
-                    with sqlite3.connect(root/'state.db') as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
+                    with closing(sqlite3.connect(root/'state.db')) as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
             finally:
                 release_checkpoint.set();release_heartbeat.set();worker.stop()
                 if worker.thread:worker.thread.join(timeout=5)
@@ -174,7 +175,7 @@ class AutoWorkerTests(unittest.TestCase):
                     self.assertTrue(worker.status()['checkpoint_available']);worker.request_checkpoint('r')
                     self.assertTrue(locked.wait(3));self.assertTrue(busy.wait(3));release.set();worker.thread.join(timeout=5)
                     self.assertFalse(worker.thread.is_alive());self.assertEqual(worker.status()['status'],'inspection_required')
-                    with sqlite3.connect(root/'state.db') as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
+                    with closing(sqlite3.connect(root/'state.db')) as db:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
             finally:
                 release.set();worker.stop()
                 if worker.thread:worker.thread.join(timeout=5)
@@ -328,7 +329,7 @@ class AutoWorkerTests(unittest.TestCase):
                 self.assertFalse(worker.thread.is_alive())
                 self.assertEqual(worker.status()['status'],'inspection_required')
                 self.assertEqual(worker.status()['last_checkpoint'],{'status':'inspection_required'})
-                with sqlite3.connect(root/'state.db') as db:
+                with closing(sqlite3.connect(root/'state.db')) as db:
                     self.assertNotEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('queued',))
             finally:
                 worker.stop()

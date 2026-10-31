@@ -1,4 +1,5 @@
 """Opt-in signed-in worker checkpoint and restart with synthetic content."""
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -110,14 +111,14 @@ worker.main()
                 start('2');second=json.loads((root/'phase-2.json').read_text())
                 self.assertEqual(first['session'],second['session']);self.assertIn('cobalt-orchid',second['output'].lower())
                 self.assertNotEqual(first['queue'],second['queue']);self.assertNotEqual(first['claim'],second['claim'])
-                with sqlite3.connect(root/'state.db') as db:self.assertEqual(db.execute("SELECT incarnation FROM manual_assignments WHERE run='r'").fetchone(),('two',))
+                with closing(sqlite3.connect(root/'state.db')) as db:self.assertEqual(db.execute("SELECT incarnation FROM manual_assignments WHERE run='r'").fetchone(),('two',))
             finally:
                 if worker is not None and worker.poll() is None:
                     worker.terminate()
                     try:worker.wait(timeout=10)
                     except subprocess.TimeoutExpired:worker.kill();worker.wait(timeout=5)
                 if (root/'state.db').exists():
-                    with sqlite3.connect(root/'state.db') as db:
+                    with closing(sqlite3.connect(root/'state.db')) as db:
                         tables={row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                         if 'local_scopes' in tables:
                             units=[row[0] for row in db.execute("SELECT unit FROM local_scopes WHERE state IS NOT 'terminated'")]
