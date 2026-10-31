@@ -11,7 +11,8 @@ class SourceFetchError(RuntimeError): pass
 
 class _PinnedHTTPS(http.client.HTTPSConnection):
     def __init__(self,host,address,timeout):
-        super().__init__(host,port=443,timeout=timeout,context=ssl.create_default_context())
+        context=ssl.create_default_context();context.check_hostname=True;context.verify_mode=ssl.CERT_REQUIRED
+        super().__init__(host,port=443,timeout=timeout,context=context)
         self.address=address
     def connect(self):
         sock=socket.create_connection((self.address,443),self.timeout)

@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -12,10 +13,11 @@ import wave
 
 def main():
     if len(sys.argv)!=5: raise ValueError('invalid audio arguments')
-    model,video,language,output=sys.argv[1:];root=Path(output)
+    model,video,language,output=sys.argv[1:];root=Path(output);source=root/'input.mp4'
+    if not root.is_absolute() or not Path(model).is_absolute() or video!=str(source) or not re.fullmatch(r'[a-z]{2}',language): raise ValueError('invalid audio arguments')
     os.environ['HF_HUB_OFFLINE']='1';os.environ['TRANSFORMERS_OFFLINE']='1';os.environ['HF_HUB_DISABLE_TELEMETRY']='1';os.environ['HF_HOME']=str(root/'cache')
     audio=root/'audio.wav'
-    subprocess.run(['/usr/bin/ffmpeg','-v','error','-xerror','-err_detect','explode','-max_alloc','134217728','-threads','1','-nostdin','-protocol_whitelist','file,pipe','-i',video,'-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','pcm_s16le','-n',str(audio)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120,check=True)
+    subprocess.run(['/usr/bin/ffmpeg','-v','error','-xerror','-err_detect','explode','-max_alloc','134217728','-threads','1','-nostdin','-protocol_whitelist','file,pipe','-i','file:'+str(source),'-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','pcm_s16le','-n',str(audio)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120,check=True)
     with wave.open(str(audio),'rb') as wav:
         if wav.getnchannels()!=1 or wav.getsampwidth()!=2 or wav.getframerate()!=16000 or not 0<wav.getnframes()<=16000*600: raise ValueError('audio format unavailable')
         frames=wav.getnframes();raw=wav.readframes(frames)

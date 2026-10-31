@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import sqlite3
 import stat
 import tempfile
@@ -97,7 +98,7 @@ class AudioTranscriber:
             operation=secrets.token_hex(24);root=Path(self.db_path).parent
             with tempfile.TemporaryDirectory(prefix='audio-review-',dir=root) as directory:
                 work=Path(directory);source=work/'input.mp4';source.write_bytes(data);source.chmod(0o400)
-                helper=work/'transcribe.py';helper.write_bytes(Path(__file__).with_name('audio_transcribe_child.py').read_bytes());helper.chmod(0o400)
+                helper=work/'transcribe.py';shutil.copyfile(Path(__file__).with_name('audio_transcribe_child.py'),helper);helper.chmod(0o400)
                 graph.db.execute('INSERT INTO local_audio_transcripts VALUES(?,?,?,?,?,NULL,?,NULL,NULL,NULL,?)',(operation,run,subject,asset_ref,channel,self.policy_hash,'reserved'))
                 def record(unit):
                     db=sqlite3.connect(self.db_path,timeout=10,isolation_level=None)
