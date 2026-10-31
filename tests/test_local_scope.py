@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import sqlite3
+import os
 from runner.local_scope import LocalScopes, ScopeError
 
 class Backend:
@@ -12,6 +13,45 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_control_inspection_observes_real_scope_without_changing_state(self):
+        import subprocess
+        import time
+        from types import SimpleNamespace
+        from runner.control import ControlPlane
+        from runner.local_scope import SystemdScopes
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.service import Service
+        with tempfile.TemporaryDirectory() as root:
+            path=root+'/state.db';service=Service(root);lifecycle=ManualLifecycle(path,'target','incarnation');service.lifecycle=lifecycle
+            backend=SystemdScopes(os.environ);service.model_supervisor=SimpleNamespace(backend=backend)
+            lifecycle.db.execute("INSERT INTO manual_assignments(run,target,incarnation,state) VALUES('run','target','incarnation','pending')")
+            scopes=LocalScopes(path,backend);unit=scopes.reserve('run')
+            launcher=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/sleep','120'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            try:
+                deadline=time.monotonic()+10
+                while True:
+                    try: scopes.bind('run',unit);break
+                    except ScopeError:
+                        if launcher.poll() is not None or time.monotonic()>=deadline: raise
+                        time.sleep(.05)
+                control=ControlPlane(service,'secret');request={'action':'inspect_local_scope','run':'run','unit':unit}
+                active=control.handle('secret',request)
+                self.assertEqual(active['recorded']['unit'],unit);self.assertEqual(active['observed']['id'],unit)
+                self.assertEqual(active['recorded']['invocation'],active['observed']['invocation'])
+                self.assertEqual(active['recorded']['cgroup'],active['observed']['cgroup'])
+                self.assertEqual(active['observed']['active'],'active');self.assertIs(active['cgroup_empty'],False)
+                self.assertTrue(backend.stop(unit))
+                stopped=control.handle('secret',request)
+                self.assertEqual(stopped['recorded']['state'],'running')
+                self.assertEqual(stopped['observed']['active'],'inactive');self.assertIs(stopped['cgroup_empty'],True)
+                self.assertEqual(scopes.state('run',unit),'running')
+            finally:
+                subprocess.run(['/usr/bin/systemctl','--user','stop',unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
+                try: launcher.wait(timeout=5)
+                except subprocess.TimeoutExpired: launcher.kill();launcher.wait(timeout=5)
+                scopes.close();lifecycle.close();service.close()
+
     def test_control_inspects_exact_recorded_scope_without_reconciling(self):
         from types import SimpleNamespace
         from runner.control import ControlPlane, ControlError
