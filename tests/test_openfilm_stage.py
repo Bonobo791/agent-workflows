@@ -365,7 +365,7 @@ class OpenFilmStageTests(unittest.TestCase):
         config=DockerConfig({'socket':'/private/engine.sock','image':'example@sha256:'+'1'*64,'network':'aw-test','job_root':str(jobs)},self.root/'state')
         test=self
         class Engine:
-            def __init__(self): self.spec=None; self.state='created'; self.cid='a'*64; self.exit_code=0; self.cancel_on_start=False
+            def __init__(self): self.spec=None; self.state='created'; self.cid='a'*64; self.exit_code=0; self.cancel_on_start=False; self.wait_timeouts=[]
             def request(self,method,path,body=None,*,timeout=None):
                 if path=='/containers/create': self.spec=body; return 201,{'Id':self.cid}
                 if path.endswith('/json'):
@@ -390,7 +390,7 @@ class OpenFilmStageTests(unittest.TestCase):
                     self.state='exited'; return 204,None
                 if '/stop?' in path: self.state='exited'; self.exit_code=137; return 204,None
                 if '/wait?' in path:
-                    test.assertEqual(timeout,10)
+                    self.wait_timeouts.append(timeout)
                     return 200,{'StatusCode':self.exit_code}
                 raise AssertionError(path)
         class Builder:
@@ -424,6 +424,7 @@ class OpenFilmStageTests(unittest.TestCase):
             self.assertTrue(backend._active(graph.db,'run',attempt,self.claim,self.queue))
             graph.resolve_attempt('run','asset_production','probe',self.claim,'not_executed')
             result=produce(self.service,'run',self.queue,self.claim,backend)
+            self.assertEqual(engine.wait_timeouts,[10])
             if visual_failure:
                 self.assertEqual(result['status'],'blocked')
                 manifest=json.loads(self.service.artifacts.get(result['artifact_ref']))
@@ -450,6 +451,7 @@ class OpenFilmStageTests(unittest.TestCase):
             graph.invalidate('run','asset_production',graph.prepare('run','asset_production',self.claim),self.claim)
             engine.cid='b'*64; engine.state='created'; engine.exit_code=0; engine.cancel_on_start=True
             with self.assertRaises(OpenFilmStageError): produce(self.service,'run',self.queue,self.claim,backend)
+            self.assertEqual(engine.wait_timeouts,[10,None])
             self.assertEqual(engine.state,'exited')
             self.assertEqual(graph.db.execute("SELECT status FROM graph_attempts WHERE stage='asset_production' AND status='uncertain'").fetchone(),('uncertain',))
         finally: assignments.close(); self.service.docker_supervisor=None
