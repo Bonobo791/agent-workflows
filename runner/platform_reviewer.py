@@ -59,7 +59,7 @@ class PlatformReviewer:
             snapshots=SourceSnapshots(SimpleNamespace(graph=graph,artifacts=store),self.fetcher)
             bundle=snapshots.capture(run,graph_claim,register_ref,brief_ref,cancelled)
             inputs=[brief_ref,register_ref,bundle]
-            payload={'stage':'platform_review','input_versions':inputs,'brief':brief,'sources':snapshots.contents(bundle),'surfaces':self.config['sources']}
+            payload={'stage':'platform_review','input_versions':inputs,'brief':brief,'sources':snapshots.contents(bundle),'surfaces':self.config['sources'],'skills':contents}
             provenance=Provenance(graph);executor=CodexExecutor(self.service.model_supervisor,provenance,store,self.service.fence_execution_detached,model_policy=self.service.model_policy)
             model=self.service.model_policy.for_role('platform_review')['model']
             result=executor.review(run=run,role='platform_review',claim=graph_claim,skills=skills,prompt=PROMPT+'\n'+json.dumps(payload,ensure_ascii=False),instruction_length=len(PROMPT),model=model,input_versions=inputs,output_paths=['platform.json'],subject=brief_ref,timeout=120,cancelled=cancelled)
