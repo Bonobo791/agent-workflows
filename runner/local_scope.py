@@ -114,12 +114,21 @@ class LocalScopes:
         except ScopeError: observed=None
         return {'recorded':{'unit':unit,'state':row[2],'invocation':row[0],'cgroup':row[1]},
                 'observed':observed,'cgroup_empty':self.backend.empty_cgroup(row[1]) if row[1] and observed is not None else None}
+    def _transition(self,run,unit,state,sql,params):
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            last=self.db.execute('SELECT COALESCE(MAX(id),0) FROM local_scope_audit').fetchone()[0]
+            if self.db.execute(sql,params).rowcount!=1: raise ScopeError('scope assignment changed')
+            event=self.db.execute('SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state=?',(last,run,unit,state)).fetchone()
+            if not event: raise ScopeError('scope transition audit unavailable')
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK'); raise
     def bind(self,run,unit):
         info=self.backend.inspect(unit)
         group=info.get('cgroup','')
         if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or not valid_scope_identity(unit,info.get('invocation'),group): raise ScopeError('active scope identity unverified')
-        changed=self.db.execute("UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit)).rowcount
-        if changed!=1: raise ScopeError('scope assignment changed')
+        self._transition(run,unit,'running',"UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit))
     def assert_active(self,run,unit):
         row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
         if not row or row[2]!='running': raise ScopeError('running scope unavailable')
@@ -129,13 +138,12 @@ class LocalScopes:
     def stop(self,run,unit):
         self.assert_active(run,unit)
         row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
-        changed=self.db.execute("UPDATE local_scopes SET state='stopping' WHERE run=? AND unit=? AND state='running'",(run,unit)).rowcount
-        if changed!=1: raise ScopeError('scope assignment changed')
+        self._transition(run,unit,'stopping',"UPDATE local_scopes SET state='stopping' WHERE run=? AND unit=? AND state='running'",(run,unit))
         try:
             if self.backend.stop(unit) is not True: raise ScopeError('scope stop uncertain')
             after=self.backend.inspect(unit)
             if after.get('id')!=unit or after.get('active')!='inactive' or after.get('load') not in ('loaded','not-found') or (after.get('load')=='loaded' and after.get('invocation') not in ('',row[0])) or not self.backend.empty_cgroup(row[1]): raise ScopeError('scope termination unverified')
-            if self.db.execute("UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND state='stopping'",(run,unit)).rowcount!=1: raise ScopeError('scope assignment changed')
+            self._transition(run,unit,'terminated',"UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND state='stopping'",(run,unit))
             return True
         except Exception: raise ScopeError('scope stop uncertain; run remains fenced') from None
     def reconcile_stop(self,run,unit,verify_quiescent):
@@ -146,6 +154,6 @@ class LocalScopes:
             info=self.backend.inspect(unit)
             if info.get('id')!=unit or info.get('active')!='inactive' or info.get('load') not in ('loaded','not-found') or (info.get('load')=='loaded' and info.get('invocation') not in ('',row[0])) or not self.backend.empty_cgroup(row[1]): raise ScopeError('scope termination unverified')
             if verify_quiescent(run,unit,row[0],row[1]) is not True: raise ScopeError('stop request may still be in flight')
-            if self.db.execute("UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='stopping'",(run,unit,row[0],row[1])).rowcount!=1: raise ScopeError('scope assignment changed')
+            self._transition(run,unit,'terminated',"UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='stopping'",(run,unit,row[0],row[1]))
             return True
         except Exception: raise ScopeError('scope stop remains unresolved') from None

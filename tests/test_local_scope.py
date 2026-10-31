@@ -22,6 +22,40 @@ class ScopeTests(unittest.TestCase):
                 self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scopes').fetchone(),(0,))
             finally: scopes.close()
 
+    def test_missing_transition_audit_trigger_blocks_binding_and_stop(self):
+        with tempfile.TemporaryDirectory() as root:
+            backend=Backend();scopes=LocalScopes(root+'/state.db',backend)
+            try:
+                unit=scopes.reserve('run');backend.unit=unit
+                trigger=scopes.db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='local_scope_audit_update'").fetchone()[0]
+                scopes.db.execute('DROP TRIGGER local_scope_audit_update')
+                with self.assertRaises(ScopeError): scopes.bind('run',unit)
+                self.assertEqual(scopes.state('run',unit),'starting')
+                scopes.db.execute(trigger);scopes.bind('run',unit)
+                scopes.db.execute('DROP TRIGGER local_scope_audit_update')
+                with self.assertRaises(ScopeError): scopes.stop('run',unit)
+                self.assertEqual(scopes.state('run',unit),'running');self.assertEqual(backend.stop_calls,0)
+            finally: scopes.close()
+
+    def test_missing_termination_audit_keeps_stopped_scope_unresolved(self):
+        with tempfile.TemporaryDirectory() as root:
+            backend=Backend();scopes=LocalScopes(root+'/state.db',backend)
+            try:
+                unit=scopes.reserve('run');backend.unit=unit;scopes.bind('run',unit)
+                trigger=scopes.db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='local_scope_audit_update'").fetchone()[0]
+                stop=backend.stop
+                def stop_and_remove_audit(value):
+                    result=stop(value);scopes.db.execute('DROP TRIGGER local_scope_audit_update');return result
+                backend.stop=stop_and_remove_audit
+                with self.assertRaises(ScopeError): scopes.stop('run',unit)
+                self.assertEqual(scopes.state('run',unit),'stopping');self.assertEqual(backend.state,'inactive')
+                with self.assertRaises(ScopeError): scopes.reconcile_stop('run',unit,lambda *_:True)
+                self.assertEqual(scopes.state('run',unit),'stopping')
+                scopes.db.execute(trigger)
+                self.assertTrue(scopes.reconcile_stop('run',unit,lambda *_:True))
+                self.assertEqual(scopes.state('run',unit),'terminated')
+            finally: scopes.close()
+
     def test_scope_reservation_helper_requires_transaction(self):
         from runner.local_scope import reserve_scope
         with tempfile.TemporaryDirectory() as root:
