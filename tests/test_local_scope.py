@@ -12,6 +12,41 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    def test_control_inspects_exact_recorded_scope_without_reconciling(self):
+        from types import SimpleNamespace
+        from runner.control import ControlPlane, ControlError
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.service import Service
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            path=root+'/state.db'; backend=Backend(); service=Service(root)
+            lifecycle=ManualLifecycle(path,'target','incarnation');service.lifecycle=lifecycle
+            try:
+                service.model_supervisor=SimpleNamespace(backend=backend)
+                lifecycle.db.execute("INSERT INTO manual_assignments(run,target,incarnation,state) VALUES('run','target','incarnation','pending')")
+                scopes=LocalScopes(path,backend)
+                try:
+                    unit=scopes.reserve('run');backend.unit=unit;scopes.bind('run',unit)
+                    control=ControlPlane(service,'secret')
+                    with self.assertRaises(ControlError): control.handle('wrong',{'action':'inspect_local_scope','run':'run','unit':unit})
+                    result=control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
+                    self.assertEqual(result['recorded'],{'unit':unit,'state':'running','invocation':'a'*32,'cgroup':'/user.slice/'+unit})
+                    self.assertEqual(result['observed']['active'],'active')
+                    self.assertIs(result['cgroup_empty'],True)
+                    self.assertEqual(scopes.state('run',unit),'running')
+                    backend.invocation='b'*32;backend.empty=False
+                    changed=control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
+                    self.assertEqual(changed['recorded']['invocation'],'a'*32)
+                    self.assertEqual(changed['observed']['invocation'],'b'*32)
+                    self.assertIs(changed['cgroup_empty'],False)
+                    self.assertEqual(scopes.state('run',unit),'running')
+                    with patch.object(backend,'inspect',side_effect=ScopeError('unavailable')):
+                        with self.assertRaises(ControlError): control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
+                    self.assertEqual(scopes.state('run',unit),'running')
+                    with self.assertRaises(ControlError): control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':'other.scope'})
+                    with self.assertRaises(ControlError): control.handle('secret',{'action':'inspect_local_scope','run':'other','unit':unit})
+                finally: scopes.close()
+            finally: service.close();lifecycle.close()
     def test_scope_turn_audit_correlates_without_exposing_identifiers(self):
         from runner.audit_export import read_events
         from runner.local_supervisor import LocalSupervisor

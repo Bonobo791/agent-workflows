@@ -61,6 +61,11 @@ class LocalScopes:
         row=self.db.execute('SELECT state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
         if not row: raise ScopeError('scope assignment unavailable')
         return row[0]
+    def inspect(self,run,unit):
+        row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
+        if not row: raise ScopeError('scope assignment unavailable')
+        return {'recorded':{'unit':unit,'state':row[2],'invocation':row[0],'cgroup':row[1]},
+                'observed':self.backend.inspect(unit),'cgroup_empty':self.backend.empty_cgroup(row[1]) if row[1] else None}
     def bind(self,run,unit):
         info=self.backend.inspect(unit)
         group=info.get('cgroup','')
