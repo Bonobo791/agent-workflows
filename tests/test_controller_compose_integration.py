@@ -44,5 +44,8 @@ class ControllerComposeTests(unittest.TestCase):
                 compose('start','workflow')
                 container=wait_ready()
                 self.assertTrue(request(container,{'action':'status','run':'r','stage':'intake'})['ok'])
+                compose('restart','--timeout','5','workflow')
+                container=wait_ready()
+                self.assertTrue(request(container,{'action':'status','run':'r','stage':'intake'})['ok'])
             finally:
                 subprocess.run(command+['down','--volumes','--remove-orphans'],env=env,capture_output=True,timeout=30)
