@@ -39,7 +39,8 @@ class LocalMutationTransport:
                 if approval and json.loads(approval[0])==target:selected.append((action,scope,target))
             if len(selected)!=1:raise LocalMutationError('exact mutation approval unavailable')
             action,scope,target=selected[0]
-            if db.execute("SELECT 1 FROM local_scopes WHERE run=? AND state IS NOT 'terminated'",(self.run,)).fetchone():raise LocalMutationError('prior scope unresolved')
+            from runner.local_scope import unresolved_scope_rows
+            if unresolved_scope_rows(db,self.run):raise LocalMutationError('prior scope unresolved')
             db.execute("INSERT INTO local_mutation_attempts VALUES(?,?,?,?,?,'reserved')",(assignment,self.run,action,scope,kind));db.execute('COMMIT')
         except Exception:db.execute('ROLLBACK');raise
         if kind=='draft':endpoint='/repos/'+repo+'/pulls';body=payload

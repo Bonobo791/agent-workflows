@@ -9,7 +9,7 @@ import secrets
 import sqlite3
 from runner.adapter import managed_app_server_spec
 from runner.local_process import start_local_process
-from runner.local_scope import LocalScopes
+from runner.local_scope import LocalScopes, unresolved_scope_rows
 from runner.local_preflight import sandbox_preflight, scope_preflight
 from runner.session_store import _WRITERS
 
@@ -49,8 +49,7 @@ class LocalSupervisor:
             dbh=self._db()
             try:
                 row=dbh.execute('SELECT session,binding,state FROM local_sessions WHERE run=? AND role=?',(run,role)).fetchone()
-                live=dbh.execute("SELECT 1 FROM local_scopes WHERE run=? AND state IS NOT 'terminated'",(run,)).fetchone()
-                return row==(session,binding,'idle') and live is None
+                return row==(session,binding,'idle') and not unresolved_scope_rows(dbh,run)
             finally: dbh.close()
         except Exception: return False
     def start_execution(self,run,role,session,skills,model):

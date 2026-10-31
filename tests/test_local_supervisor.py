@@ -31,6 +31,9 @@ class SupervisorTests(unittest.TestCase):
             scopes=LocalScopes(db,Backend())
             try:
                 with self.assertRaises(ScopeError): scopes.reserve('r')
+                scopes.db.execute("UPDATE local_scopes SET state='terminated',invocation='bad',cgroup='/wrong' WHERE run='r'")
+                self.assertFalse(supervisor.can_resume('r','implement','thread',{},'model'))
+                with self.assertRaises(ScopeError): scopes.reserve('r')
             finally:scopes.close()
 
     def test_resume_requires_matching_role_model_skills_and_stopped_scope(self,_sandbox,_scope):

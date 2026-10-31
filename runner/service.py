@@ -109,8 +109,9 @@ class Service:
             tables={row[0] for row in self.graph.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('local_scopes','engineering_workspaces','engineering_local_scopes')")}
             if 'local_scopes' in tables:
                 columns={row[1] for row in self.graph.db.execute('PRAGMA table_info(local_scopes)')}
-                if {'run','unit','state'}<=columns:
-                    rows=self.graph.db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state IS NOT 'terminated' ORDER BY unit",(run,)).fetchall()
+                if {'run','unit','invocation','cgroup','state'}<=columns:
+                    from runner.local_scope import unresolved_scope_rows
+                    rows=unresolved_scope_rows(self.graph.db,run)
                     result['local_scopes']=[{'unit':row[0],'state':row[1]} for row in rows]
                 else: result['local_scopes_unavailable']=True
             if {'engineering_workspaces','engineering_local_scopes'}<=tables:

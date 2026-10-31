@@ -330,8 +330,8 @@ class WorkerTests(unittest.TestCase):
             service,control=build_control(root,'x'*40,lifecycle_factory=lambda _:ManualLifecycle(root+'/state.db','worker','inc'))
             try:
                 service.create('run','marketing','task');service.enqueue('run');service.lifecycle.claim()
-                service.graph.db.execute('CREATE TABLE local_scopes(run TEXT,unit TEXT,state TEXT)')
-                service.graph.db.execute("INSERT INTO local_scopes VALUES('run','unknown.scope',NULL)")
+                service.graph.db.execute('CREATE TABLE local_scopes(run TEXT,unit TEXT,invocation TEXT,cgroup TEXT,state TEXT)')
+                service.graph.db.execute("INSERT INTO local_scopes VALUES('run','unknown.scope',NULL,NULL,NULL)")
                 result=control.handle('x'*40,{'action':'manual_stop','run':'run'})
                 self.assertEqual(result['local_scopes'],[{'unit':'unknown.scope','state':None}])
                 with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
@@ -362,6 +362,8 @@ class WorkerTests(unittest.TestCase):
                 identity=scopes.db.execute('SELECT invocation,cgroup FROM local_scopes WHERE unit=?',(unit,)).fetchone()
                 for field,bad,value in (('invocation',None,identity[0]),('invocation','bad',identity[0]),('cgroup',None,identity[1]),('cgroup','/wrong',identity[1])):
                     scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(bad,unit))
+                    status=control.handle('x'*40,{'action':'manual_stop','run':'run'})
+                    self.assertEqual(status['local_scopes'],[{'unit':unit,'state':'unverified'}])
                     with self.subTest(field=field,bad=bad),self.assertRaises(ControlError): control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
                     scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(value,unit))
                 self.assertEqual(control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})['status'],'stopped')

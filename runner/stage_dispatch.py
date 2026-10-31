@@ -476,7 +476,8 @@ class StageDispatcher:
             docker=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone()
             if docker and db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated' OR e.run IS NULL)",(run,)).fetchone(): raise StageError('worker outcome unresolved')
             local=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone()
-            if local and db.execute("SELECT 1 FROM local_scopes WHERE run=? AND state IS NOT 'terminated'",(run,)).fetchone(): raise StageError('local worker outcome unresolved')
+            from runner.local_scope import unresolved_scope_rows
+            if local and unresolved_scope_rows(db,run): raise StageError('local worker outcome unresolved')
             if db.execute("SELECT 1 FROM graph_attempts WHERE run=? AND status='uncertain' AND NOT (stage=? AND version=?)",(run,row[1],row[6] or '')).fetchone(): raise StageError('another attempt is uncertain')
             if row[5]=='running':
                 attempt=db.execute('SELECT status FROM graph_attempts WHERE run=? AND stage=? AND version=?',(run,row[1],row[6])).fetchone()
