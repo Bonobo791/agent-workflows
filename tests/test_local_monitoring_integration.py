@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import queue
+import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -33,6 +35,7 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
         thread = threading.Thread(target=receiver.serve_forever)
         thread.start()
         names = []
+        systemd_mode = os.environ.get('WORKFLOW_MONITOR_SYSTEMD_TEST') == '1'
         worker = exporter = None
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         auth = 'Basic ' + base64.b64encode(b'workflow:fixture-password').decode()
@@ -92,6 +95,24 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             def launch(suffix, image, *args, store):
                 name = 'workflow-monitor-' + uuid.uuid4().hex + '-' + suffix
                 names.append(name)
+                if systemd_mode:
+                    unit = observability / 'systemd' / ('agent-workflows-' + suffix + '.service')
+                    lines = unit.read_text().splitlines()
+                    command = next(line[10:] for line in lines if line.startswith('ExecStart='))
+                    private_config = root / (suffix + '-config')
+                    shutil.copytree(config, private_config)
+                    command = command.replace('%h/.config/agent-workflows/' + suffix, str(private_config))
+                    command = command.replace('%h/.local/share/agent-workflows-monitor/' + suffix, str(store))
+                    command = command.replace('%U', str(os.getuid())).replace('%G', str(os.getgid()))
+                    command = command.replace('--name=agent-workflows-' + suffix, '--name=' + name)
+                    command = command.replace('127.0.0.1:19090', f'127.0.0.1:{prom_port}')
+                    command = command.replace('127.0.0.1:19093', f'127.0.0.1:{alert_port}')
+                    properties = ['--property=' + line for line in lines
+                                  if line.startswith(('NoNewPrivileges=', 'UMask=', 'KillMode='))]
+                    self.assertEqual(len(properties), 3)
+                    subprocess.run(['systemd-run', '--user', '--unit=' + name, *properties,
+                                    *shlex.split(command)], check=True, capture_output=True, timeout=30)
+                    return name
                 subprocess.run(['podman', 'run', '-d', '--pull=never', '--name', name,
                                 '--network=host', '--userns=keep-id', '--user',
                                 f'{os.getuid()}:{os.getgid()}', '--read-only', '--cap-drop=ALL',
@@ -147,10 +168,12 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             worker = None
             wait_up('0')
             expect(False)
-            subprocess.run(['podman', 'stop', alert_name], check=True, capture_output=True, timeout=30)
-            subprocess.run(['podman', 'start', alert_name], check=True, capture_output=True, timeout=30)
-            subprocess.run(['podman', 'stop', prom_name], check=True, capture_output=True, timeout=30)
-            subprocess.run(['podman', 'start', prom_name], check=True, capture_output=True, timeout=30)
+            for name in (alert_name, prom_name):
+                if systemd_mode:
+                    subprocess.run(['systemctl', '--user', 'restart', name], check=True, capture_output=True, timeout=30)
+                else:
+                    subprocess.run(['podman', 'stop', name], check=True, capture_output=True, timeout=30)
+                    subprocess.run(['podman', 'start', name], check=True, capture_output=True, timeout=30)
             wait_up('0')
             query = urllib.parse.urlencode({'query': 'count_over_time(workflow_snapshot_timestamp_seconds[5m])'})
             history = json.loads(request(f'http://127.0.0.1:{prom_port}/api/v1/query?{query}', True))['data']['result']
@@ -160,6 +183,11 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             expect(True)
         finally:
             for name in reversed(names):
+                if systemd_mode:
+                    subprocess.run(['systemctl', '--user', 'stop', name], stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=30)
+                    subprocess.run(['systemctl', '--user', 'reset-failed', name], stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=30)
                 subprocess.run(['podman', 'rm', '-f', name], stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, timeout=30)
             for process in (exporter, worker):

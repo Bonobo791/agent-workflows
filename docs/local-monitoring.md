@@ -71,6 +71,19 @@ The configuration uses HTTP on loopback: credentials and telemetry are not
 encrypted against a privileged local observer. Do not expose these ports to a
 network or treat loopback as an authorization boundary.
 
+The optional `agent-workflows-prometheus.service` and
+`agent-workflows-alertmanager.service` user units provide these settings for a
+rootless Podman installation. They use immutable image digests, never pull an
+image at startup, and expect the config directories at
+`~/.config/agent-workflows/{prometheus,alertmanager}` and the persistent data
+directories at `~/.local/share/agent-workflows-monitor/{prometheus,alertmanager}`.
+Create those directories privately before starting the units. Prometheus is
+configured for 15 days and a 2 GB block-retention target; its write-ahead log
+and other files can require additional space. Alertmanager retains its data
+for 120 hours. The container names are fixed; if a previous container remains,
+inspect it rather than removing it blindly. These units are not installed or
+started by this repository.
+
 The combined opt-in integration test uses the example configurations with
 shortened timing, isolated temporary storage, and synthetic credentials. It
 checks that both APIs reject unauthenticated requests, and that a worker outage
@@ -87,6 +100,7 @@ Prometheus v3.4.2 and Alertmanager v0.28.1 container images available locally:
 WORKFLOW_METRICS_HTTP_TEST=1 python -m unittest tests.test_metrics_http_integration
 WORKFLOW_DESKTOP_ALERT_TEST=1 python -m unittest tests.test_desktop_alert_receiver_integration
 WORKFLOW_LOCAL_MONITORING_TEST=1 python -m unittest tests.test_local_monitoring_integration
+WORKFLOW_LOCAL_MONITORING_TEST=1 WORKFLOW_MONITOR_SYSTEMD_TEST=1 python -m unittest tests.test_local_monitoring_integration
 ```
 
 These tests use temporary synthetic credentials and loopback containers. The

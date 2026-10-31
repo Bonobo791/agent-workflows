@@ -1,0 +1,15 @@
+[Unit]
+Description=Agent Workflows private alert router
+After=agent-workflows-alert-receiver.service
+
+[Service]
+Type=simple
+KillMode=mixed
+ExecStart=/usr/bin/podman run --rm --pull=never --name=agent-workflows-alertmanager --network=host --userns=keep-id --user=%U:%G --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp -v %h/.config/agent-workflows/alertmanager:/config:ro,Z -v %h/.local/share/agent-workflows-monitor/alertmanager:/store:rw,Z docker.io/prom/alertmanager@sha256:220da6995a919b9ee6e0d3da7ca5f09802f3088007af56be22160314d2485b54 --config.file=/config/alertmanager.yml --storage.path=/store --data.retention=120h --cluster.listen-address= --web.config.file=/config/web.yml --web.listen-address=127.0.0.1:19093
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
