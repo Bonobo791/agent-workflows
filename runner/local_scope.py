@@ -48,7 +48,11 @@ class SystemdScopes:
         try:
             values=dict(line.split() for line in target.read_text().splitlines())
             return values.get('populated')=='0'
-        except FileNotFoundError: return True
+        except FileNotFoundError:
+            try: target.parent.stat()
+            except FileNotFoundError: return Path('/sys/fs/cgroup/cgroup.controllers').is_file()
+            except OSError: return False
+            return False
         except (OSError,ValueError): return False
 
 class LocalScopes:
