@@ -46,6 +46,22 @@ class CheckpointHandoffTests(unittest.TestCase):
         self.assertNotEqual(replacement['token'],self.queue)
         self.assertNotEqual(self.service.claim('run'),self.graph)
 
+    def test_repeated_handoffs_preserve_identity_history_and_reject_reuse(self):
+        from runner.checkpoint import checkpoint
+        from runner.manual_lifecycle import ManualLifecycleError
+        checkpoint(self.service,'run',self.queue,self.graph)
+        self.service.lifecycle.register_checkpoint_replacement('run','inc','next')
+        replacement=ManualLifecycle(str(self.root/'state.db'),'worker','next');self.addCleanup(replacement.close)
+        queue=replacement.claim()['token'];claim=self.service.claim('run')
+        self.service.lifecycle=replacement
+        checkpoint(self.service,'run',queue,claim)
+        with self.assertRaises(ManualLifecycleError):replacement.register_checkpoint_replacement('run','next','inc')
+        replacement.register_checkpoint_replacement('run','next','third')
+        rows=self.service.graph.db.execute('SELECT old_incarnation,new_incarnation FROM checkpoint_replacements ORDER BY id').fetchall()
+        self.assertEqual(rows,[('inc','next'),('next','third')])
+        third=ManualLifecycle(str(self.root/'state.db'),'worker','third');self.addCleanup(third.close)
+        self.assertEqual(third.claim()['run'],'run')
+
     def test_replacement_control_is_owner_only(self):
         from runner.checkpoint import checkpoint
         from runner.control import ControlError,ControlPlane

@@ -139,7 +139,26 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     self.assertEqual(seen,['intake','plan','implement','test','qa','implement','test','qa','open_draft'])
                     self.assertEqual(result['status'],'awaiting_approval'); self.assertEqual(Engine.canonical_reviews,2); self.assertEqual(len(Engine.resumed),1)
                     from runner.metrics import snapshot, prometheus_text
-                    self.assertIn('workflow_stages{workflow="engineering",stage="open_draft",status="awaiting_approval"} 1',prometheus_text(snapshot(service.graph.db)))
+                    wait_metric='workflow_stages{workflow="engineering",stage="open_draft",status="awaiting_approval"} 1'
+                    self.assertIn(wait_metric,prometheus_text(snapshot(service.graph.db)))
+                    original_package=result['version'];old_queue,old_graph=q['token'],g
+                    from types import SimpleNamespace
+                    from runner.checkpoint import checkpoint
+                    from runner.local_scope import LocalScopes
+                    from tests.test_local_scope import Backend
+                    scopes=LocalScopes(root+'/state.db',Backend());scopes.close()
+                    service.graph.db.execute('CREATE TABLE local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                    service.model_supervisor=SimpleNamespace(db=root+'/state.db')
+                    checkpoint(service,'run-1',old_queue,old_graph)
+                    self.assertNotIn(wait_metric,prometheus_text(snapshot(service.graph.db)))
+                    service.lifecycle.register_checkpoint_replacement('run-1','inc','inc-next')
+                    service.lifecycle.close();service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc-next')
+                    q=service.lifecycle.claim();g=service.claim('run-1');service.model_supervisor=None
+                    req.update(queue_claim=q['token'],graph_claim=g)
+                    result=control.handle('x'*40,req)
+                    self.assertEqual(result['status'],'awaiting_approval')
+                    self.assertEqual(result['version'],original_package)
+                    self.assertIn(wait_metric,prometheus_text(snapshot(service.graph.db)))
                     package=json.loads(service.artifacts.get(result['version'])); report=json.loads(service.artifacts.get(package['test_report']))
                     self.assertEqual(report['commands'][0]['exit_code'],0)
                     self.assertEqual(package['test_evidence_kind'],'supervisor_observed'); self.assertTrue(package['trusted_execution_verified']); self.assertEqual(package['role_report_kind'],'role_reported')
