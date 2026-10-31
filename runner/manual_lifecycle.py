@@ -21,6 +21,7 @@ class ManualLifecycle:
             run TEXT PRIMARY KEY, target TEXT NOT NULL, incarnation TEXT NOT NULL,
             state TEXT NOT NULL, attestation TEXT, UNIQUE(target,incarnation));
             CREATE TABLE IF NOT EXISTS manual_incarnation_history(target TEXT NOT NULL, incarnation TEXT NOT NULL, PRIMARY KEY(target,incarnation));
+            CREATE TABLE IF NOT EXISTS checkpoint_replacements(id INTEGER PRIMARY KEY,run TEXT NOT NULL,target TEXT NOT NULL,old_incarnation TEXT NOT NULL,new_incarnation TEXT NOT NULL,created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS manual_lifecycle_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, state TEXT NOT NULL, confirmation TEXT, created REAL NOT NULL);
             CREATE TRIGGER IF NOT EXISTS manual_lifecycle_audit_insert AFTER INSERT ON manual_assignments BEGIN
                 INSERT INTO manual_lifecycle_audit(schema_version,run,state,confirmation,created) VALUES(1,NEW.run,NEW.state,NULL,(julianday('now')-2440587.5)*86400.0);
@@ -121,6 +122,7 @@ class ManualLifecycle:
             db.execute('INSERT INTO manual_incarnation_history VALUES(?,?)',(target,new))
             if db.execute("UPDATE manual_assignments SET incarnation=? WHERE run=? AND target=? AND incarnation=? AND state='checkpointed'",(new,run,target,old)).rowcount!=1: raise ManualLifecycleError('assignment changed')
             if db.execute("UPDATE manual_workers SET incarnation=?,state='available' WHERE target=? AND incarnation=? AND state='checkpointed'",(new,target,old)).rowcount!=1: raise ManualLifecycleError('worker changed')
+            if db.execute('INSERT INTO checkpoint_replacements(run,target,old_incarnation,new_incarnation,created) VALUES(?,?,?,?,?)',(run,target,old,new,time.time())).rowcount!=1: raise ManualLifecycleError('replacement history unavailable')
             if db.execute("INSERT INTO checkpoint_audit(schema_version,run,status,created) VALUES(1,?,'replacement_registered',?)",(run,time.time())).rowcount!=1: raise ManualLifecycleError('checkpoint audit unavailable')
             db.execute('COMMIT'); return {'incarnation':new}
         except Exception: db.execute('ROLLBACK'); raise

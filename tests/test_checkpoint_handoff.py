@@ -39,6 +39,7 @@ class CheckpointHandoffTests(unittest.TestCase):
         from runner.manual_lifecycle import ManualLifecycleError
         with self.assertRaises(ManualLifecycleError): self.service.lifecycle.claim()
         self.assertEqual(self.service.lifecycle.register_checkpoint_replacement('run','inc','inc-next'),{'incarnation':'inc-next'})
+        self.assertEqual(db.execute("SELECT run,target,old_incarnation,new_incarnation FROM checkpoint_replacements").fetchall(),[('run','worker','inc','inc-next')])
         with self.assertRaises(ManualLifecycleError): self.service.lifecycle.claim()
         lifecycle=ManualLifecycle(str(self.root/'state.db'),'worker','inc-next');self.addCleanup(lifecycle.close)
         replacement=lifecycle.claim();self.assertEqual(replacement['run'],'run')
@@ -102,6 +103,19 @@ class CheckpointHandoffTests(unittest.TestCase):
         self.assertEqual(db.execute("SELECT incarnation,state FROM manual_workers WHERE target='worker'").fetchone(),('inc','checkpointed'))
         self.assertEqual(db.execute("SELECT incarnation,state FROM manual_assignments WHERE run='run'").fetchone(),('inc','checkpointed'))
         self.assertFalse(db.execute("SELECT 1 FROM manual_incarnation_history WHERE incarnation='next'").fetchone())
+        self.assertEqual(db.execute('SELECT COUNT(*) FROM checkpoint_replacements').fetchone(),(0,))
+
+    def test_replacement_history_failure_rolls_back_handoff(self):
+        import sqlite3
+        from runner.checkpoint import checkpoint
+        checkpoint(self.service,'run',self.queue,self.graph)
+        db=self.service.graph.db
+        db.execute("CREATE TRIGGER reject_history BEFORE INSERT ON checkpoint_replacements BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+        with self.assertRaises(sqlite3.IntegrityError):self.service.lifecycle.register_checkpoint_replacement('run','inc','next')
+        self.assertEqual(db.execute("SELECT incarnation,state FROM manual_workers WHERE target='worker'").fetchone(),('inc','checkpointed'))
+        self.assertEqual(db.execute("SELECT incarnation,state FROM manual_assignments WHERE run='run'").fetchone(),('inc','checkpointed'))
+        self.assertFalse(db.execute("SELECT 1 FROM manual_incarnation_history WHERE incarnation='next'").fetchone())
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM checkpoint_audit WHERE status='replacement_registered'").fetchone(),(0,))
 
     def test_unresolved_scope_blocks_checkpoint_without_releasing_claims(self):
         from runner.checkpoint import CheckpointError,checkpoint

@@ -245,7 +245,9 @@ transport error.
 While the original control process is still running, send the owner-only action
 `register_checkpoint_replacement` with `run`, `old_incarnation`, and a distinct,
 never-used `new_incarnation`. The replacement is registered only if the run is
-still quiescent. Inspect `lifecycle_status` if the response is lost. Stop the
+still quiescent. The private state database records each replacement with its
+run, target, and old and new incarnations; exported checkpoint events omit
+those raw identities. Inspect `lifecycle_status` if the response is lost. Stop the
 original worker process, set `MANUAL_WORKER_INCARNATION` to the new value, then
 start the replacement against the same private state directory. Its worker lock
 prevents concurrent processes, and it obtains fresh queue and graph claims. A
