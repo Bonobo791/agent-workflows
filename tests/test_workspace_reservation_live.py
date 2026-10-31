@@ -9,6 +9,7 @@ class WorkspaceReservationLiveTests(unittest.TestCase):
         from runner.local_config import local_supervisor_factory
         from runner.local_config_inspect import inspect_config
         from runner.local_git_snapshot import scoped_git_snapshot
+        from runner.local_push import LocalPushTransport
         from tests.test_engineering_workspace import EngineeringWorkspaceTests, git
         fixture=EngineeringWorkspaceTests('test_exact_binding_and_exclusive_replacement')
         fixture.setUp()
@@ -19,11 +20,15 @@ class WorkspaceReservationLiveTests(unittest.TestCase):
             supervisor.fence=lambda _:True
             args=('run-1','owner/repo',fixture.base,'task-1',os.geteuid(),supervisor.policy_hash)
             fixture.registry.register(*args,fixture.registry.binding_hash(*args))
+            LocalPushTransport(service,'run-1','queue','graph',None)
             assignment='job-'+'a'*48;observed=[]
             def record(unit):
                 row=fixture.registry.db.execute('SELECT w.assignment,m.unit,s.state FROM engineering_workspaces w JOIN engineering_local_scopes m ON m.run=w.run AND m.assignment=w.assignment JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE w.run=?',('run-1',)).fetchone()
-                self.assertEqual(row,(assignment,unit,'starting'));observed.append(unit)
-            with scoped_git_snapshot(supervisor,'run-1',str(fixture.repo),fixture.base,record,workspace_claim=(str(fixture.root),assignment,supervisor.policy_hash)) as (bare,unit):
+                self.assertEqual(row,(assignment,unit,'starting'))
+                self.assertEqual(fixture.registry.db.execute('SELECT unit FROM local_pr_scopes WHERE assignment=? AND kind=?',(assignment,'bundle')).fetchone(),(unit,))
+                observed.append(unit)
+            binding=(str(fixture.root),assignment,supervisor.policy_hash,('push:fixture','github:owner/repo:branch:task-1','bundle'))
+            with scoped_git_snapshot(supervisor,'run-1',str(fixture.repo),fixture.base,record,workspace_claim=binding) as (bare,unit):
                 self.assertEqual(observed,[unit]);self.assertEqual(git(bare,'rev-parse','refs/heads/snapshot'),fixture.base)
                 self.assertEqual(fixture.registry.db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('terminated',))
                 fixture.registry.release_local('run-1',assignment,unit)

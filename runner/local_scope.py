@@ -35,10 +35,10 @@ def reserve_for_execution(db,run,backend,workspace,workspace_claim=None):
     try:
         if workspace_claim is None: return scopes.reserve(run)
         from runner.engineering_workspace import EngineeringWorkspace
-        if not isinstance(workspace_claim,tuple) or len(workspace_claim)!=3 or Path(db).resolve()!=Path(workspace_claim[0]).resolve()/'state.db': raise ScopeError('workspace claim state mismatch')
+        if not isinstance(workspace_claim,tuple) or len(workspace_claim) not in (3,4) or Path(db).resolve()!=Path(workspace_claim[0]).resolve()/'state.db': raise ScopeError('workspace claim state mismatch')
         registry=EngineeringWorkspace(workspace_claim[0])
         try:
-            _,unit=registry.claim_local(run,workspace_claim[1],workspace_claim[2],expected_path=str(workspace))
+            _,unit=registry.claim_local(run,workspace_claim[1],workspace_claim[2],expected_path=str(workspace),pr_scope=workspace_claim[3] if len(workspace_claim)==4 else None)
             return unit
         finally: registry.close()
     finally: scopes.close()

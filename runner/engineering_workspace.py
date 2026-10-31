@@ -78,7 +78,7 @@ class EngineeringWorkspace:
             path=self._claim(run,assignment,policy)
             self.db.execute('COMMIT'); return path
         except Exception: self.db.execute('ROLLBACK'); raise
-    def claim_local(self,run,assignment,policy,*,expected_path=None):
+    def claim_local(self,run,assignment,policy,*,expected_path=None,pr_scope=None):
         from runner.local_scope import reserve_scope
         self.db.execute('BEGIN IMMEDIATE')
         try:
@@ -86,6 +86,9 @@ class EngineeringWorkspace:
             if expected_path is not None and path!=expected_path: raise WorkspaceError('engineering workspace changed')
             unit=reserve_scope(self.db,run)
             self.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',(run,assignment,unit))
+            if pr_scope is not None:
+                if not isinstance(pr_scope,tuple) or len(pr_scope)!=3 or any(not isinstance(value,str) or not value for value in pr_scope) or pr_scope[2]!='bundle': raise WorkspaceError('invalid push scope binding')
+                self.db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,run,*pr_scope))
             self.db.execute('COMMIT'); return path,unit
         except Exception: self.db.execute('ROLLBACK'); raise
     def release(self,run,assignment):
@@ -97,6 +100,7 @@ class EngineeringWorkspace:
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
     def bind_local_scope(self,run,assignment,unit):
+        """Bind an older claim after observation; new local claims are already bound."""
         self.db.execute('BEGIN IMMEDIATE')
         try:
             row=self.db.execute("SELECT 1 FROM engineering_workspaces w JOIN local_scopes s ON s.run=w.run WHERE w.run=? AND w.assignment=? AND s.unit=? AND s.state='running'",(run,assignment,unit)).fetchone()

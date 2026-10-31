@@ -55,7 +55,7 @@ class LocalPushTransport:
             def save(unit): db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,self.run,action,scope,kind))
             return save
         try:
-            with scoped_git_snapshot(s,self.run,workspace['path'],head,record('bundle'),workspace_claim=(s.engineering_root,assignment,s.policy_hash)) as (bare,bundle_unit):
+            with scoped_git_snapshot(s,self.run,workspace['path'],head,lambda _:None,workspace_claim=(s.engineering_root,assignment,s.policy_hash,(action,scope,'bundle'))) as (bare,bundle_unit):
                 require_fast_forward(bare,expected,head)
                 if workspace_snapshot(service,self.run,assignment=assignment)!=workspace or s.fence(self.run) is not True or not service.queue.may_start(self.run,self.queue_claim): raise LocalPushError('workspace or task changed')
                 env=dict(self.gh.environment);env.update({'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0','GIT_NO_REPLACE_OBJECTS':'1'})

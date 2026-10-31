@@ -62,6 +62,22 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.assertEqual(events[0]['scope_id'],scope_events[0]['scope_id'])
         finally: scopes.close()
 
+    def test_push_scope_record_failure_rolls_back_reservation(self):
+        import sqlite3
+        from runner.local_push import LocalPushTransport
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        LocalPushTransport(self.service,'run-1','queue','graph',None)
+        scopes=LocalScopes(str(self.root/'state.db'),Backend())
+        try:
+            self.registry.db.execute("CREATE TRIGGER reject_push_scope BEFORE INSERT ON local_pr_scopes BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+            with self.assertRaises(sqlite3.IntegrityError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy,pr_scope=('push:x','github:o/r:branch:x','bundle'))
+            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+            for table in ('local_scopes','engineering_local_scopes','local_pr_scopes','workspace_scope_audit'):
+                self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
+        finally: scopes.close()
+
     def test_workspace_scope_audit_failure_rolls_back_reservation(self):
         import sqlite3
         from runner.local_scope import LocalScopes

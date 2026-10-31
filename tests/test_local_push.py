@@ -34,6 +34,8 @@ class LocalPushTransportTests(EngineeringWorkspaceTests):
         self._exercise_push(True)
     def test_interrupted_snapshot_keeps_workspace_scope_binding(self):
         self._exercise_push(False,interrupted=True)
+    def test_interrupted_before_reservation_leaves_workspace_unclaimed(self):
+        self._exercise_push(False,interrupted='before')
     def _exercise_push(self,corrupt,interrupted=False):
         import hashlib,json,time
         from contextlib import contextmanager
@@ -63,13 +65,14 @@ class LocalPushTransportTests(EngineeringWorkspaceTests):
         ledger=BoundLedger(str(self.root/'state.db'),lambda run:dict(target),lock);loop=ReviewLoop(http,'owner','repo',ledger,lock,lambda run:dict(target))
         @contextmanager
         def snapshot(s,run,workspace,head,on_reserved,*,workspace_claim):
-            root,assignment,policy=workspace_claim
+            if interrupted=='before': raise RuntimeError('interrupted before scope reservation')
+            root,assignment,policy,pr_scope=workspace_claim
             self.assertEqual((root,policy),(str(self.root),supervisor.policy_hash))
-            _,unit=self.registry.claim_local(run,assignment,policy)
+            _,unit=self.registry.claim_local(run,assignment,policy,pr_scope=pr_scope)
             if interrupted: raise RuntimeError('snapshot launch interrupted')
             scopes=LocalScopes(s.db,engine)
             try:
-                on_reserved(unit);engine.unit=unit;engine.state='active';scopes.bind(run,unit);scopes.stop(run,unit)
+                engine.unit=unit;engine.state='active';scopes.bind(run,unit);scopes.stop(run,unit)
                 yield str(self.repo/'.git'),unit
             finally:scopes.close()
         def push(s,run,workspace,argv,env,deadline,limit,on_reserved,on_started=None):
@@ -86,11 +89,19 @@ class LocalPushTransportTests(EngineeringWorkspaceTests):
                 with self.assertRaises(Exception):transport.push_exact('task-1',target['head'])
                 loop.approve_push('run-1',self.base,'owner',time.time()+60);action=loop.github.push_action('task-1',self.base)
                 proposal=service.artifacts.put(json.dumps({'action':action,'target':target,'args':{'expected_remote':self.base}}).encode());service.graph.db.execute("INSERT INTO pr_bridge_operations VALUES(?,?,?,'uncertain',NULL)",(proposal,'run-1','push'))
-                if interrupted:
+                if interrupted=='before':
+                    from workflows.engineering.github import GitHubError
+                    with self.assertRaises(GitHubError):loop.push('run-1',self.base)
+                    self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
+                    self.assertEqual(ledger.db.execute("SELECT status FROM external_actions WHERE action LIKE 'push:%'").fetchone(),('uncertain',))
+                    self.assertEqual(service.graph.db.execute('SELECT COUNT(*) FROM local_pr_scopes').fetchone(),(0,))
+                elif interrupted:
                     from workflows.engineering.github import GitHubError
                     with self.assertRaises(GitHubError):loop.push('run-1',self.base)
                     row=self.registry.db.execute("SELECT w.assignment,m.unit,s.state FROM engineering_workspaces w JOIN engineering_local_scopes m ON m.run=w.run AND m.assignment=w.assignment JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE w.run='run-1'").fetchone()
                     self.assertIsNotNone(row);self.assertEqual(row[2],'starting')
+                    recorded=self.registry.db.execute("SELECT unit FROM local_pr_scopes WHERE assignment=? AND run='run-1' AND kind='bundle'",(row[0],)).fetchone()
+                    self.assertEqual(recorded,(row[1],))
                 elif corrupt:
                     from workflows.engineering.github import GitHubError
                     with self.assertRaises(GitHubError):loop.push('run-1',self.base)
