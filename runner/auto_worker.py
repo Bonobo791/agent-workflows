@@ -26,9 +26,9 @@ def renew_leases(path,run,queue_claim,graph_claim,ttl=60):
 
 class AutoWorker:
     def __init__(self,factory,root):
-        self.factory=factory; self.db_path=str(root/'state.db'); self.stop_event=threading.Event(); self.guard=threading.Lock(); self.thread=None; self.claimed_run=None; self.state={'status':'idle'}; self.pending_decision=None; self.pending_action=None; self.last_action=None
+        self.factory=factory; self.db_path=str(root/'state.db'); self.stop_event=threading.Event(); self.guard=threading.Lock(); self.thread=None; self.claimed_run=None; self.state={'status':'idle'}; self.pending_decision=None; self.pending_action=None; self.last_action=None; self.checkpoint_pending=False; self.at_gate=False; self.checkpoint_capable=False; self.wake=threading.Event()
     def status(self):
-        with self.guard: return {**self.state,'last_action':self.last_action}
+        with self.guard: return {**self.state,'last_action':self.last_action,'checkpoint_available':self.checkpoint_capable and self.at_gate and not self.stop_event.is_set() and not self.checkpoint_pending and self.pending_action is None and self.pending_decision is None}
     def _set(self,**value):
         with self.guard: self.state=value
     def start(self):
@@ -39,19 +39,24 @@ class AutoWorker:
     def request_decision(self,run,version,decision):
         if decision not in ('approved','rejected') or not isinstance(version,str) or len(version)!=64 or any(c not in '0123456789abcdef' for c in version): raise AutoWorkerError('invalid human decision')
         with self.guard:
-            if self.state.get('run')!=run or self.state.get('status')!='awaiting_review' or self.state.get('version')!=version or self.pending_decision is not None: raise AutoWorkerError('current review unavailable')
+            if self.state.get('run')!=run or self.state.get('status')!='awaiting_review' or self.state.get('version')!=version or self.pending_decision is not None or self.checkpoint_pending or self.stop_event.is_set(): raise AutoWorkerError('current review unavailable')
             self.pending_decision={'run':run,'version':version,'decision':decision}
         return {'pending':True,'version':version}
     def request_action(self,run,operation,parameters):
         allowed={'engineering_workspace_binding','bind_engineering_workspace','pr_propose','pr_approve','pr_execute','pr_review','pr_request_qa','pr_post_ready','pr_reconcile','pr_reauthorize'}
         if operation not in allowed or not isinstance(parameters,dict) or any(key in parameters for key in ('action','run','queue_claim','graph_claim','secret')): raise AutoWorkerError('invalid automatic action')
         with self.guard:
-            if self.state.get('run')!=run or self.state.get('status') not in ('blocked','awaiting_approval','awaiting_review','awaiting_merge_review','no_runnable_stage') or self.pending_action is not None: raise AutoWorkerError('automatic task unavailable or busy')
+            if self.state.get('run')!=run or self.state.get('status') not in ('blocked','awaiting_approval','awaiting_review','awaiting_merge_review','no_runnable_stage') or self.pending_action is not None or self.checkpoint_pending or self.stop_event.is_set(): raise AutoWorkerError('automatic task unavailable or busy')
             ticket=secrets.token_hex(16); self.pending_action={'ticket':ticket,'operation':operation,'parameters':dict(parameters)}
         return {'pending':True,'ticket':ticket}
+    def request_checkpoint(self,run):
+        with self.guard:
+            if not self.checkpoint_capable or not self.at_gate or self.state.get('run')!=run or self.checkpoint_pending or self.pending_action is not None or self.pending_decision is not None or self.stop_event.is_set(): raise AutoWorkerError('checkpoint unavailable')
+            self.checkpoint_pending=True; self.wake.set()
+        return {'pending':True}
     def stop(self,service=None):
         with self.guard:
-            self.stop_event.set()
+            self.stop_event.set(); self.wake.set()
             run=self.claimed_run
             if service is not None and run is not None:
                 row=service.graph.db.execute("SELECT j.status,a.state FROM jobs j JOIN manual_assignments a ON a.run=j.run WHERE j.run=? AND a.target=? AND a.incarnation=?",(run,service.lifecycle.target['manual_target'],service.lifecycle.incarnation)).fetchone()
@@ -61,6 +66,8 @@ class AutoWorker:
         service=None; queue=None; run=None; heartbeat_stop=threading.Event(); failed=threading.Event(); heartbeat=None
         try:
             service,private_control=self.factory(); intake=service.task_intake
+            from runner.manual_lifecycle import ManualLifecycle
+            with self.guard: self.checkpoint_capable=isinstance(service.lifecycle,ManualLifecycle) and service.model_supervisor is not None
             if intake is None or service.lifecycle is None or not isinstance(getattr(intake,'config',None),dict): raise AutoWorkerError('configured task and manual lifecycle required')
             run=intake.config['run']; existing=service.graph.db.execute('SELECT 1 FROM graph_runs WHERE id=?',(run,)).fetchone()
             if not existing: intake.submit_configured()
@@ -83,6 +90,16 @@ class AutoWorker:
             heartbeat=threading.Thread(target=keepalive,daemon=True); heartbeat.start()
             while not self.stop_event.is_set() and not failed.is_set():
                 with self.guard:
+                    if self.checkpoint_pending:
+                        from runner.checkpoint import checkpoint,CheckpointError
+                        try: checkpoint(service,run,queue['token'],claim)
+                        except CheckpointError:
+                            self.checkpoint_pending=False; self.at_gate=False
+                            self.state={**self.state,'reason':'checkpoint unavailable; work remains active or unresolved'}
+                        else:
+                            self.claimed_run=None;self.at_gate=False;self.checkpoint_pending=False
+                            self.state={'status':'checkpointed','run':run};return
+                    self.at_gate=False
                     pending_action=self.pending_action; self.pending_action=None
                 if pending_action is not None:
                     try:
@@ -116,7 +133,9 @@ class AutoWorker:
                         while not self.stop_event.wait(5) and not failed.is_set(): pass
                         break
                 if state in ('blocked','awaiting_approval','awaiting_review','awaiting_merge_review','rate_limited','no_runnable_stage'):
-                    if self.stop_event.wait(30): break
+                    with self.guard: self.at_gate=True
+                    self.wake.wait(30);self.wake.clear()
+                    if self.stop_event.is_set(): break
             if failed.is_set(): raise AutoWorkerError('lease renewal failed; inspection required')
             if self.stop_event.is_set(): raise AutoWorkerError('automatic worker stopped; inspection required')
         except Exception:
@@ -126,6 +145,7 @@ class AutoWorker:
                     except Exception: pass
             self._set(status='inspection_required',run=run,reason='automatic worker stopped or encountered an unresolved outcome')
         finally:
+            with self.guard: self.at_gate=False;self.checkpoint_capable=False
             heartbeat_stop.set()
             if heartbeat is not None: heartbeat.join(timeout=2)
             if service is not None:

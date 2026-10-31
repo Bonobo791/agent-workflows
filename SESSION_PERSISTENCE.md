@@ -11,3 +11,11 @@ The private worker now connects exact-task discovery, stage dispatch, independen
 The selected app-server integration remains developmental: [OpenAI's app-server documentation](https://developers.openai.com/codex/app-server) describes it as experimental and not supported for production workloads. A private pilot or successful fixture test does not establish production support or host safety.
 
 The requested role-wide model preference is GPT-6.1 Terra with medium reasoning. The executor requires a provider model ID discovered from `model/list`; it does not assume the internal model alias or fall back to another model. The provider catalog is not an entitlement check. No real model discovery or inference was performed.
+
+For the local signed-in runtime, a separate opt-in test exercises an idle
+checkpoint and resumes the persisted graph session in a replacement worker
+process. The worker uses a new incarnation and obtains fresh queue and graph
+claims; a second process cannot start while the original holds the state lock.
+The task and dispatcher in this test are synthetic. This does not establish
+recovery of an interrupted turn or ambiguous external action. See the planned
+restart procedure in [docs/PILOT_SETUP.md](docs/PILOT_SETUP.md).

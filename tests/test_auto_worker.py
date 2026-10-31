@@ -8,6 +8,157 @@ from runner.manual_lifecycle import ManualLifecycle
 from runner.service import Service
 
 class AutoWorkerTests(unittest.TestCase):
+    def test_idle_checkpoint_allows_fresh_worker_claim_without_old_tokens(self):
+        from types import SimpleNamespace
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);claims=[];incarnation=['inc']
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker',incarnation[0])
+                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,run,queue,claim):claims.append((queue,claim));return {'stage':'freeze','status':'awaiting_approval'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            first=AutoWorker(factory,root);second=None
+            try:
+                first.start();deadline=time.monotonic()+5
+                while not first.status().get('checkpoint_available') and time.monotonic()<deadline:time.sleep(.01)
+                self.assertEqual(first.status()['status'],'awaiting_approval')
+                self.assertTrue(first.status()['checkpoint_available'])
+                self.assertTrue(first.request_checkpoint('r')['pending'])
+                first.thread.join(timeout=5);self.assertFalse(first.thread.is_alive())
+                self.assertEqual(first.status()['status'],'checkpointed')
+                owner=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                try:owner.register_checkpoint_replacement('r','inc','inc-next')
+                finally:owner.close()
+                incarnation[0]='inc-next'
+                second=AutoWorker(factory,root);second.start();deadline=time.monotonic()+5
+                while len(claims)<2 and time.monotonic()<deadline:time.sleep(.01)
+                self.assertEqual(len(claims),2);self.assertNotEqual(claims[0][0],claims[1][0]);self.assertNotEqual(claims[0][1],claims[1][1])
+                db=sqlite3.connect(root/'state.db')
+                try:self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
+                finally:db.close()
+            finally:
+                first.stop()
+                if first.thread:first.thread.join(timeout=5)
+                if second:
+                    second.stop()
+                    if second.thread:second.thread.join(timeout=5)
+
+    def test_stop_during_checkpoint_does_not_fence_requeued_run(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.checkpoint import checkpoint
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);entered=threading.Event();release=threading.Event()
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):return {'status':'awaiting_approval'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            controller=Service(root);controller.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+            worker=AutoWorker(factory,root)
+            def delayed(*args):entered.set();release.wait(5);return checkpoint(*args)
+            try:
+                with patch('runner.checkpoint.checkpoint',side_effect=delayed):
+                    worker.start();deadline=time.monotonic()+5
+                    while not worker.status().get('checkpoint_available') and time.monotonic()<deadline:time.sleep(.01)
+                    self.assertTrue(worker.status()['checkpoint_available']);worker.request_checkpoint('r')
+                    self.assertTrue(entered.wait(5));timer=threading.Timer(.1,release.set);timer.start()
+                    worker.stop(controller);timer.join();worker.thread.join(timeout=5)
+                self.assertFalse(worker.thread.is_alive());self.assertEqual(worker.status()['status'],'checkpointed')
+                self.assertEqual(controller.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
+                self.assertEqual(controller.graph.db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('queued',))
+            finally:
+                release.set()
+                if worker.thread:worker.thread.join(timeout=5)
+                controller.lifecycle.close();controller.close()
+
+    def test_checkpoint_rejected_while_dispatch_is_running(self):
+        import threading
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);entered=threading.Event();release=threading.Event()
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,*args):entered.set();release.wait(5);return {'status':'blocked'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();self.assertTrue(entered.wait(5))
+                with self.assertRaises(AutoWorkerError):worker.request_checkpoint('r')
+            finally:
+                release.set();worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
+    def test_unresolved_scope_rejects_checkpoint_without_releasing_claims(self):
+        from types import SimpleNamespace
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);claims=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                scopes=LocalScopes(str(root/'state.db'),Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                service.model_supervisor=SimpleNamespace(db=str(root/'state.db'))
+                class Intake:
+                    config={'run':'r'}
+                    def submit_configured(self):service.create('r','marketing','task');service.enqueue('r')
+                class Dispatcher:
+                    def step(self,run,queue,claim):claims.append((queue,claim));return {'status':'blocked'}
+                service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();deadline=time.monotonic()+5
+                while not worker.status().get('checkpoint_available') and time.monotonic()<deadline:time.sleep(.01)
+                self.assertTrue(worker.status()['checkpoint_available'])
+                scopes=LocalScopes(str(root/'state.db'),Backend())
+                try:scopes.reserve('r')
+                finally:scopes.close()
+                worker.request_checkpoint('r');deadline=time.monotonic()+5
+                while len(claims)<2 and time.monotonic()<deadline:time.sleep(.01)
+                self.assertGreaterEqual(len(claims),2);self.assertEqual(claims[0],claims[1])
+                db=sqlite3.connect(root/'state.db')
+                try:self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
+                finally:db.close()
+            finally:
+                worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
+    def test_checkpoint_cannot_race_pending_owner_actions_or_stop(self):
+        with tempfile.TemporaryDirectory() as root:
+            worker=AutoWorker(lambda:None,Path(root));worker.checkpoint_capable=True;worker.at_gate=True
+            worker._set(status='awaiting_approval',run='r')
+            worker.request_action('r','pr_propose',{'kind':'push','parameters':{'expected_remote':None}})
+            with self.assertRaises(AutoWorkerError):worker.request_checkpoint('r')
+            worker.pending_action=None
+            self.assertTrue(worker.request_checkpoint('r')['pending'])
+            with self.assertRaises(AutoWorkerError):worker.request_action('r','pr_propose',{'kind':'push','parameters':{'expected_remote':None}})
+            worker.stop();self.assertFalse(worker.status()['checkpoint_available'])
+            with self.assertRaises(AutoWorkerError):worker.request_checkpoint('r')
+            stopped=AutoWorker(lambda:None,Path(root));stopped.checkpoint_capable=True;stopped.at_gate=True
+            stopped._set(status='awaiting_approval',run='r');stopped.stop()
+            self.assertFalse(stopped.status()['checkpoint_available'])
+
     def test_stop_does_not_cancel_completion_already_in_progress(self):
         import threading
         with tempfile.TemporaryDirectory() as root:

@@ -60,6 +60,9 @@ graph claims together and waits at blockers and human gates. A local owner may
 record a decision bound to the exact marketing review package; that is not a
 publication action. Rejected work remains revision-required. Uncertain execution
 and remote-action outcomes remain fenced for inspection.
+A quiescent local run can be checkpointed for a planned worker replacement;
+see the [pilot restart procedure](docs/PILOT_SETUP.md) for the identity and
+claim checks.
 
 An engineering test gate requires a supervisor-observed command record bound to
 an approved exact command, workspace and commit. The Docker command adapter is

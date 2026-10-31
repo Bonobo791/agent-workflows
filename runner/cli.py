@@ -9,6 +9,8 @@ from runner.control import MAX_CONTROL_RESPONSE
 
 ADMISSION_RESPONSE_TIMEOUT=180
 class AdmissionUncertain(ConfigurationError): pass
+class CheckpointUncertain(ConfigurationError): pass
+class ReplacementUncertain(ConfigurationError): pass
 
 def request_control(request):
     """Send a private request and distinguish uncertain task-admission outcomes."""
@@ -19,6 +21,8 @@ def request_control(request):
     if len(payload)>65536: raise ConfigurationError('request too large')
     path=Path(os.environ.get('WORKFLOW_CONTROL_DIR') or os.environ.get('WORKFLOW_DATA_DIR','/data'))/'control.sock'
     admission=isinstance(request,dict) and request.get('action') in ('submit_configured','submit_task')
+    checkpoint=isinstance(request,dict) and request.get('action')=='checkpoint_configured_auto'
+    replacement=isinstance(request,dict) and request.get('action')=='register_checkpoint_replacement'
     transmitting=False
     try:
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
@@ -31,6 +35,8 @@ def request_control(request):
         if not isinstance(response,dict) or type(response.get('ok')) is not bool: raise ConfigurationError('invalid response')
     except (OSError,ValueError,ConfigurationError):
         if admission and transmitting: raise AdmissionUncertain('admission outcome unknown; inspect run status before retrying') from None
+        if checkpoint and transmitting: raise CheckpointUncertain('checkpoint outcome unknown; inspect worker status before retrying') from None
+        if replacement and transmitting: raise ReplacementUncertain('replacement outcome unknown; inspect lifecycle status before retrying') from None
         raise
     return response
 
@@ -43,5 +49,9 @@ if __name__=='__main__':
     try: sys.exit(main())
     except AdmissionUncertain:
         print('Admission outcome unknown; inspect run status before retrying.',file=sys.stderr); sys.exit(1)
+    except CheckpointUncertain:
+        print('Checkpoint outcome unknown; inspect worker status before retrying.',file=sys.stderr); sys.exit(1)
+    except ReplacementUncertain:
+        print('Replacement outcome unknown; inspect lifecycle status before retrying.',file=sys.stderr); sys.exit(1)
     except (OSError,ValueError,ConfigurationError):
         print('Control request failed.',file=sys.stderr); sys.exit(1)

@@ -232,6 +232,24 @@ whether its request was cancelled. Do not remove a legacy socket
 without independently verifying that the previous worker and its work are
 quiescent.
 
+For a planned local worker restart, use `automatic_status` to check that the
+worker reports `checkpoint_available`, then send `checkpoint_configured_auto`
+with the exact `run`. Wait for `automatic_status` to report `checkpointed`.
+The checkpoint releases the queue and graph claims only when the run has no
+unresolved local work, remote outcomes, or unconsumed approvals. If a checkpoint
+response is lost, inspect status before retrying; do not infer success from a
+transport error.
+
+While the original control process is still running, send the owner-only action
+`register_checkpoint_replacement` with `run`, `old_incarnation`, and a distinct,
+never-used `new_incarnation`. The replacement is registered only if the run is
+still quiescent. Inspect `lifecycle_status` if the response is lost. Stop the
+original worker process, set `MANUAL_WORKER_INCARNATION` to the new value, then
+start the replacement against the same private state directory. Its worker lock
+prevents concurrent processes, and it obtains fresh queue and graph claims. A
+checkpoint does not recover a crash or authorize replay of uncertain work; use
+the recovery procedure below for those cases.
+
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.

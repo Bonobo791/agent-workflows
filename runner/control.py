@@ -23,6 +23,9 @@ class ControlPlane:
             if action=='start_configured_auto':
                 if self.auto_worker is None: raise ControlError('automatic worker unavailable')
                 return self.auto_worker.start()
+            if action=='checkpoint_configured_auto':
+                if self.auto_worker is None: raise ControlError('automatic worker unavailable')
+                return self.auto_worker.request_checkpoint(request['run'])
             if action=='human_review_decision_auto':
                 if self.auto_worker is None: raise ControlError('automatic worker unavailable')
                 return self.auto_worker.request_decision(request['run'],request['version'],request['decision'])
@@ -49,6 +52,10 @@ class ControlPlane:
             if action=='stop_local_scope': return self.service.stop_local_scope(request['run'],request['unit'])
             if action=='release_local_workspace': return self.service.release_local_workspace(request['run'],request['assignment'],request['unit'])
             if action=='inspect_local_scope': return self.service.inspect_local_scope(request['run'],request['unit'])
+            if action=='register_checkpoint_replacement':
+                from runner.manual_lifecycle import ManualLifecycle
+                if not isinstance(self.service.lifecycle,ManualLifecycle): raise ControlError('manual provider unavailable')
+                return self.service.lifecycle.register_checkpoint_replacement(request['run'],request['old_incarnation'],request['new_incarnation'])
             if action=='manual_register_replacement':
                 from runner.manual_lifecycle import ManualLifecycle
                 if not isinstance(self.service.lifecycle,ManualLifecycle): raise ControlError('manual provider unavailable')
