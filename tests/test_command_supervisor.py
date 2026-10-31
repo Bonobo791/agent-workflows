@@ -77,3 +77,8 @@ class CommandSupervisorTests(EngineeringWorkspaceTests):
         supervisor,queue,claim,snapshot=self.prepared(Backend())
         with self.assertRaises(CommandError): supervisor.execute('run-1',queue,claim,snapshot)
         self.assertEqual(self.service.graph.db.execute('SELECT state FROM supervised_commands').fetchone()[0],'failed')
+    def test_policy_rejects_timeouts_too_short_for_the_local_relay(self):
+        for timeout in (1,2,4):
+            spec={'argv':['/bin/true'],'timeout_seconds':timeout,'output_limit':1024}
+            policy=hashlib.sha256(json.dumps(spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            with self.assertRaises(CommandError): CommandSupervisor(self.service,spec,policy,object())

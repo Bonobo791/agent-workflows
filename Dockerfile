@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /app
 COPY requirements-marketing.txt ./requirements-marketing.txt
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements-marketing.txt
 COPY runner ./runner
 COPY workflows ./workflows
