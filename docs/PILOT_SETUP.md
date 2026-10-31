@@ -40,6 +40,9 @@ must not contain private skills, credentials, user data or session histories.
   `blocker_direction`, `plan_endpoint`, `github_owner`, `github_repo` and
   `github_branch`; marketing also requires `task_format`. The Plan and GitHub
   credential belongs in an owner-only file referenced by `PLAN_TOKEN_FILE`.
+  `project` accepts either a project key such as `MC` or a team-qualified
+  reference such as `moderaty.MC`; the exact configured reference is sent to
+  It's a Plan without rewriting it.
   Task intake requires owner fields to be null or nonempty strings and dates
   to be null or canonical `YYYY-MM-DD`; malformed values block admission.
   The returned issue identifier and blocker IDs must match the requested

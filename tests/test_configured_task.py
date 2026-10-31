@@ -4,6 +4,36 @@ from runner.configured_task import ConfiguredTask, ConfiguredTaskError
 
 CONFIG={'run':'run-1','workflow':'engineering','project':'DEMO','number':1,'ready_columns':[10],'completed_columns':[20],'blocker_direction':'inward','plan_endpoint':'https://plan.example.invalid/mcp','github_owner':'owner','github_repo':'repo','github_branch':'task-1'}
 class TaskTests(unittest.TestCase):
+    def test_team_scoped_project_through_mcp_to_admission(self):
+        import json
+        from runner.plan_mcp import PlanMCP
+        from runner.service import Service
+        from tests.test_plan_mcp import FakeTransport
+        class Transport(FakeTransport):
+            def post(self,message,headers):
+                if message['method']!='tools/call': return super().post(message,headers)
+                self.calls.append((message,headers))
+                name=message['params']['name']
+                if name=='get_issue_by_number':
+                    self.assert_project=message['params']['arguments']['projectKey']
+                    data={'id':1,'identifier':'DEMO-1','title':'Synthetic','description':'Example','columnId':10,'archivedAt':None,'assigneeUserId':None,'delegateUserId':None,'dueDate':None,'startDate':None,'subtasks':[],'links':[],'development':[],'updatedAt':'v1'}
+                elif name=='list_issue_activity': data={'items':[],'nextCursor':None}
+                else: data=[]
+                result={'jsonrpc':'2.0','id':message['id'],'result':{'structuredContent':{'ok':True,'data':data}}}
+                return 200,{'Content-Type':'application/json'},json.dumps(result).encode()
+        class GitHub:
+            def request(self,method,path,body=None): return []
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); transport=Transport()
+            try:
+                intake=ConfiguredTask(service,{**CONFIG,'project':'team.DEMO'},PlanMCP(transport),GitHub())
+                result=intake.submit('run-1','engineering','team.DEMO',1)
+                self.assertEqual(result['task'],'DEMO-1')
+                self.assertEqual(transport.assert_project,'team.DEMO')
+                self.assertEqual(service.queue.get('run-1')['status'],'queued')
+                with self.assertRaises(ConfiguredTaskError): ConfiguredTask(service,{**CONFIG,'project':'team..DEMO'},PlanMCP(Transport()),GitHub())
+            finally: service.close()
+
     def test_exact_reference_and_duplicate_admission(self):
         from runner.service import Service
         class Plan:
