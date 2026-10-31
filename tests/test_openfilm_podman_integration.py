@@ -64,7 +64,7 @@ class PodmanRenderIntegrationTests(unittest.TestCase):
         fixture.setUp(); assignments=None
         try:
             jobs=fixture.root/'state'/'jobs'; jobs.mkdir(mode=0o700)
-            engine=UnixEngine(os.environ['OPENFILM_PODMAN_SOCKET'],timeout=120)
+            engine=UnixEngine(os.environ['OPENFILM_PODMAN_SOCKET'])
             config=DockerConfig({'socket':engine.path,'image':os.environ['OPENFILM_PODMAN_IMAGE'],'network':'none','job_root':str(jobs),'engine':'podman-rootless'},fixture.root/'state')
             archive=io.BytesIO(); source=Path(__file__).parent/'fixtures'/'openfilm'
             with zipfile.ZipFile(archive,'w') as z:

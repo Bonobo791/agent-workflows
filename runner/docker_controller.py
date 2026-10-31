@@ -109,25 +109,44 @@ class UnixEngine:
         except Exception: raise DockerError('container logs unavailable or incomplete') from None
         finally: connection.close()
 
-    def request(self,method,path,body=None):
+    def request(self,method,path,body=None,*,timeout=None):
         import http.client
         import json
+        import math
         import socket
+        import time
         if not isinstance(path,str) or not ((method=='POST' and path=='/containers/create') or (method=='GET' and re.fullmatch(r'/containers/[0-9a-f]{64}/json',path)) or (method=='POST' and re.fullmatch(r'/containers/[0-9a-f]{64}/(?:stop\?t=10|kill\?signal=SIGKILL|wait\?condition=not-running|start)',path))):
             raise DockerError('unsupported Engine request')
         if (path=='/containers/create') != isinstance(body,dict): raise DockerError('invalid Engine request body')
+        if timeout is not None and (not path.endswith('/wait?condition=not-running') or type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=600): raise DockerError('invalid Engine wait timeout')
+        request_timeout=self.timeout if timeout is None else timeout
+        deadline=None if timeout is None else time.monotonic()+timeout
+        class DeadlineSocket(socket.socket):
+            def remaining(sock):
+                if deadline is not None:
+                    remaining=deadline-time.monotonic()
+                    if remaining<=0: raise TimeoutError('Engine wait deadline exceeded')
+                    sock.settimeout(remaining)
+            def connect(sock,address):
+                sock.remaining(); return super().connect(address)
+            def sendall(sock,data,*args):
+                sock.remaining(); return super().sendall(data,*args)
+            def recv_into(sock,buffer,*args):
+                sock.remaining(); return super().recv_into(buffer,*args)
         class Connection(http.client.HTTPConnection):
             def connect(connection):
-                connection.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
-                connection.sock.settimeout(self.timeout)
+                connection.sock=DeadlineSocket(socket.AF_UNIX,socket.SOCK_STREAM)
+                connection.sock.settimeout(request_timeout)
                 connection.sock.connect(self.path)
-        connection=Connection('localhost',timeout=self.timeout)
+        connection=Connection('localhost',timeout=request_timeout)
         try:
             payload=json.dumps(body,separators=(',',':')).encode() if body is not None else (b'' if method=='POST' else None)
             connection.request(method,'/v1.49'+path,body=payload,headers={'Content-Type':'application/json'} if body is not None else {})
             response=connection.getresponse(); payload=response.read(1048577)
             if len(payload)>1048576: raise DockerError('Engine response too large')
-            return response.status, json.loads(payload) if payload else None
+            result=json.loads(payload) if payload else None
+            if deadline is not None and time.monotonic()>=deadline: raise DockerError('Engine wait deadline exceeded')
+            return response.status,result
         except DockerError: raise
         except Exception: raise DockerError('Engine request outcome uncertain') from None
         finally: connection.close()
