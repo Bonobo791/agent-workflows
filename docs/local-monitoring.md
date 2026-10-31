@@ -10,10 +10,10 @@ before using them with private workflow information.
 at `http://127.0.0.1:PORT/metrics`. Set `WORKFLOW_METRICS_HTTP_PORT` and
 `WORKFLOW_METRICS_HTTP_SECRET_FILE`, along with the worker control client's
 `CONTROL_SECRET_FILE`, `WORKFLOW_DATA_DIR`, and optional `WORKFLOW_CONTROL_DIR`.
-Prometheus must send the metrics token as a bearer credential. Each endpoint
-accepts at most four connections concurrently and closes each connection after
-ten seconds, even when a peer keeps trickling request bytes. Excess connections
-are closed without processing; the five-second inactivity timeout also remains. The endpoint
+Prometheus must send the metrics token as a bearer credential. Both endpoints
+allow at most 16 concurrent requests and impose a five-second absolute deadline
+for reading each request, even when a peer keeps trickling headers or body bytes.
+Excess connections are closed without processing; collectors or routers must retry. The endpoint
 returns 503 when it cannot obtain a current snapshot; it does not return stale
 data. A long-running worker control action can make collection time out; a
 failed scrape describes telemetry availability, not proof of process termination.

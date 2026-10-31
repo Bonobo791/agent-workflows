@@ -5,8 +5,7 @@ import os
 import re
 import subprocess
 import sys
-from http.server import BaseHTTPRequestHandler
-from runner.loopback_http import LoopbackHTTPServer
+from runner.monitor_http import MonitoringHandler, MonitoringHTTPServer
 
 from runner.worker import ConfigurationError, read_secret
 
@@ -40,14 +39,7 @@ def _alert_messages(payload):
     return messages
 
 
-class Handler(BaseHTTPRequestHandler):
-    def setup(self):
-        super().setup();self.connection.settimeout(5)
-
-    def log_message(self,*args):
-        # Keep authenticated request details out of logs.
-        pass
-
+class Handler(MonitoringHandler):
     def do_POST(self):
         try:
             if self.path!='/alerts': return self.respond(404)
@@ -58,7 +50,10 @@ class Handler(BaseHTTPRequestHandler):
             length=int(lengths[0])
             if not 1<=length<=MAX_BODY: return self.respond(413)
             if self.headers.get_content_type()!='application/json': return self.respond(415)
-            payload=json.loads(self.rfile.read(length))
+            body=self.rfile.read(length)
+            if len(body)!=length: return self.respond(400)
+            self.finish_reading()
+            payload=json.loads(body)
             messages=_alert_messages(payload)
             try:
                 for title,body in messages:self.server.notify(title,body)
@@ -72,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def build_server(secret,notify=desktop_notify,port=0):
     if not isinstance(secret,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',secret) or not callable(notify) or type(port) is not int or not 0<=port<=65535: raise ValueError('invalid alert receiver configuration')
-    server=LoopbackHTTPServer(port,Handler);server.secret=secret;server.notify=notify
+    server=MonitoringHTTPServer(('127.0.0.1',port),Handler);server.secret=secret;server.notify=notify
     return server
 
 
