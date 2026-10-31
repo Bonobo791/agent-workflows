@@ -213,24 +213,21 @@ class EngineeringEntrypointTests(unittest.TestCase):
                         control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':proposal['proposal'],'expires':time.time()+60})
                         return control.handle('x'*40,{**base_req,'action':'pr_execute','proposal':proposal['proposal']})
                     wrong=control.handle('x'*40,{**base_req,'action':'pr_propose','kind':'push','parameters':{'expected_remote':'0'*40}})
-                    service.graph.db.execute("CREATE TRIGGER reject_proposal_approval BEFORE UPDATE OF state ON pr_bridge_operations WHEN NEW.state='approved' BEGIN SELECT RAISE(ABORT,'unavailable'); END")
-                    with self.assertRaises(ControlError):control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':wrong['proposal'],'expires':time.time()+60})
-                    self.assertIsNone(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone())
-                    self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(wrong['proposal'],)).fetchone(),('proposed',))
-                    self.assertFalse(service.graph.db.execute('SELECT 1 FROM action_authorization_history WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone())
-                    service.graph.db.execute('DROP TRIGGER reject_proposal_approval')
-                    service.graph.db.execute("CREATE TRIGGER ignore_proposal_approval BEFORE UPDATE OF state ON pr_bridge_operations WHEN NEW.state='approved' BEGIN SELECT RAISE(IGNORE); END")
-                    with self.assertRaises(ControlError):control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':wrong['proposal'],'expires':time.time()+60})
-                    self.assertIsNone(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone())
-                    service.graph.db.execute('DROP TRIGGER ignore_proposal_approval')
-                    service.graph.db.execute("CREATE TRIGGER expire_job_during_approval BEFORE INSERT ON external_actions WHEN NEW.run='run-1' BEGIN UPDATE jobs SET expires=0 WHERE run=NEW.run; END")
-                    with self.assertRaises(ControlError):control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':wrong['proposal'],'expires':time.time()+60})
-                    self.assertIsNone(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone())
-                    service.graph.db.execute('DROP TRIGGER expire_job_during_approval')
-                    service.graph.db.execute("CREATE TRIGGER expire_graph_during_approval BEFORE INSERT ON external_actions WHEN NEW.run='run-1' BEGIN UPDATE graph_claims SET expires=0 WHERE run=NEW.run; END")
-                    with self.assertRaises(ControlError):control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':wrong['proposal'],'expires':time.time()+60})
-                    self.assertIsNone(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone())
-                    service.graph.db.execute('DROP TRIGGER expire_graph_during_approval')
+                    approval={**base_req,'action':'pr_approve','proposal':wrong['proposal'],'expires':time.time()+60}
+                    failures=("BEFORE UPDATE OF state ON pr_bridge_operations WHEN NEW.state='approved' BEGIN SELECT RAISE(ABORT,'unavailable'); END",
+                              "BEFORE UPDATE OF state ON pr_bridge_operations WHEN NEW.state='approved' BEGIN SELECT RAISE(IGNORE); END",
+                              "BEFORE INSERT ON external_actions WHEN NEW.run='run-1' BEGIN UPDATE jobs SET expires=0 WHERE run=NEW.run; END",
+                              "BEFORE INSERT ON external_actions WHEN NEW.run='run-1' BEGIN UPDATE graph_claims SET expires=0 WHERE run=NEW.run; END",
+                              "BEFORE UPDATE OF state ON pr_bridge_operations WHEN NEW.state='approved' BEGIN UPDATE jobs SET expires=0 WHERE run=NEW.run; END",
+                              "BEFORE UPDATE OF state ON pr_bridge_operations WHEN NEW.state='approved' BEGIN UPDATE graph_claims SET expires=0 WHERE run=NEW.run; END")
+                    for failure in failures:
+                        with self.subTest(approval_failure=failure):
+                            service.graph.db.execute('CREATE TRIGGER reject_proposal_approval '+failure)
+                            with self.assertRaises(ControlError):control.handle('x'*40,approval)
+                            self.assertIsNone(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone())
+                            self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(wrong['proposal'],)).fetchone(),('proposed',))
+                            self.assertFalse(service.graph.db.execute('SELECT 1 FROM action_authorization_history WHERE run=? AND action=?',('run-1',wrong['action'])).fetchone())
+                            service.graph.db.execute('DROP TRIGGER reject_proposal_approval')
                     control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':wrong['proposal'],'expires':time.time()+60})
                     service.graph.db.execute("UPDATE pr_bridge_operations SET state='proposed' WHERE proposal=?",(wrong['proposal'],))
                     withdrawal={**base_req,'action':'pr_withdraw','proposal':wrong['proposal']}
@@ -262,6 +259,13 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     withdrawal={**base_req,'action':'pr_withdraw','proposal':initial['proposal']}
                     with self.assertRaises(ControlError):control.handle('wrong',withdrawal)
                     with self.assertRaises(ControlError):control.handle('x'*40,{**withdrawal,'queue_claim':'stale'})
+                    for table in ('jobs','graph_claims'):
+                        with self.subTest(withdrawal_expiry=table):
+                            service.graph.db.execute("CREATE TRIGGER expire_withdrawal BEFORE INSERT ON pr_reauthorization_history BEGIN UPDATE "+table+" SET expires=0 WHERE run='run-1'; END")
+                            with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)
+                            self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(initial['proposal'],)).fetchone(),('approved',))
+                            self.assertEqual(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',initial['action'])).fetchone(),('approved',))
+                            service.graph.db.execute('DROP TRIGGER expire_withdrawal')
                     audit_trigger=service.graph.db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='action_audit_update'").fetchone()[0]
                     service.graph.db.execute('DROP TRIGGER action_audit_update')
                     with self.assertRaises(ControlError):control.handle('x'*40,withdrawal)

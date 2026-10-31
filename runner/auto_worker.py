@@ -18,7 +18,7 @@ def renew_leases(path,run,queue_claim,graph_claim,ttl=60):
     try:
         db.execute('BEGIN IMMEDIATE'); now=time.time()
         try:
-            row=db.execute("SELECT j.status,j.token,j.expires,c.token,c.expires,r.status,a.state,w.state FROM jobs j JOIN graph_runs r ON r.id=j.run JOIN graph_claims c ON c.run=r.id JOIN manual_assignments a ON a.run=r.id JOIN manual_workers w ON w.target=a.target AND w.incarnation=a.incarnation WHERE j.run=?",(run,)).fetchone()
+            row=db.execute("SELECT j.status,j.token,j.expires,c.token,c.expires,r.status,a.state,w.state FROM jobs j JOIN graph_runs r ON r.id=j.run JOIN graph_claims c ON c.run=r.id AND c.task_id=r.task_id JOIN manual_assignments a ON a.run=r.id JOIN manual_workers w ON w.target=a.target AND w.incarnation=a.incarnation WHERE j.run=?",(run,)).fetchone()
             if not row or row[0]!='running' or row[5]!='active' or row[6]!='running' or row[7]!='assigned' or not isinstance(queue_claim,str) or not isinstance(graph_claim,str) or not isinstance(row[1],str) or not isinstance(row[3],str) or not secrets.compare_digest(row[1],queue_claim) or not secrets.compare_digest(row[3],graph_claim) or row[2]<=now or row[4]<=now: raise AutoWorkerError('lease or manual fence unavailable')
             db.execute('UPDATE jobs SET expires=? WHERE run=? AND token=?',(now+ttl,run,queue_claim))
             db.execute('UPDATE graph_claims SET expires=? WHERE run=? AND token=?',(now+ttl,run,graph_claim))

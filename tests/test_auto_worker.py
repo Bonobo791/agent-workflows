@@ -446,6 +446,10 @@ class AutoWorkerTests(unittest.TestCase):
                 job=service.graph.db.execute('SELECT expires FROM jobs WHERE run=?',('r',)).fetchone()[0]
                 graph=service.graph.db.execute('SELECT expires FROM graph_claims WHERE run=?',('r',)).fetchone()[0]
                 self.assertEqual(job,graph); self.assertGreater(job,before)
+                service.graph.db.execute("UPDATE graph_claims SET task_id='other-task' WHERE run='r'")
+                with self.assertRaises(AutoWorkerError): renew_leases(root+'/state.db','r',queue['token'],claim,120)
+                self.assertEqual(service.graph.db.execute("SELECT expires FROM jobs WHERE run='r'").fetchone()[0],job)
+                service.graph.db.execute("UPDATE graph_claims SET task_id='task' WHERE run='r'")
                 service.cancel_job('r')
                 with self.assertRaises(AutoWorkerError): renew_leases(root+'/state.db','r',queue['token'],claim,120)
             finally: lifecycle.close(); service.close()

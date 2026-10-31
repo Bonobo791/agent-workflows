@@ -19,18 +19,26 @@ def ensure_quiescent(db,run):
     if 'docker_execution_map' in tables:
         if not {'docker_assignments','docker_terminal_evidence'}<=tables or db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated' OR e.run IS NULL)",(run,)).fetchone(): raise CheckpointError('container outcome unresolved')
 
-def checkpoint(service,run,queue_claim,graph_claim):
+def _checkpoint_runtime(service):
     lifecycle=service.lifecycle; supervisor=service.model_supervisor;db=service.graph.db
     paths=[db.execute('PRAGMA database_list').fetchone()[2]]
     if not isinstance(lifecycle,ManualLifecycle) or supervisor is None: raise CheckpointError('local manual runtime required')
     paths.extend((lifecycle.db.execute('PRAGMA database_list').fetchone()[2],getattr(supervisor,'db',None)))
     if any(not isinstance(path,str) or not path for path in paths) or len({Path(path).resolve() for path in paths})!=1: raise CheckpointError('shared durable state required')
+    return db,lifecycle
+
+def _checkpoint_claims(db,lifecycle,run,queue_claim,graph_claim):
+    row=db.execute("SELECT j.status,j.token,j.expires,c.token,c.expires,r.status,a.state,w.state,a.target,a.incarnation,w.incarnation,r.task_id FROM jobs j JOIN graph_runs r ON r.id=j.run JOIN graph_claims c ON c.run=r.id AND c.task_id=r.task_id JOIN manual_assignments a ON a.run=r.id JOIN manual_workers w ON w.target=a.target WHERE j.run=?",(run,)).fetchone()
+    now=time.time()
+    if not row or row[0]!='running' or row[5:8]!=('active','running','assigned') or row[8:11]!=(lifecycle.target['manual_target'],lifecycle.incarnation,lifecycle.incarnation) or not isinstance(queue_claim,str) or not isinstance(graph_claim,str) or not isinstance(row[1],str) or not isinstance(row[3],str) or not secrets.compare_digest(queue_claim,row[1]) or not secrets.compare_digest(graph_claim,row[3]) or row[2] is None or row[4] is None or row[2]<=now or row[4]<=now: raise CheckpointError('current claims unavailable')
+    return row
+
+def checkpoint(service,run,queue_claim,graph_claim):
+    db,lifecycle=_checkpoint_runtime(service)
     db.execute('CREATE TABLE IF NOT EXISTS checkpoint_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
     db.execute('BEGIN IMMEDIATE')
     try:
-        row=db.execute("SELECT j.status,j.token,j.expires,c.token,c.expires,r.status,a.state,w.state,a.target,a.incarnation,w.incarnation,r.task_id FROM jobs j JOIN graph_runs r ON r.id=j.run JOIN graph_claims c ON c.run=r.id JOIN manual_assignments a ON a.run=r.id JOIN manual_workers w ON w.target=a.target WHERE j.run=?",(run,)).fetchone()
-        now=time.time()
-        if not row or row[0]!='running' or row[5:8]!=('active','running','assigned') or row[8:11]!=(lifecycle.target['manual_target'],lifecycle.incarnation,lifecycle.incarnation) or not isinstance(queue_claim,str) or not isinstance(graph_claim,str) or not isinstance(row[1],str) or not isinstance(row[3],str) or not secrets.compare_digest(queue_claim,row[1]) or not secrets.compare_digest(graph_claim,row[3]) or row[2] is None or row[4] is None or row[2]<=now or row[4]<=now: raise CheckpointError('current claims unavailable')
+        row=_checkpoint_claims(db,lifecycle,run,queue_claim,graph_claim)
         ensure_quiescent(db,run)
         now=time.time()
         if row[2]<=now or row[4]<=now: raise CheckpointError('claims expired during checkpoint')

@@ -165,6 +165,13 @@ class CheckpointHandoffTests(unittest.TestCase):
         self.service.graph._lease('run',self.graph)
         self.assertEqual(self.service.lifecycle.status('run')['status'],'running')
 
+    def test_checkpoint_rejects_graph_claim_for_a_different_task(self):
+        from runner.checkpoint import CheckpointError,checkpoint
+        self.service.graph.db.execute("UPDATE graph_claims SET task_id='other-task' WHERE run='run'")
+        with self.assertRaises(CheckpointError): checkpoint(self.service,'run',self.queue,self.graph)
+        self.assertTrue(self.service.queue.may_start('run',self.queue))
+        self.assertEqual(self.service.lifecycle.status('run')['status'],'running')
+
     def test_uncertain_remote_action_blocks_checkpoint(self):
         from runner.checkpoint import CheckpointError,checkpoint
         self.service.actions.approve('run','push:test','version','owner')

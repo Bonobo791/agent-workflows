@@ -11,6 +11,10 @@ from runner.engineering_dispatch import workspace_snapshot, approval_package
 from workflows.engineering.github import GitHubError
 from workflows.engineering.review_loop import BoundLedger, ReviewLoop
 
+_BEGIN_WRITE='BEGIN IMMEDIATE'
+_OPERATION_ROW='SELECT run,kind,state FROM pr_bridge_operations WHERE proposal=?'
+_PROPOSAL_CHANGED='proposal changed'
+
 class PRBridgeError(RuntimeError): pass
 
 class PRBridge:
@@ -104,11 +108,14 @@ class PRBridge:
     def _load(self,loop,run,ref):
         try:
             proposal=json.loads(self.service.artifacts.get(ref))
-            row=self.service.graph.db.execute('SELECT run,kind,state FROM pr_bridge_operations WHERE proposal=?',(ref,)).fetchone()
+            row=self.service.graph.db.execute(_OPERATION_ROW,(ref,)).fetchone()
             if not row or row[:2]!=(run,proposal['kind']) or proposal['run']!=run or loop.target(run)!=proposal['target'] or approval_package(self.service,run)!=proposal['package'] or self._action(loop,{**proposal['target'],'run':run},proposal['kind'],proposal['args'])!=proposal['action']: raise ValueError('stale proposal')
             if proposal['kind']=='ready' and self.service.graph.db.execute("SELECT 1 FROM pr_review_blockers WHERE run=? AND number=? AND state='open'",(run,proposal['args']['number'])).fetchone(): raise ValueError('valid review findings require correction')
             return proposal,row[2]
         except Exception: raise PRBridgeError('proposal unavailable or stale') from None
+    def _require_claims(self,db,run,queue_claim,graph_claim):
+        claims=db.execute("SELECT j.token,j.expires,c.token,c.expires FROM jobs j JOIN graph_runs r ON r.id=j.run AND r.status='active' JOIN graph_claims c ON c.run=r.id AND c.task_id=r.task_id WHERE j.run=? AND j.status='running'",(run,)).fetchone()
+        if not claims or not all(isinstance(value,str) for value in (queue_claim,graph_claim,claims[0],claims[2])) or not secrets.compare_digest(queue_claim,claims[0]) or not secrets.compare_digest(graph_claim,claims[2]) or claims[1] is None or claims[3] is None or claims[1]<=time.time() or claims[3]<=self.service.graph.clock(): raise PRBridgeError('current claims unavailable')
     def approve(self,run,queue_claim,graph_claim,ref,expires):
         if type(expires) not in (int,float) or not time.time()<expires<=time.time()+3600: raise PRBridgeError('approval expiry invalid')
         loop=self._loop(run,queue_claim,graph_claim)
@@ -116,32 +123,32 @@ class PRBridge:
             proposal,state=self._load(loop,run,ref)
             if state!='proposed': raise PRBridgeError('proposal not available')
             def record(db):
-                claims=db.execute("SELECT j.token,j.expires,c.token,c.expires FROM jobs j JOIN graph_runs r ON r.id=j.run AND r.status='active' JOIN graph_claims c ON c.run=r.id AND c.task_id=r.task_id WHERE j.run=? AND j.status='running'",(run,)).fetchone()
-                if not claims or not all(isinstance(value,str) for value in (queue_claim,graph_claim,claims[0],claims[2])) or not secrets.compare_digest(queue_claim,claims[0]) or not secrets.compare_digest(graph_claim,claims[2]) or claims[1] is None or claims[3] is None or claims[1]<=time.time() or claims[3]<=self.service.graph.clock(): raise PRBridgeError('current claims unavailable')
-                if db.execute("UPDATE pr_bridge_operations SET state='approved' WHERE proposal=? AND run=? AND state='proposed'",(ref,run)).rowcount!=1: raise PRBridgeError('proposal changed')
+                if db.execute("UPDATE pr_bridge_operations SET state='approved' WHERE proposal=? AND run=? AND state='proposed'",(ref,run)).rowcount!=1: raise PRBridgeError(_PROPOSAL_CHANGED)
+                self._require_claims(db,run,queue_claim,graph_claim)
             loop.ledger.approve_bound(run,proposal['action'],proposal['target'],'local-owner',expires,record=record)
             return {'approved':True,'proposal':ref,'action':proposal['action']}
         finally: loop.ledger.db.close()
+    def _require_no_competing_work(self,db,run,ref):
+        if db.execute("SELECT 1 FROM pr_bridge_operations WHERE run=? AND proposal<>? AND (state IS NULL OR state NOT IN ('proposed','not_executed','executed','desired_state_observed','reconciled'))",(run,ref)).fetchone(): raise PRBridgeError('other operation unresolved')
+        if db.execute("SELECT 1 FROM external_actions WHERE run=? AND (status IS NULL OR status NOT IN ('approved','revoked','not_executed','executed','desired_state_observed'))",(run,)).fetchone(): raise PRBridgeError('other action unresolved')
     def withdraw(self,run,queue_claim,graph_claim,ref):
         try:
             proposal=json.loads(self.service.artifacts.get(ref))
             if not isinstance(proposal,dict) or proposal.get('run')!=run or not isinstance(proposal.get('action'),str) or not isinstance(proposal.get('target'),dict) or not isinstance(proposal['target'].get('head'),str): raise ValueError('invalid proposal')
-            db=self.service.graph.db;db.execute('BEGIN IMMEDIATE')
+            db=self.service.graph.db;db.execute(_BEGIN_WRITE)
             try:
-                self.service.graph._lease(run,graph_claim)
-                job=db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
-                if not job or job[0]!='running' or not isinstance(queue_claim,str) or not isinstance(job[1],str) or not secrets.compare_digest(queue_claim,job[1]) or job[2] is None or job[2]<=time.time(): raise PRBridgeError('queue claim unavailable')
-                operation=db.execute('SELECT run,kind,state FROM pr_bridge_operations WHERE proposal=?',(ref,)).fetchone()
+                self._require_claims(db,run,queue_claim,graph_claim)
+                operation=db.execute(_OPERATION_ROW,(ref,)).fetchone()
                 if not operation or operation[:2]!=(run,proposal.get('kind')) or operation[2] not in ('approved','proposed') or db.execute('SELECT 1 FROM action_scopes WHERE run=?',(run,)).fetchone(): raise PRBridgeError('unused approval unavailable')
                 if db.execute('SELECT manifest FROM action_bindings WHERE run=? AND action=? AND version=?',(run,proposal['action'],proposal['target']['head'])).fetchone()!=(BoundLedger.encode(proposal['target']),): raise PRBridgeError('approval binding unavailable')
-                if operation[2]=='proposed' and db.execute("SELECT 1 FROM pr_bridge_operations WHERE run=? AND proposal<>? AND (state IS NULL OR state NOT IN ('proposed','not_executed','executed','desired_state_observed','reconciled'))",(run,ref)).fetchone(): raise PRBridgeError('other operation unresolved')
-                if operation[2]=='proposed' and db.execute("SELECT 1 FROM external_actions WHERE run=? AND (status IS NULL OR status NOT IN ('approved','revoked','not_executed','executed','desired_state_observed'))",(run,)).fetchone(): raise PRBridgeError('other action unresolved')
+                if operation[2]=='proposed': self._require_no_competing_work(db,run,ref)
                 prior=db.execute('SELECT COALESCE(MAX(id),0) FROM action_audit').fetchone()[0]
                 if db.execute("UPDATE external_actions SET status='revoked',actor='local-owner',updated=? WHERE run=? AND action=? AND version=? AND status='approved'",(time.time(),run,proposal['action'],proposal['target']['head'])).rowcount!=1: raise PRBridgeError('approval unavailable')
                 if not db.execute("SELECT 1 FROM action_audit WHERE id>? AND run=? AND action=? AND version=? AND status='revoked' AND actor='local-owner'",(prior,run,proposal['action'],proposal['target']['head'])).fetchone(): raise PRBridgeError('approval audit unavailable')
-                if operation[2]=='approved' and db.execute("UPDATE pr_bridge_operations SET state='proposed' WHERE proposal=? AND state='approved'",(ref,)).rowcount!=1: raise PRBridgeError('proposal changed')
+                if operation[2]=='approved' and db.execute("UPDATE pr_bridge_operations SET state='proposed' WHERE proposal=? AND state='approved'",(ref,)).rowcount!=1: raise PRBridgeError(_PROPOSAL_CHANGED)
                 reason='owner_withdrawn' if operation[2]=='approved' else 'orphaned_approval_withdrawn'
                 if db.execute("INSERT INTO pr_reauthorization_history(proposal,reason,actor,created) VALUES(?,?,'local-owner',?)",(ref,reason,time.time())).rowcount!=1: raise PRBridgeError('withdrawal history unavailable')
+                self._require_claims(db,run,queue_claim,graph_claim)
                 db.execute('COMMIT');return {'revoked':True,'proposal':ref}
             except Exception: db.execute('ROLLBACK');raise
         except Exception: raise PRBridgeError('approval withdrawal unavailable') from None
@@ -152,7 +159,7 @@ class PRBridge:
         try:
             proposal,state=self._load(loop,run,ref)
             if state not in ('not_executed','approved'): raise PRBridgeError('reauthorization unavailable')
-            db=self.service.graph.db; db.execute('BEGIN IMMEDIATE')
+            db=self.service.graph.db; db.execute(_BEGIN_WRITE)
             try:
                 self.service.graph._lease(run,graph_claim)
                 row=db.execute('SELECT a.status,b.expires FROM external_actions a JOIN action_bindings b USING(run,action,version) WHERE a.run=? AND a.action=? AND a.version=?',(run,proposal['action'],proposal['target']['head'])).fetchone()
@@ -163,7 +170,7 @@ class PRBridge:
                     reason='expired'
                 elif row[0]=='not_executed': reason='confirmed_not_executed'
                 else: raise PRBridgeError('action outcome unresolved')
-                if db.execute("UPDATE pr_bridge_operations SET state='proposed' WHERE proposal=? AND state=?",(ref,state)).rowcount!=1: raise PRBridgeError('proposal changed')
+                if db.execute("UPDATE pr_bridge_operations SET state='proposed' WHERE proposal=? AND state=?",(ref,state)).rowcount!=1: raise PRBridgeError(_PROPOSAL_CHANGED)
                 db.execute('INSERT INTO pr_reauthorization_history(proposal,reason,actor,created) VALUES(?,?,?,?)',(ref,reason,'local-owner',time.time()))
                 db.execute('COMMIT'); return {'reauthorization_available':True,'proposal':ref,'reason':reason}
             except Exception: db.execute('ROLLBACK'); raise
@@ -217,7 +224,7 @@ class PRBridge:
             try: digest=loop.github.triage_digest(snapshot,dispositions); status='ready_for_approval'
             except GitHubError: digest=None; status='blocked_for_correction'
             ref=self.service.artifacts.put(json.dumps({'run':run,'number':number,'snapshot':snapshot,'dispositions':dispositions,'digest':digest,'status':status},sort_keys=True,separators=(',',':')).encode())
-            db=self.service.graph.db; db.execute('BEGIN IMMEDIATE')
+            db=self.service.graph.db; db.execute(_BEGIN_WRITE)
             try:
                 self.service.graph._lease(run,graph_claim)
                 for comment_id,item in dispositions.items():
@@ -273,7 +280,7 @@ class PRBridge:
     def reconcile(self,run,queue_claim,graph_claim,ref):
         loop=self._loop(run,queue_claim,graph_claim,reconcile=True)
         try:
-            proposal=json.loads(self.service.artifacts.get(ref)); row=self.service.graph.db.execute('SELECT run,kind,state FROM pr_bridge_operations WHERE proposal=?',(ref,)).fetchone()
+            proposal=json.loads(self.service.artifacts.get(ref)); row=self.service.graph.db.execute(_OPERATION_ROW,(ref,)).fetchone()
             if not row or row[0]!=run or row[1]!=proposal['kind'] or row[2] not in ('uncertain','observed') or proposal['run']!=run: raise PRBridgeError('uncertain action unavailable')
             args=proposal['args']; target=proposal['target']; kind=proposal['kind']
             scope='github:'+target['repo']+(':branch:'+target['branch'] if kind=='push' else ':pr:'+str(args['number']) if kind=='ready' else ':branch:'+target['branch'])
