@@ -9,6 +9,81 @@ class FakeMCP:
         raise AssertionError(name)
 
 class PlanAdapterTests(unittest.TestCase):
+    def test_returned_issue_must_match_requested_identifier(self):
+        class WrongIssue(FakeMCP):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number); result['data']['identifier']='DEMO-2'; return result
+        with self.assertRaises(PlanError):
+            inspect_issue(WrongIssue(),'team.DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[])
+
+    def test_boolean_status_ids_never_match_numeric_policy(self):
+        class WrongStatus(FakeMCP):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number); result['data']['columnId']=True; return result
+        with self.assertRaises(PlanError):
+            inspect_issue(WrongStatus(),'DEMO',1,ready_columns={1},completed_columns={2},blocker_direction='inward',external_work=[])
+        class WrongBlocker(FakeMCP):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number); result['data']['links']=[{'kind':'blocks','direction':'inward','issue':{'id':2}}]; return result
+            def call(self,name,args):
+                if name=='get_issue': return {'ok':True,'data':{'id':2,'columnId':True}}
+                return super().call(name,args)
+        with self.assertRaises(PlanError):
+            inspect_issue(WrongBlocker(),'DEMO',1,ready_columns={10},completed_columns={1},blocker_direction='inward',external_work=[])
+
+    def test_blocker_identity_must_match_requested_issue(self):
+        class WrongBlocker(FakeMCP):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number); result['data']['links']=[{'kind':'blocks','direction':'inward','issue':{'id':2}}]; return result
+            def call(self,name,args):
+                if name=='get_issue': return {'ok':True,'data':{'id':3,'columnId':20}}
+                return super().call(name,args)
+        with self.assertRaises(PlanError):
+            inspect_issue(WrongBlocker(),'DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[])
+
+    def test_exact_completed_blocker_and_scoped_project_are_accepted(self):
+        class Blocker(FakeMCP):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number); result['data']['links']=[{'kind':'blocks','direction':'inward','issue':{'id':2}}]; return result
+            def call(self,name,args):
+                if name=='get_issue': return {'ok':True,'data':{'id':2,'columnId':20}}
+                return super().call(name,args)
+        result=inspect_issue(Blocker(),'team.DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[])
+        self.assertTrue(result['ready'])
+        self.assertTrue(result['dependencies_complete'])
+
+    def test_future_task_with_canceled_and_unfinished_blockers_is_not_ready(self):
+        class Blockers(FakeMCP):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number)
+                result['data']['startDate']='2026-12-03'
+                result['data']['links']=[{'kind':'blocks','direction':'inward','issue':{'id':2}},{'kind':'blocks','direction':'inward','issue':{'id':3}}]
+                return result
+            def call(self,name,args):
+                if name=='get_issue': return {'ok':True,'data':{'id':args['issueId'],'columnId':21 if args['issueId']==2 else 18}}
+                return super().call(name,args)
+        result=inspect_issue(Blockers(),'team.DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[],today='2026-10-31')
+        self.assertFalse(result['ready'])
+        self.assertFalse(result['dependencies_complete'])
+
+    def test_malformed_owner_is_not_treated_as_unassigned(self):
+        for field in ('assigneeUserId','delegateUserId'):
+            for invalid in ('',False,0):
+                class Malformed(FakeMCP):
+                    def get_issue(self,project,number):
+                        result=super().get_issue(project,number); result['data'][field]=invalid; return result
+                with self.subTest(field=field,invalid=invalid), self.assertRaises(PlanError):
+                    inspect_issue(Malformed(),'DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[],today='2026-10-31')
+
+    def test_malformed_schedule_fields_are_not_unscheduled(self):
+        for field in ('startDate','dueDate'):
+            for invalid in ('',False,0,'20261031','2026-02-30'):
+                class Malformed(FakeMCP):
+                    def get_issue(self,project,number):
+                        result=super().get_issue(project,number); result['data'][field]=invalid; return result
+                with self.subTest(field=field,invalid=invalid), self.assertRaises(PlanError):
+                    inspect_issue(Malformed(),'DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[],today='2026-10-31')
+
     def test_normalizes_only_confirmed_ready_leaf(self):
         value=inspect_issue(FakeMCP(),'DEMO',1,ready_columns={10},completed_columns={20},blocker_direction='inward',external_work=[])
         self.assertTrue(value['ready']); self.assertTrue(value['leaf']); self.assertTrue(value['dependencies_complete'])

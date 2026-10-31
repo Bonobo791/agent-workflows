@@ -4,6 +4,7 @@ import unittest
 from runner.control import ControlError, ControlPlane
 from runner.service import Service
 from runner.task_intake import SingleTaskIntake
+from runner.plan_adapter import PlanError
 
 class FakePlan:
     def __init__(self): self.owner=None
@@ -13,6 +14,44 @@ class FakePlan:
         return {'ok':True,'data':{'items':[],'nextCursor':None} if name=='list_issue_activity' else []}
 
 class SingleTaskTests(unittest.TestCase):
+    def test_legacy_display_only_admission_remains_fenced(self):
+        from runner.task_intake import IntakeError
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('legacy','engineering','DEMO-1')
+                intake=SingleTaskIntake(service,FakePlan(),lambda *_:[],{'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'})
+                with self.assertRaisesRegex(IntakeError,'task already admitted'): intake.submit('new','engineering','team.DEMO',1)
+                self.assertIsNone(service.queue.get('new'))
+            finally: service.close()
+
+    def test_wrong_tracker_issue_never_admits_or_queues_task(self):
+        class WrongIssue(FakePlan):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number); result['data']['identifier']='DEMO-2'; return result
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                intake=SingleTaskIntake(service,WrongIssue(),lambda *_:[],{'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'})
+                with self.assertRaises(PlanError): intake.submit('run','marketing','DEMO',1)
+                self.assertIsNone(service.queue.get('run'))
+                self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_runs WHERE id='run'").fetchone())
+            finally: service.close()
+
+    def test_invalid_schedule_never_admits_or_queues_task(self):
+        class InvalidSchedule(FakePlan):
+            def get_issue(self,project,number):
+                result=super().get_issue(project,number); result['data']['startDate']=False; return result
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                intake=SingleTaskIntake(service,InvalidSchedule(),lambda *_:[],{'ready_columns':{10},'completed_columns':{20},'blocker_direction':'inward'})
+                with self.assertRaises(PlanError): intake.submit('run','marketing','DEMO',1)
+                self.assertIsNone(service.queue.get('run'))
+                self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_runs WHERE id='run'").fetchone())
+                self.assertEqual(service.graph.db.execute('SELECT status FROM task_admission_audit').fetchone(),('unavailable',))
+            finally: service.close()
+
     def test_executor_failure_fence_keeps_job_until_operator_attests(self):
         from runner.manual_lifecycle import ManualLifecycle
         with tempfile.TemporaryDirectory() as root:
@@ -33,7 +72,9 @@ class SingleTaskTests(unittest.TestCase):
             with self.assertRaises(ControlError): control.handle('wrong',req)
             value=control.handle('secret',req)
             self.assertEqual(value['source_version'],'v1')
-            self.assertEqual(json.loads(service.artifacts.get(value['artifact_ref']))['task_id'],'DEMO-1')
+            snapshot=json.loads(service.artifacts.get(value['artifact_ref']))
+            self.assertEqual(snapshot['task_id'],'plan:1')
+            self.assertEqual(snapshot['identifier'],'DEMO-1')
             self.assertEqual(service.queue.get('run1')['status'],'queued')
             with self.assertRaises(ControlError): control.handle('secret',{**req,'run':'run2'})
             rows=service.graph.db.execute('SELECT run,status,reasons,artifact_ref FROM task_admission_audit ORDER BY id').fetchall()
