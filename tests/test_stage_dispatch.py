@@ -378,6 +378,7 @@ class StageDispatchTests(unittest.TestCase):
         class Executor:
             def __init__(self,service): self.service=service; self.counter=0
             def execute(self,**kw):
+                if kw['role']=='asset_brief': self.asset_call=kw
                 self.counter+=1; ref=self.service.artifacts.put((('# Fixture\n\n' if kw['role']=='canonical_draft' else '')+'content '+kw['role']).encode()); refs=fixture_outputs(self.service.artifacts,kw['role'],ref)
                 return {'session_id':kw.get('session_id') or 'session-'+str(self.counter),'outputs':refs,'output':json.dumps({'stage':kw['role'],'status':'passed','input_versions':kw['input_versions'],'outputs':refs,'findings':[]})}
             def review(self,subject,**kw):
@@ -390,7 +391,7 @@ class StageDispatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             skills=Path(root)/'skills'; (skills/'role').mkdir(parents=True); (skills/'role'/'SKILL.md').write_text('Synthetic role')
             service=Service(root); service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc'); service.create('r','marketing','task'); service.enqueue('r'); queue=service.lifecycle.claim(); claim=service.claim('r')
-            task={'task_id':'task','format':'guide','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[]}
+            task={'task_id':'task','format':'guide','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[],'description':'Create an Instagram PNG at 1080 by 1080 pixels.'}
             ref=service.artifacts.put(json.dumps(task).encode()); service.graph.db.execute('CREATE TABLE IF NOT EXISTS task_input_versions(run TEXT PRIMARY KEY, source_version TEXT NOT NULL, artifact_ref TEXT NOT NULL)'); service.graph.db.execute('INSERT INTO task_input_versions VALUES(?,?,?)',('r','v1',ref))
             service.source_verifier=fixture_verifier; service.docker_executor=Executor(service); service.model_policy=Policy(); service.skill_resolver=SkillResolver([skills])
             service.page_rules={'guide':{'headings':[{'level':1,'text':'Fixture'}]}}
@@ -430,6 +431,10 @@ class StageDispatchTests(unittest.TestCase):
                 result=dispatcher.step('r',queue['token'],claim)
                 if result.get('status')=='awaiting_review': break
             self.assertEqual(result['status'],'awaiting_review'); self.assertEqual(service.graph.get('r','asset_production')['status'],'blocked')
+            asset_call=service.docker_executor.asset_call
+            asset_payload=json.loads(asset_call['prompt'].split('\n')[1])
+            self.assertEqual(json.loads(asset_payload['artifacts']['admitted_task']),task)
+            self.assertIn(ref,asset_call['input_versions'])
             self.assertEqual(service.graph.get('r','instagram_review')['status'],'blocked')
             instagram=json.loads(service.artifacts.get(service.graph.get('r','instagram_review')['version']))
             self.assertIn('asset',instagram['_blocked_reason'])

@@ -98,7 +98,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
             service.source_snapshots=SourceSnapshots(service,SourceFetcher(['https://example.com/'],timeout=15)); service.source_reviewer=SourceReviewer(service)
             task={'task_id':'fixture','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[],'format':'note',
                   'description':'Write a short note with the exact Markdown heading # Example Domain. The only claims are that the HTML document title is Example Domain and the domain is for documentation examples. Use only https://example.com/ as source; assign source-1 and evidence-1 and distinct claim IDs. Do not add claims.'}
-            if render: task['description']+=' Request one Instagram PNG at 1080 by 1080 pixels using only the exact approved text Example Domain, with no external media.'
+            if render: task['description']+=' For the separate visual asset only, request one Instagram PNG at 1080 by 1080 pixels with no external media; its visible text must be the exact approved heading Example Domain. This visual restriction does not limit the note body.'
             service.create('r','marketing','fixture'); service.enqueue('r'); queue=service.queue.claim('fixture',1200); claim=service.graph.claim('r',1200)
             task_ref=service.artifacts.put(json.dumps(task).encode())
             service.graph.db.execute('CREATE TABLE task_input_versions(run TEXT PRIMARY KEY,source_version TEXT NOT NULL,artifact_ref TEXT NOT NULL)')
@@ -132,6 +132,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                     self.assertEqual((outcome['stage'],outcome['status']),('asset_production','awaiting_review'))
                     manifest=json.loads(service.artifacts.get(service.graph.get('r','asset_production')['version']))
                     self.assertTrue(manifest['assets']); self.assertTrue(all(item['kind']=='png' for item in manifest['assets']))
+                    self.assertTrue(any(item['channel']=='instagram' and item['width']==1080 and item['height']==1080 for item in manifest['assets']))
                     outcome=dispatcher.step('r',queue['token'],claim)
                     self.assertEqual(outcome['stage'],'asset_production'); self.assertIn(outcome['status'],('passed','blocked'))
                 else: self.assertEqual((outcome['stage'],outcome['status']),('asset_production','blocked'))

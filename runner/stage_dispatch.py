@@ -240,7 +240,8 @@ class StageDispatcher:
                 from runner.source_register import validate
                 validate(service.artifacts,register,proof)
                 artifacts['source_register']=service.artifacts.get(register).decode('utf-8')
-                refs.extend([register,proof])
+                artifacts['admitted_task']=service.artifacts.get(row[0]).decode('utf-8')
+                refs.extend([register,proof,row[0]])
             except Exception: raise StageError('verified source register unavailable') from None
         feedback=None
         if feedback_ref is not None:
@@ -299,7 +300,7 @@ class StageDispatcher:
             if review_stage: instructions=instructions.replace('passed, blocked, failed, or awaiting_review','passed or blocked')
             prompt=instructions+'\n'+json.dumps(payload,ensure_ascii=False)
             if name=='asset_brief':
-                prompt+='\nWrite result.txt as JSON: {"content_ref": input_versions[0], "assets": [{"channel": "linkedin", "x", "facebook", "instagram", or "reddit", "kind": "png" or "mp4", "width": integer, "height": integer, "duration_seconds": null for png or seconds for mp4, "approved_text": [exact excerpts from the subject], "claim_ids": [IDs from the source register], "media": [{"artifact_ref": hash, "rights_ref": hash}], "captions": string, "alt_text": string}]}. Select an exact channel, not a generic label; include an Instagram asset when it is requested. Use empty media when no supplied media is needed. Video captions and alt text are required. Do not invent artifact references.'
+                prompt+='\nWrite result.txt as JSON: {"content_ref": input_versions[0], "assets": [{"channel": "linkedin", "x", "facebook", "instagram", or "reddit", "kind": "png" or "mp4", "width": integer, "height": integer, "duration_seconds": null for png or seconds for mp4, "approved_text": [exact excerpts from the subject], "claim_ids": [IDs from the source register], "media": [{"artifact_ref": hash, "rights_ref": hash}], "captions": string, "alt_text": string}]}. Use the admitted task for requested channels and formats, and the subject for approved text. Select an exact channel, not a generic label; include an Instagram asset when it is requested. Use empty media when no supplied media is needed. Video captions and alt text are required. Do not invent artifact references.'
             args=dict(run=run,role=name,claim=graph_claim,skills=hashes,prompt=prompt,model=model,input_versions=refs,output_paths=['result.txt','sources.json'] if name=='brief' else ['result.txt'],cancelled=lambda:not active())
             if service.model_executor is not None: args['instruction_length']=len(instructions)
             if review_stage:
