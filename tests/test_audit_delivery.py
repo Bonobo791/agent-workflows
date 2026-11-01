@@ -1,4 +1,5 @@
 import http.server
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ import tempfile
 import threading
 import unittest
 
-from runner.audit_delivery import deliver_once, deliver_tables
+from runner.audit_delivery import deliver_once, deliver_tables, present_tables
 from runner.graph import GraphStore, engineering_definition
 from runner.opik_export import PATH
 
@@ -22,6 +23,18 @@ except ImportError:
 
 @unittest.skipUnless(requests is not None and OTLPSpanExporter is not None,'optional audit export dependencies unavailable')
 class AuditDeliveryTests(unittest.TestCase):
+    def test_all_present_requires_core_tables_and_selects_only_existing_audit_tables(self):
+        from runner.service import Service
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                selected=present_tables(root+'/state.db')
+                self.assertTrue({'graph_audit','claim_audit','job_audit','action_audit','attempt_audit'}<=set(selected))
+                self.assertNotIn('local_scope_audit',selected)
+                service.graph.db.execute('DROP TABLE claim_audit')
+                with self.assertRaises(ValueError): present_tables(root+'/state.db')
+            finally: service.close()
+
     def test_private_files_and_unsafe_configuration_are_rejected(self):
         with tempfile.TemporaryDirectory() as root:
             state=Path(root)/'state.db'; state.write_bytes(b''); state.chmod(0o600)
@@ -78,8 +91,9 @@ class AuditDeliveryTests(unittest.TestCase):
         server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Receiver); thread=threading.Thread(target=server.serve_forever); thread.start()
         try:
             with tempfile.TemporaryDirectory() as root:
-                graph=GraphStore(root+'/state.db'); graph.register(engineering_definition()); graph.create('private-run','engineering'); claim=graph.claim('private-run',60)
-                graph.finish('private-run','intake',graph.prepare('private-run','intake',claim),'passed','private-result',claim); graph.close(); Path(root+'/state.db').chmod(0o600)
+                from runner.service import Service
+                service=Service(root); graph=service.graph; graph.create('private-run','engineering'); claim=graph.claim('private-run',60)
+                graph.finish('private-run','intake',graph.prepare('private-run','intake',claim),'passed','private-result',claim); service.close()
                 key=Path(root)/'key'; key.write_text('x'*40); key.chmod(0o600)
                 token=Path(root)/'token'; token.write_text('y'*40); token.chmod(0o600)
                 cursor=Path(root)/'cursor.db'; endpoint=f'http://127.0.0.1:{server.server_port}{PATH}'
@@ -93,11 +107,17 @@ class AuditDeliveryTests(unittest.TestCase):
                 batch=subprocess.run(command+['--table','claim_audit'],capture_output=True,text=True,timeout=15)
                 self.assertEqual(batch.returncode,0,batch.stderr)
                 self.assertEqual({k:v['status'] for k,v in json.loads(batch.stdout).items()},{'graph_audit':'empty','claim_audit':'exported'})
+                all_command=command[:command.index('--table')]+['--all-present','--token-file',str(token)]
+                complete=subprocess.run(all_command,capture_output=True,text=True,timeout=15)
+                self.assertEqual(complete.returncode,0,complete.stderr)
+                all_results=json.loads(complete.stdout)
+                self.assertTrue({'claim_audit','graph_audit','job_audit','action_audit','attempt_audit'}<=set(all_results))
+                self.assertTrue(all(item['status']=='empty' for item in all_results.values()))
                 self.assertEqual(len(Receiver.payloads),3)
                 for path,authorization,payload in Receiver.payloads:
                     self.assertEqual(path,PATH); self.assertEqual(authorization,'Bearer '+'y'*40)
                     self.assertNotIn(b'private-run',payload); self.assertNotIn(b'private-result',payload)
                     self.assertTrue(ExportTraceServiceRequest.FromString(payload).resource_spans)
                 self.assertEqual(os.stat(cursor).st_mode&0o777,0o600)
-                with sqlite3.connect(cursor) as db: self.assertEqual(db.execute('SELECT table_name,position FROM export_cursors ORDER BY table_name').fetchall(),[('claim_audit',1),('graph_audit',1)])
+                with closing(sqlite3.connect(cursor)) as db: self.assertEqual(dict(db.execute('SELECT table_name,position FROM export_cursors'))['graph_audit'],1)
         finally: server.shutdown(); thread.join(); server.server_close()

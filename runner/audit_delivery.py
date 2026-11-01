@@ -1,7 +1,7 @@
 """Explicit one-page audit delivery; no background service or default endpoint."""
 import argparse
 import json
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 import os
 from pathlib import Path
 import sqlite3
@@ -32,8 +32,16 @@ def _private_database(path,create):
     return str(path)
 
 
+def present_tables(source):
+    source=_private_database(source,False)
+    with closing(sqlite3.connect('file:'+quote(source,safe='/')+'?mode=ro',uri=True,isolation_level=None)) as db:
+        present={row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {'graph_audit','claim_audit','job_audit','action_audit','attempt_audit'}<=present: raise ValueError('core audit tables unavailable')
+    return sorted(set(TABLES)&present)
+
+
 def deliver_tables(source,cursor,key_file,endpoint,tables,limit=100,token_file=None):
-    if not isinstance(tables,(list,tuple)) or not 1<=len(tables)<=8 or any(not isinstance(table,str) or table not in TABLES for table in tables) or len(set(tables))!=len(tables) or type(limit) is not int or not 1<=limit<=500: raise ValueError('invalid audit selection')
+    if not isinstance(tables,(list,tuple)) or not 1<=len(tables)<=len(TABLES) or any(not isinstance(table,str) or table not in TABLES for table in tables) or len(set(tables))!=len(tables) or type(limit) is not int or not 1<=limit<=500: raise ValueError('invalid audit selection')
     source=_private_database(source,False); cursor=_private_database(cursor,True)
     key=read_secret(key_file).encode('utf-8')
     import requests
@@ -61,12 +69,15 @@ def main():
     parser=argparse.ArgumentParser(description='Deliver one page of private workflow audit events.')
     parser.add_argument('--source',required=True); parser.add_argument('--cursor',required=True)
     parser.add_argument('--key-file',required=True); parser.add_argument('--endpoint',required=True)
-    parser.add_argument('--table',required=True,action='append',choices=sorted(TABLES)); parser.add_argument('--limit',type=int,default=100)
+    selection=parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument('--table',action='append',choices=sorted(TABLES)); selection.add_argument('--all-present',action='store_true')
+    parser.add_argument('--limit',type=int,default=100)
     parser.add_argument('--token-file')
     args=parser.parse_args()
-    results=deliver_tables(args.source,args.cursor,args.key_file,args.endpoint,args.table,args.limit,args.token_file)
-    print(next(iter(results.values()))['status'] if len(args.table)==1 else json.dumps(results,sort_keys=True,separators=(',',':')))
-    return 0 if len(results)==len(args.table) and all(result['status'] in ('empty','exported','superseded') for result in results.values()) else 1
+    tables=present_tables(args.source) if args.all_present else args.table
+    results=deliver_tables(args.source,args.cursor,args.key_file,args.endpoint,tables,args.limit,args.token_file)
+    print(next(iter(results.values()))['status'] if len(tables)==1 else json.dumps(results,sort_keys=True,separators=(',',':')))
+    return 0 if len(results)==len(tables) and all(result['status'] in ('empty','exported','superseded') for result in results.values()) else 1
 
 
 if __name__=='__main__':

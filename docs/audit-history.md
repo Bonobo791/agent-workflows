@@ -172,7 +172,9 @@ python -m runner.audit_delivery --source /private/state.db --cursor /private/aud
   --table graph_audit --table claim_audit
 ```
 
-Select one to eight distinct existing tables. The command checks that every
+Select distinct existing tables, or use `--all-present` to select every known
+audit table present in a worker database. That mode requires the core graph,
+claim, job, action and attempt tables. The command checks that every
 selected table exists before sending, processes them in the supplied order, and
 stops at the first unavailable or ambiguous result. Each table has its own
 cursor; repeat the command to drain additional pages. Multiple tables produce a
@@ -224,6 +226,30 @@ and manifest digest `sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8d
 It verified rejected missing/wrong bearer tokens, cursor preservation on rejection,
 synthetic delivery after restart, file persistence and size-triggered rotation.
 It did not test age-based cleanup, backup limits, a host crash, or installation.
+
+Optional user-systemd examples are provided for a collector and periodic
+bounded delivery in `observability/systemd`. They are not installed or enabled.
+Place the collector example at `~/.config/agent-workflows/audit-collector/collector.yml`
+and a distinct owner-only bearer token at `audit-collector/token`; create the
+private output directory `~/.local/share/agent-workflows-monitor/audit`. Pull the
+pinned image only after reviewing it. Copy `observability/local/audit.env.example`
+to `~/.config/agent-workflows/audit.env` with absolute paths to the private
+worker database, separate cursor database, stable correlation key, and checkout.
+The Python environment must have `requirements-observability.txt` installed.
+The collector unit publishes only host loopback port 14318. The timer runs one
+bounded page per currently present audit table once per minute after the prior
+run finishes; nonzero status is recorded by systemd and retried at the next
+interval. New tables are picked up on a later run. It does not alert on exporter
+failure, guarantee that a backlog is drained, or establish durable retention.
+Review these units and the file-exporter limitations above before enabling them.
+The delivery unit uses `PrivateTmp=yes`: its checkout, database, cursor and key
+must not be under a host `/tmp` path hidden from that unit. On 2026-11-01 the
+delivery command and hardening properties from the example unit passed in a
+temporary user-systemd unit against the authenticated disposable collector;
+the collector example unit and timer were syntax-checked but not installed or
+exercised as persistent services. To repeat the transient delivery test, set
+`WORKFLOW_TEST_AUDIT_SYSTEMD=1` alongside `WORKFLOW_TEST_OTEL_CONTRIB_IMAGE` in
+the collector integration command above.
 
 ```sh
 WORKFLOW_TEST_OTEL_CONTRIB_IMAGE=<image-id> python -m unittest tests.test_audit_collector_auth_integration

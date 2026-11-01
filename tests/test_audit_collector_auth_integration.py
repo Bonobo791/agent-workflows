@@ -1,5 +1,8 @@
 """Opt-in local authenticated collector and private file export probe."""
+from contextlib import closing
 import os
+import shlex
+import shutil
 import sqlite3
 from pathlib import Path
 import subprocess
@@ -11,7 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-from runner.graph import GraphStore, engineering_definition
+from runner.service import Service
 from runner.opik_export import PATH
 from tests.monitoring_cleanup import cleanup_monitoring
 
@@ -19,7 +22,8 @@ from tests.monitoring_cleanup import cleanup_monitoring
 @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_OTEL_CONTRIB_IMAGE'),'collector contrib image not configured')
 class AuditCollectorAuthIntegrationTests(unittest.TestCase):
     def test_authenticated_private_output_survives_restart_and_retry(self):
-        temporary=tempfile.TemporaryDirectory(prefix='workflow-otel-auth-',delete=False)
+        systemd=os.environ.get('WORKFLOW_TEST_AUDIT_SYSTEMD')=='1'
+        temporary=tempfile.TemporaryDirectory(prefix='workflow-otel-auth-',dir=os.environ.get('XDG_RUNTIME_DIR') if systemd else None,delete=False)
         root=Path(temporary.name); name='workflow-otel-auth-'+uuid.uuid4().hex
         def podman(*args): return subprocess.run(['podman',*args],check=True,capture_output=True,text=True,timeout=30).stdout
         try:
@@ -50,17 +54,17 @@ class AuditCollectorAuthIntegrationTests(unittest.TestCase):
                 request=urllib.request.Request(endpoint,data=b'',headers=headers,method='POST')
                 with self.assertRaises(urllib.error.HTTPError) as denied: opener.open(request,timeout=3)
                 self.assertEqual(denied.exception.code,401); denied.exception.close()
-            graph=GraphStore(str(root/'state.db')); graph.register(engineering_definition()); graph.create('private-run','engineering'); claim=graph.claim('private-run',60)
+            service=Service(root); graph=service.graph; graph.create('private-run','engineering'); claim=graph.claim('private-run',60)
             graph.finish('private-run','intake',graph.prepare('private-run','intake',claim),'passed','private-content',claim)
             (root/'state.db').chmod(0o600); (root/'key').write_text('x'*40); (root/'key').chmod(0o600)
             command=[sys.executable,'-m','runner.audit_delivery','--source',str(root/'state.db'),'--cursor',str(root/'cursor.db'),'--key-file',str(root/'key'),'--endpoint',endpoint,'--table','graph_audit','--token-file',str(config/'token')]
             wrong=root/'wrong-token'; wrong.write_text('z'*40); wrong.chmod(0o600)
             denied=subprocess.run(command[:-1]+[str(wrong)],capture_output=True,text=True,timeout=20)
             self.assertNotEqual(denied.returncode,0); self.assertEqual(denied.stdout.strip(),'unavailable')
-            with sqlite3.connect(root/'cursor.db') as db: self.assertEqual(db.execute('SELECT position FROM export_cursors').fetchone(),(0,))
+            with closing(sqlite3.connect(root/'cursor.db')) as db: self.assertEqual(db.execute('SELECT position FROM export_cursors').fetchone(),(0,))
             first=subprocess.run(command,capture_output=True,text=True,timeout=20)
             self.assertEqual((first.returncode,first.stdout.strip()),(0,'exported'),first.stderr)
-            graph.finish('private-run','plan',graph.prepare('private-run','plan',claim),'passed','private-content',claim); graph.close()
+            graph.finish('private-run','plan',graph.prepare('private-run','plan',claim),'passed','private-content',claim); service.close()
             output=store/'audit.json'; before=output.read_bytes(); self.assertIn(b'workflow.audit.snapshot',before)
             self.assertNotIn(b'private-run',before); self.assertNotIn(b'private-content',before); self.assertNotIn(b'y'*40,before)
             podman('stop','--time','5',name)
@@ -72,6 +76,24 @@ class AuditCollectorAuthIntegrationTests(unittest.TestCase):
             after=output.read_bytes(); self.assertTrue(after.startswith(before)); self.assertGreater(len(after),len(before))
             again=subprocess.run(command,capture_output=True,text=True,timeout=20)
             self.assertEqual((again.returncode,again.stdout.strip()),(0,'empty'))
+            if systemd:
+                unit=Path(__file__).resolve().parents[1]/'observability/systemd/agent-workflows-audit-delivery.service'
+                lines=unit.read_text().splitlines(); start=next(line[10:] for line in lines if line.startswith('ExecStart='))
+                start=start.replace('http://127.0.0.1:14318'+PATH,endpoint).replace('%h/.config/agent-workflows/audit-collector/token',str(config/'token'))
+                app=root/'app'; app.mkdir(mode=0o700)
+                for package in ('runner','workflows'): shutil.copytree(Path(__file__).resolve().parents[1]/package,app/package,ignore=shutil.ignore_patterns('__pycache__'))
+                env_file=root/'audit.env'
+                env_file.write_text('PYTHONPATH='+str(app)+'\nWORKFLOW_AUDIT_SOURCE='+str(root/'state.db')+'\nWORKFLOW_AUDIT_CURSOR='+str(root/'cursor.db')+'\nWORKFLOW_AUDIT_KEY_FILE='+str(root/'key')+'\n'); env_file.chmod(0o600)
+                props=['--property='+line for line in lines if line.startswith(('UMask=','NoNewPrivileges=','PrivateTmp=','ProtectSystem=','TimeoutStartSec='))]
+                unit_name='workflow-audit-delivery-'+uuid.uuid4().hex
+                try:
+                    invocation=subprocess.run(['systemd-run','--user','--wait','--collect','--pipe','--quiet','--unit='+unit_name,'--property=EnvironmentFile='+str(env_file),*props,*shlex.split(start)],capture_output=True,text=True,timeout=60)
+                    self.assertEqual(invocation.returncode,0,invocation.stdout+invocation.stderr)
+                except BaseException:
+                    subprocess.run(['systemctl','--user','stop',unit_name],capture_output=True,timeout=15)
+                    raise
+                with closing(sqlite3.connect(root/'cursor.db')) as db:
+                    self.assertEqual(db.execute("SELECT position FROM export_cursors WHERE table_name='claim_audit'").fetchone(),(1,))
             from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
             batch=ExportTraceServiceRequest(); spans=batch.resource_spans.add().scope_spans.add().spans
             for i in range(250):

@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically deliver local workflow audit pages
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+Unit=agent-workflows-audit-delivery.service
+
+[Install]
+WantedBy=timers.target
