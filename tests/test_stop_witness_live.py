@@ -1,5 +1,6 @@
 """Explore evidence for a stop client that outlives its caller."""
 import os
+import errno
 from pathlib import Path
 import select
 import signal
@@ -13,6 +14,36 @@ import unittest
 from runner.local_scope import LocalScopes, SystemdScopes
 
 
+def require_pidfd(test):
+    if not hasattr(os,'pidfd_open') or not hasattr(signal,'pidfd_send_signal'):
+        test.skipTest('pidfd required for safe cleanup')
+    try:probe=os.pidfd_open(os.getpid())
+    except OSError as error:
+        if error.errno in (errno.ENOSYS,errno.EPERM,errno.EACCES,errno.EINVAL):test.skipTest('pidfd unavailable')
+        raise
+    os.close(probe)
+
+
+def finish_pidfd(fd):
+    if not select.select([fd],[],[],5)[0]:
+        try:signal.pidfd_send_signal(fd,signal.SIGKILL)
+        except ProcessLookupError:pass
+    return bool(select.select([fd],[],[],5)[0])
+
+
+class WitnessCleanupTests(unittest.TestCase):
+    def test_cleanup_kills_still_live_recorded_process(self):
+        from unittest.mock import patch
+        with patch(__name__+'.select.select',side_effect=[([],[],[]),([123],[],[])]),patch(__name__+'.signal.pidfd_send_signal') as kill:
+            self.assertTrue(finish_pidfd(123))
+            kill.assert_called_once_with(123,signal.SIGKILL)
+
+    def test_pidfd_permission_failure_skips_before_fixture_launch(self):
+        from unittest.mock import patch
+        with patch(__name__+'.os.pidfd_open',side_effect=PermissionError(errno.EPERM,'denied')):
+            with self.assertRaises(unittest.SkipTest):require_pidfd(self)
+
+
 @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
 class StopWitnessLiveTests(unittest.TestCase):
     def test_stop_witness_outlives_crashed_caller_and_records_only_after_stop(self):
@@ -22,8 +53,7 @@ class StopWitnessLiveTests(unittest.TestCase):
         self._exercise_witness(True)
 
     def _exercise_witness(self,kill_witness):
-        if not hasattr(os,'pidfd_open') or not hasattr(signal,'pidfd_send_signal'):
-            self.skipTest('pidfd required for safe cleanup')
+        require_pidfd(self)
         target='''import signal,sys,time
 from pathlib import Path
 def stop(*_):
@@ -79,10 +109,10 @@ while True:time.sleep(.1)
             release.touch()
             if worker is not None and worker.poll() is None:worker.kill();worker.wait(timeout=5)
             if witness_fd is not None:
-                witness_finished=bool(select.select([witness_fd],[],[],5)[0])
+                witness_finished=finish_pidfd(witness_fd)
                 os.close(witness_fd)
             if client_fd is not None:
-                client_finished=bool(select.select([client_fd],[],[],5)[0])
+                client_finished=finish_pidfd(client_fd)
                 os.close(client_fd)
             if not safe and (witness_fd is None or witness_finished) and (client_fd is None or client_finished):
                 try:

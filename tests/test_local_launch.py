@@ -25,6 +25,18 @@ def add_recovery_fence(scopes):
 
 
 class LocalLaunchTests(unittest.TestCase):
+    def test_receipt_ready_at_deadline_is_rejected(self):
+        import json
+        from unittest.mock import patch
+        ack_read,ack_write=os.pipe();go_read,go_write=os.pipe()
+        launch=GuardedLaunch(SimpleNamespace(pid=123,poll=lambda:None),ack_read,go_write,'a'*64)
+        os.write(ack_write,json.dumps({'version':1,'nonce':'a'*64,'pid':123}).encode());os.close(ack_write)
+        try:
+            with patch('runner.local_launch.time.monotonic',side_effect=[0,0,0,0,2]):
+                with self.assertRaises(LaunchError):launch.receive(1,lambda:False)
+            self.assertIsNone(launch.receipt)
+        finally:launch.close();os.close(go_read)
+
     def test_target_receives_only_explicit_environment(self):
         env={**os.environ,'WORKFLOW_TEST_SECRET':'private'}
         code="import os; print(os.environ.get('WORKFLOW_TEST_SECRET','absent'),os.environ['WORKFLOW_TEST_ALLOWED'])"

@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import json
 import os
+import select
 from pathlib import Path
 from unittest.mock import patch
 from runner.local_process import LocalProcessError, start_local_process
@@ -39,6 +40,8 @@ class LocalProcessTests(unittest.TestCase):
             with patch('runner.local_process.start_guarded',side_effect=self.guarded_launch(backend,process,check)):
                 handle=start_local_process(root+'/state.db','run',str(work),str(binary),{'HOME':root,'ACCESS_TOKEN':'secret'},backend,lambda:True,{'mcp_servers':[],'plugins':[]})
             self.assertTrue(Path(handle.output_dir).is_dir()); self.assertFalse(Path(handle.output_dir).is_relative_to(work))
+            self.assertTrue(select.select([self.last_go_read],[],[],0)[0])
+            self.assertEqual(os.read(self.last_go_read,1),b'G')
             self.assertTrue(handle.assert_active());self.assertTrue(handle.finish())
             scopes=LocalScopes(root+'/state.db',backend)
             try:self.assertEqual(scopes.state('run',handle.unit),'terminated')

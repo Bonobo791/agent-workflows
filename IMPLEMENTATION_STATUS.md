@@ -109,7 +109,8 @@ with a trusted quiescence verifier, an inactive matching scope, and an empty or
 removed recorded cgroup. Guarded launches now record a private receipt before
 authorization; `reconcile_local_scope` can settle their exited scopes using the
 exact receipt, audit, fence and host observations. Legacy unobserved launches
-and interrupted stops remain fenced; their quiescence verification is incomplete.
+remain fenced. Interrupted stops can be reconciled only with their completed,
+audited detached witness; legacy or incomplete stop evidence remains unresolved.
 
 A disposable signed-in Codex crash probe also observed a previously bound scope
 exit and disappear before recovery. Its cgroup was empty, but the recorded scope

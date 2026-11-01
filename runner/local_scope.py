@@ -283,12 +283,12 @@ class LocalScopes:
             return True
         except Exception: raise ScopeError('scope stop uncertain; run remains fenced') from None
     def reserve_stop(self,run,unit):
-        self.assert_active(run,unit)
+        identity=self._active_identity(run,unit)
         nonce=secrets.token_hex(32);digest=hashlib.sha256(bytes.fromhex(nonce)).hexdigest()
         self.db.execute(BEGIN_WRITE)
         try:
             row=self.db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='running'",(run,unit)).fetchone()
-            if not row or not valid_scope_identity(unit,*row): raise ScopeError('scope identity unavailable')
+            if not row or row!=identity[:2] or not valid_scope_identity(unit,*row): raise ScopeError('scope identity unavailable')
             last=self.db.execute(SCOPE_AUDIT_LAST).fetchone()[0]
             if self.db.execute("UPDATE local_scopes SET state='stopping' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='running'",(run,unit,*row)).rowcount!=1: raise ScopeError(ASSIGNMENT_CHANGED)
             if not self.db.execute("SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state='stopping'",(last,run,unit)).fetchone(): raise ScopeError(TRANSITION_AUDIT_UNAVAILABLE)

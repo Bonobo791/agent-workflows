@@ -34,11 +34,11 @@ cgroup does not prove that an escaped process never existed. Validate those
 assumptions for the deployed host before relying on this recovery control.
 
 The opt-in systemd tests exercise caller death before authorization and after
-target start, missing and mismatched evidence, concurrent database writes,
-audit rollback, and a signed-in synthetic worker crash followed by an
-explicitly exited scope. They do not establish containment against every host
-configuration, recover an interrupted stop request, or establish the outcome
-of an external mutation.
+target start. A separately enabled signed-in worker test covers a crash followed
+by an explicitly exited guarded scope. Fixture tests cover missing and mismatched
+evidence, concurrent database writes and audit rollback. These checks do not
+establish containment against every host configuration or establish the outcome
+of an external mutation. Interrupted stops require the separate witness below.
 
 An interrupted stop needs separate evidence. An opt-in experiment in
 `tests/test_stop_witness_live.py` keeps a stop client in flight while killing

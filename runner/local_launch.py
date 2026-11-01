@@ -31,6 +31,7 @@ class GuardedLaunch:
                 if not chunk: break
                 data+=chunk
                 if len(data)>512: raise LaunchError(RECEIPT_UNAVAILABLE)
+            if cancelled() or time.monotonic()>=deadline:raise LaunchError(RECEIPT_UNAVAILABLE)
             receipt=json.loads(data)
             if (not isinstance(receipt,dict) or set(receipt)!={'version','nonce','pid'}
                     or type(receipt['version']) is not int or receipt['version']!=1
