@@ -127,6 +127,10 @@ class EngineeringWorkspace:
             if not row: raise WorkspaceError('active local scope binding required')
             bind_scope_with_audit(self.db,run,assignment,unit); self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
+    def _record_recovery(self,run,assignment,unit):
+        created=time.time()
+        audit=self.db.execute("INSERT INTO workspace_recovery_audit(schema_version,run,assignment,unit,status,created) VALUES(1,?,?,?,'released',?)",(run,assignment,unit,created))
+        if audit.rowcount!=1 or self.db.execute('SELECT schema_version,run,assignment,unit,status,created FROM workspace_recovery_audit WHERE id=?',(audit.lastrowid,)).fetchone()!=(1,run,assignment,unit,'released',created):raise WorkspaceError('workspace recovery audit unavailable')
     def release_local(self,run,assignment,unit,*,fenced=None):
         self.db.execute('BEGIN IMMEDIATE')
         try:
@@ -140,9 +144,7 @@ class EngineeringWorkspace:
             if not row or not valid_scope_identity(unit,*row): raise WorkspaceError('terminal local scope evidence required')
             if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')
             if fenced is not None:
-                created=time.time()
-                audit=self.db.execute("INSERT INTO workspace_recovery_audit(schema_version,run,assignment,unit,status,created) VALUES(1,?,?,?,'released',?)",(run,assignment,unit,created))
-                if audit.rowcount!=1 or self.db.execute('SELECT schema_version,run,assignment,unit,status,created FROM workspace_recovery_audit WHERE id=?',(audit.lastrowid,)).fetchone()!=(1,run,assignment,unit,'released',created):raise WorkspaceError('workspace recovery audit unavailable')
+                self._record_recovery(run,assignment,unit)
             if self.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()!=(None,):raise WorkspaceError('workspace release changed')
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
