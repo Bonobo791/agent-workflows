@@ -213,8 +213,8 @@ class Service:
                 self._complete_legacy_graph(db,run,job)
             else:
                 if job==('completed',):raise ServiceError('completed job cannot be cancelled')
-                if job and job[0] in ('queued','running'):
-                    db.execute('UPDATE jobs SET status=? WHERE run=?',('cancelled' if job[0]=='queued' else 'cancelling',run))
+                if job in (('queued',),('running',)):
+                    db.execute('UPDATE jobs SET status=? WHERE run=?',({'queued':'cancelled','running':'cancelling'}[job[0]],run))
                 db.execute("UPDATE graph_runs SET status='cancelled' WHERE id=?",(run,))
                 db.execute('DELETE FROM graph_claims WHERE run=?',(run,))
             db.execute('COMMIT')
