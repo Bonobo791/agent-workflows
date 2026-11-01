@@ -327,8 +327,10 @@ with a synthetic app server and scope backend; it is not a live-provider or
 systemd crash-recovery acceptance test.
 The opt-in `tests.test_local_executor_crash_live` probe also interrupts a real
 signed-in local turn in a real user scope and checks that the session stays
-active and cannot resume. It does not establish the upstream turn outcome or
-provide a control to reconcile it.
+active and cannot resume. A separately scoped app server reads the exact saved
+thread and checks any matching turn without treating its status as permission
+to resume. The probe does not establish the upstream turn outcome or provide a
+production control to inspect or reconcile it.
 An unobserved launch or a stop without a completed witness remains fenced, as
 does any unresolved engineering workspace claim. Operator stop confirmation
 still requires the exact incarnation and termination attestation.
