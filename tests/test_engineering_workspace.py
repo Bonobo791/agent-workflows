@@ -345,12 +345,19 @@ class EngineeringWorkspaceTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
     def test_fenced_workspace_recovery_with_real_scope(self):
+        self._real_scope_workspace_recovery(False)
+
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_completed_workspace_recovery_with_real_scope(self):
+        self._real_scope_workspace_recovery(True)
+
+    def _real_scope_workspace_recovery(self,completed):
         import time
         from types import SimpleNamespace
         from runner.control import ControlError
         from runner.local_scope import LocalScopes, SystemdScopes, ScopeError
         service=self.service;service.create('run-1','engineering','task');service.enqueue('run-1')
-        self.control.handle('x'*40,{'action':'manual_claim'})
+        queue=self.control.handle('x'*40,{'action':'manual_claim'})['claim']
         self.registry.register(*self.args,self.registry.binding_hash(*self.args));assignment='job-'+'a'*48
         self.registry.claim('run-1',assignment,self.policy)
         backend=SystemdScopes(os.environ);service.model_supervisor=SimpleNamespace(backend=backend,engineering_root=str(self.root))
@@ -364,6 +371,7 @@ class EngineeringWorkspaceTests(unittest.TestCase):
                     if launcher.poll() is not None or time.monotonic()>=deadline: raise
                     time.sleep(.05)
             group=backend.inspect(unit)['cgroup'];self.registry.bind_local_scope('run-1',assignment,unit)
+            if completed: service.queue.finish('run-1',queue['token'],verify_completed=lambda _:True)
             stop=self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
             self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
             release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
@@ -374,6 +382,7 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             with self.assertRaises(ControlError): self.control.handle('x'*40,confirm)
             self.assertEqual(self.control.handle('x'*40,release),{'released':True})
             self.assertEqual(self.control.handle('x'*40,confirm)['status'],'stopped')
+            self.assertEqual(service.queue.get('run-1')['status'],'completed' if completed else 'cancelled')
         finally:
             subprocess.run(['/usr/bin/systemctl','--user','stop',unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
             try: launcher.wait(timeout=5)

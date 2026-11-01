@@ -387,6 +387,21 @@ class AutoWorkerTests(unittest.TestCase):
             finally:
                 service.lifecycle.close(); service.close()
 
+    def test_completed_shutdown_resumes_after_interruption_between_fence_and_stop(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=str(Path(root)/'state.db'); service=Service(root); service.lifecycle=ManualLifecycle(path,'worker','inc')
+            service.create('r','marketing','task'); service.enqueue('r'); queue=service.lifecycle.claim(); service.claim('r')
+            service.queue.finish('r',queue['token'],verify_completed=lambda _:True)
+            service._cancel('r',completed=True)
+            service.lifecycle.close(); service.close()
+            service=Service(root); service.lifecycle=ManualLifecycle(path,'worker','inc')
+            try:
+                service.request_lifecycle_stop('r')
+                self.assertEqual(service.lifecycle.confirm_operator_stop('r','inc','terminated_and_fenced')['status'],'stopped')
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+                self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('completed',))
+            finally: service.lifecycle.close(); service.close()
+
     def test_completed_job_cannot_confirm_stop_with_unresolved_scope(self):
         from runner.local_scope import LocalScopes
         from runner.manual_lifecycle import ManualLifecycleError
