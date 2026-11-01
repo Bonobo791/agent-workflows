@@ -15,6 +15,24 @@ class Connection:
     def close(self): self.closed=True
 
 class SourceFetchTests(unittest.TestCase):
+    def test_unresponsive_first_address_leaves_time_for_fallback(self):
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            def settimeout(self,value): pass
+            def close(self): pass
+        now=[0.0]; attempts=[]
+        def connect(address,timeout):
+            attempts.append((address[0],timeout))
+            if len(attempts)==1:
+                now[0]+=timeout
+                raise TimeoutError('first address unresponsive')
+            return Sock()
+        with patch('runner.source_fetch.time.monotonic',side_effect=lambda:now[0]):
+            c=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],10)
+            with patch('runner.source_fetch.socket.create_connection',side_effect=connect),patch.object(c._context,'wrap_socket',side_effect=lambda sock,server_hostname:sock):
+                c.connect()
+        self.assertEqual([a[0] for a in attempts],['93.184.216.34','93.184.216.35'])
+        self.assertLess(attempts[0][1],10)
     def test_already_cancelled_fetch_does_not_launch(self):
         fetcher=SourceFetcher(['https://docs.example.com/'])
         with patch('runner.source_fetch.subprocess.Popen') as launch:
