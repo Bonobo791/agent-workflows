@@ -20,16 +20,20 @@ def observed_identity_matches(unit,invocation,cgroup):
     return result.returncode==0 and fields=={'Id':unit,'LoadState':'loaded','ActiveState':'active','InvocationID':invocation,'ControlGroup':cgroup}
 
 
+def validate_request(path,run,unit,nonce):
+    state=Path(path);parent=state.parent;info=state.lstat();directory=parent.lstat()
+    if (not state.is_absolute() or state.resolve(strict=True)!=state or parent.resolve(strict=True)!=parent
+            or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o022
+            or not stat.S_ISDIR(directory.st_mode) or directory.st_uid!=os.geteuid() or directory.st_mode&0o077
+            or not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run)
+            or not isinstance(unit,str) or not re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit)
+            or not isinstance(nonce,str) or not re.fullmatch(r'[0-9a-f]{64}',nonce)): raise ValueError('invalid stop witness request')
+
+
 def run_stop(path,run,unit,nonce):
     db=None
     try:
-        state=Path(path);parent=state.parent;info=state.lstat();directory=parent.lstat()
-        if (not state.is_absolute() or state.resolve(strict=True)!=state or parent.resolve(strict=True)!=parent
-                or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o022
-                or not stat.S_ISDIR(directory.st_mode) or directory.st_uid!=os.geteuid() or directory.st_mode&0o077
-                or not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run)
-                or not isinstance(unit,str) or not re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit)
-                or not isinstance(nonce,str) or not re.fullmatch(r'[0-9a-f]{64}',nonce)): return False
+        validate_request(path,run,unit,nonce)
         digest=hashlib.sha256(bytes.fromhex(nonce)).hexdigest()
         db=sqlite3.connect(path,timeout=10,isolation_level=None)
         db.execute('BEGIN IMMEDIATE')
