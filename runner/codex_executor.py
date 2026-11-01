@@ -119,7 +119,8 @@ class CodexExecutor:
                 try:
                     self.provenance.graph._lease(run,claim)
                     if cancelled() or not self.provenance.verify(run,role,session,skills): raise ExecutorError('turn binding unavailable')
-                    db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,?,?,?,?,?,'observed',?)",(run,role,execution,session,turn,time.time()))
+                    recorded=db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,?,?,?,?,?,'observed',?)",(run,role,execution,session,turn,time.time()))
+                    if recorded.rowcount!=1 or not db.execute("SELECT 1 FROM execution_link_audit WHERE id=? AND schema_version=1 AND run=? AND role=? AND execution=? AND session=? AND turn=? AND status='observed'",(recorded.lastrowid,run,role,execution,session,turn)).fetchone():raise ExecutorError('turn observation unavailable')
                     db.execute('COMMIT')
                 except Exception: db.execute('ROLLBACK'); raise
             def on_tool(session,turn,item):

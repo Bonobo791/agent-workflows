@@ -33,7 +33,7 @@ class ExecutorTests(unittest.TestCase):
         import sqlite3
         from unittest.mock import patch
         from runner.codex_executor import ExecutorError
-        from runner.local_supervisor import LocalSupervisor
+        from runner.local_supervisor import LocalSupervisor, LocalSupervisorError
         from runner.local_scope import LocalScopes
         from runner.process_transport import ProcessTransport
         from tests.test_local_scope import Backend
@@ -44,7 +44,7 @@ class ExecutorTests(unittest.TestCase):
             def assert_active(self):return True
             def verify_config(self,request):return True
             def open_transport(self,deadline,cancelled):return ProcessTransport(self.process,deadline,cancelled)
-        for failure,error in (('scope',ExecutorError),('insert',sqlite3.IntegrityError),('audit_missing',ExecutorError),('audit_ignored',ExecutorError),('audit_aborted',sqlite3.IntegrityError)):
+        for failure,error in (('scope',ExecutorError),('insert',sqlite3.IntegrityError),('audit_missing',ExecutorError),('audit_ignored',ExecutorError),('audit_aborted',sqlite3.IntegrityError),('session_ignored',LocalSupervisorError)):
             with self.subTest(failure=failure),tempfile.TemporaryDirectory() as root:
                 output=Path(root)/'out';output.mkdir(mode=0o700);art=Path(root)/'art';art.mkdir(mode=0o700)
                 binary=Path(root)/'codex';binary.write_text('x');binary.chmod(0o700)
@@ -56,12 +56,13 @@ class ExecutorTests(unittest.TestCase):
                 elif failure=='insert':graph.db.execute("CREATE TRIGGER reject_scope_link BEFORE INSERT ON local_execution_scopes BEGIN SELECT RAISE(ABORT,'unavailable');END")
                 elif failure=='audit_missing':graph.db.execute('DROP TRIGGER local_execution_scope_audit_insert')
                 elif failure=='audit_ignored':graph.db.execute("CREATE TRIGGER ignore_scope_link BEFORE INSERT ON local_execution_scope_audit BEGIN SELECT RAISE(IGNORE);END")
+                elif failure=='session_ignored':graph.db.execute("CREATE TRIGGER ignore_session BEFORE INSERT ON local_sessions BEGIN SELECT RAISE(IGNORE);END")
                 else:graph.db.execute("CREATE TRIGGER reject_scope_audit BEFORE INSERT ON local_execution_scope_audit BEGIN SELECT RAISE(ABORT,'unavailable');END")
                 try:
                     with patch.object(supervisor,'preflight',return_value=True),patch('runner.local_supervisor.start_local_process',return_value=handle):
                         with self.assertRaises(error):executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
                     self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM local_sessions').fetchone(),(0,))
-                    self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM local_execution_scopes').fetchone(),(0,))
+                    self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM local_execution_scopes').fetchone(),(int(failure=='session_ignored'),))
                     self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_link_audit').fetchone(),(0,))
                     self.assertFalse(supervisor.can_resume('r','canonical_draft','thread',{},'m'))
                     self.assertFalse((output/'draft.txt').exists());self.assertEqual(fenced,['r'])
@@ -177,6 +178,21 @@ with patch.object(supervisor,'preflight',return_value=True), patch('runner.local
                 self.assertEqual(graph.db.execute('SELECT count(*) FROM execution_link_audit').fetchone()[0],0)
                 self.assertEqual(fenced,['r'])
             finally: graph.close()
+
+    def test_missing_turn_observation_fences_without_completion(self):
+        from runner.codex_executor import ExecutorError
+        for trigger in ("BEFORE INSERT ON execution_link_audit WHEN NEW.status='observed' BEGIN SELECT RAISE(IGNORE);END", "AFTER INSERT ON execution_link_audit WHEN NEW.status='observed' BEGIN DELETE FROM execution_link_audit WHERE id=NEW.id;END"):
+            with self.subTest(trigger=trigger),tempfile.TemporaryDirectory() as root:
+                output=Path(root)/'out';output.mkdir();art=Path(root)/'art';art.mkdir(mode=0o700)
+                graph=GraphStore(root+'/db');graph.register(marketing_definition());graph.create('r','marketing');claim=graph.claim('r',60)
+                graph.db.execute('CREATE TRIGGER lose_observation '+trigger)
+                fenced=[];executor=CodexExecutor(Supervisor(str(output)),Provenance(graph),ArtifactStore(str(art)),fenced.append)
+                try:
+                    with self.assertRaises(ExecutorError):executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[])
+                    self.assertFalse(executor.provenance.completed('r','canonical_draft','thread-one'))
+                    self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_link_audit').fetchone(),(0,))
+                    self.assertEqual(fenced,['r'])
+                finally:graph.close()
 
     def test_turn_identity_survives_exit_without_tool_events(self):
         import sqlite3

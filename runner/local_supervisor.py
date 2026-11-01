@@ -95,8 +95,8 @@ class LocalSessionHandle:
             if self.session is None:
                 try: dbh.execute("INSERT INTO local_sessions VALUES(?,?,?,?, 'active')",(self.run,self.role,session,self.binding))
                 except sqlite3.IntegrityError: raise LocalSupervisorError('session already bound') from None
-                self.session=session
-            elif not dbh.execute("SELECT 1 FROM local_sessions WHERE run=? AND role=? AND session=? AND binding=? AND state='active'",(self.run,self.role,session,self.binding)).fetchone(): raise LocalSupervisorError('session binding changed')
+            if not dbh.execute("SELECT 1 FROM local_sessions WHERE run=? AND role=? AND session=? AND binding=? AND state='active'",(self.run,self.role,session,self.binding)).fetchone(): raise LocalSupervisorError('session binding changed')
+            self.session=session
         finally: dbh.close()
     def finish(self):
         if self.handle.finish() is not True: raise LocalSupervisorError('local scope termination unverified')
