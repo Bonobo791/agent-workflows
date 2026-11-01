@@ -179,7 +179,9 @@ class Service:
         if self.model_supervisor is None: raise ServiceError('local manual supervisor unavailable')
         scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
         try:
-            scopes.reconcile_confirmed(run,unit,(self.lifecycle.target['manual_target'],self.lifecycle.incarnation))
+            fenced=(self.lifecycle.target['manual_target'],self.lifecycle.incarnation)
+            if scopes.state(run,unit)=='stopping':scopes.reconcile_witnessed_stop(run,unit,fenced)
+            else:scopes.reconcile_confirmed(run,unit,fenced)
             return {'unit':unit,'state':'terminated'}
         finally:scopes.close()
     def _cancel(self,run,token=None,require_job=False):

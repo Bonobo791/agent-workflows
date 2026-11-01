@@ -93,6 +93,10 @@ the target completed or that an interrupted stop is safe to reconcile.
 `local_scope_recovery_audit` records explicit reconciliation of a confirmed,
 inactive scope in the same transaction as its termination state. A missing
 recovery record rolls back that state change. Export uses the keyed scope ID.
+`local_scope_stop_audit` records a stop reservation, witness claim and completed
+systemd client in order. Each state change requires its matching audit record;
+a missing completion leaves the stop unresolved. The projection omits the
+invocation, cgroup and nonce hash while correlating the scope with a keyed ID.
 `local_command_launch_audit` records the single launch claim for a reserved
 local command in the same transaction. A failed audit write prevents launch;
 the claim does not establish whether a later launch succeeded. Older commands

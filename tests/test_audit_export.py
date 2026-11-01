@@ -36,6 +36,14 @@ class AuditExportTests(unittest.TestCase):
         self.assertEqual(recovery['scope_id'],scope['scope_id'])
         self.assertEqual(_attributes(recovery)['status'],'reconciled')
         self.assertNotIn('private',str(recovery))
+        stop=project_event('local_scope_stop_audit',{'id':4,'schema_version':1,'run':'private-run','unit':'private-unit',
+                           'invocation':'private-invocation','cgroup':'private-cgroup','nonce_hash':'private-nonce',
+                           'status':'completed','created':1},key)
+        self.assertEqual(stop['scope_id'],scope['scope_id']);self.assertEqual(_attributes(stop)['status'],'completed')
+        self.assertNotIn('private',str(stop));self.assertNotIn('nonce_hash',stop)
+        reconciled=project_event('local_scope_recovery_audit',{'id':5,'schema_version':1,'run':'private-run',
+                                 'unit':'private-unit','status':'reconciled_stop','created':1},key)
+        self.assertEqual(_attributes(reconciled)['status'],'reconciled_stop')
 
     def test_checkpoint_delivery_replays_without_exposing_worker_identities(self):
         import sqlite3
