@@ -97,7 +97,6 @@ class CodexExecutor:
                 if cancelled(): raise ExecutorError('execution cancelled')
                 if callable(getattr(handle,'assert_active',None)): handle.assert_active()
             def on_thread(session):
-                if callable(getattr(handle,'bind_session',None)): handle.bind_session(session)
                 from runner.local_supervisor import LocalSessionHandle
                 if isinstance(handle,LocalSessionHandle):
                     from pathlib import Path
@@ -112,6 +111,7 @@ class CodexExecutor:
                         db.execute('INSERT INTO local_execution_scopes VALUES(?,?,?,?,?,?)',(run,role,execution,session,unit,handle.binding))
                         db.execute('COMMIT')
                     except Exception: db.execute('ROLLBACK'); raise
+                if callable(getattr(handle,'bind_session',None)): handle.bind_session(session)
             def on_turn(session,turn):
                 db.execute('BEGIN IMMEDIATE')
                 try:
