@@ -35,7 +35,8 @@ def recover_unadopted(service,run):
     registry=EngineeringWorkspace(local.engineering_root if local is not None else service.docker_supervisor.config.job_root.parent)
     try:
         binding=registry.db.execute('SELECT repository,base,branch,owner,policy FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
-        if not binding: raise EngineeringError('workspace binding unavailable')
+        config=service.task_intake.config; policy=local.policy_hash if local is not None else service.docker_supervisor.config.policy_hash
+        if not binding or binding[0]!=config['github_owner']+'/'+config['github_repo'] or binding[2]!=config['github_branch'] or binding[4]!=policy: raise EngineeringError('workspace binding unavailable')
         registry.recover_unadopted(run,binding[0],binding[1],binding[2],binding[3],binding[4],*row)
     except Exception: raise EngineeringError('rejected correction recovery requires inspection') from None
     finally: registry.close()

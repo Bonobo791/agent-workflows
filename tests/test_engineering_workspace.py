@@ -55,6 +55,12 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         self.assertEqual(git(self.repo,'rev-parse','refs/recovery/run-1/'+rejected),rejected)
         self.assertIsNone(self.service.graph.db.execute('SELECT 1 FROM engineering_unadopted').fetchone())
         recover_unadopted(self.service,'run-1')
+    def test_recovery_refuses_binding_that_differs_from_config(self):
+        from runner.engineering_dispatch import EngineeringError, recover_unadopted
+        approved,rejected=self._rejected_correction_fixture()
+        self.service.task_intake.config={**self.service.task_intake.config,'github_branch':'other'}
+        with self.assertRaises(EngineeringError): recover_unadopted(self.service,'run-1')
+        self.assertEqual(git(self.repo,'rev-parse','HEAD'),rejected)
     def test_recovery_refuses_malformed_revisions(self):
         self._rejected_correction_fixture()
         for bad in ('../x','HEAD','A'*40,''):

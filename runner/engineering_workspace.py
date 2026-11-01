@@ -70,8 +70,9 @@ class EngineeringWorkspace:
         if self._git(path,'rev-parse','--verify',approved+'^{commit}')!=approved or self._git(path,'rev-parse','--verify',rejected+'^{commit}')!=rejected: raise WorkspaceError('recovery revision unavailable')
         self._git(path,'merge-base','--is-ancestor',approved,rejected)
         if head==rejected:
-            if self._git(path,'for-each-ref','--format=%(objectname)',ref) not in ('',rejected): raise WorkspaceError('recovery ref conflict')
-            self._git(path,'update-ref',ref,rejected)
+            existing=self._git(path,'for-each-ref','--format=%(objectname)',ref)
+            if existing not in ('',rejected): raise WorkspaceError('recovery ref conflict')
+            self._git(path,'update-ref',ref,rejected,existing)
         elif head!=approved: raise WorkspaceError('workspace revision mismatch')
         if self._git(path,'rev-parse','--verify',ref+'^{commit}')!=rejected: raise WorkspaceError('recovery ref unavailable')
         if head==rejected:
