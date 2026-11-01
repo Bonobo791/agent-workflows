@@ -70,6 +70,12 @@ class SkillTests(unittest.TestCase):
             (seo/'SKILL.md').symlink_to(other/'SKILL.md')
             with self.assertRaises(SkillError): SkillResolver([root]).resolve(['seo'])
 
+    def test_symlinked_skill_directory_cannot_load_a_sibling_package(self):
+        with tempfile.TemporaryDirectory() as root:
+            sibling=Path(root)/'sibling'; sibling.mkdir(); (sibling/'SKILL.md').write_text('sibling instructions')
+            (Path(root)/'seo').symlink_to(sibling, target_is_directory=True)
+            with self.assertRaises(SkillError): SkillResolver([root]).resolve(['seo'])
+
     def test_unreadable_reference_directory_is_not_silently_omitted(self):
         with tempfile.TemporaryDirectory() as root:
             package=Path(root)/'seo';reference=package/'references';reference.mkdir(parents=True)

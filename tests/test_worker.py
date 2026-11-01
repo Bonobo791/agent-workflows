@@ -448,6 +448,16 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(result['task'],'DEMO-1'); self.assertEqual(service.queue.get('run-1')['status'],'queued')
             finally: service.close()
 
+    def test_startup_requires_seo_skill_for_canonical_draft_and_review(self):
+        with tempfile.TemporaryDirectory() as root:
+            skills=Path(root)/'skills'; skills.mkdir()
+            config={'skill_roots':[str(skills)],'required_skills':{'canonical_draft':['writer'],'canonical_review':['editor']}}
+            service,control=build_control(root,'x'*40,role_config=config)
+            try:
+                self.assertEqual(service.required_skills['canonical_draft'],['writer','plan-seo-geo-growth'])
+                self.assertEqual(service.required_skills['canonical_review'],['editor','plan-seo-geo-growth'])
+            finally: service.close()
+
     def test_live_mode_explains_missing_credential_delivery(self):
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaisesRegex(ConfigurationError,'credential delivery'):
