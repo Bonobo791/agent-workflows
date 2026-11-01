@@ -27,6 +27,36 @@ class Supervisor:
     def can_resume(self,run,role,session): return True  # synthetic app-server fixture
     def start(self,run,role): return Handle(self.root,self.mode,self.thread,self.turn,role)
 class ExecutorTests(unittest.TestCase):
+    def test_interrupted_local_turn_keeps_scope_link_and_fences_session(self):
+        from unittest.mock import patch
+        from runner.local_supervisor import LocalSupervisor
+        from runner.local_scope import LocalScopes
+        from runner.process_transport import ProcessTransport
+        from tests.test_local_scope import Backend
+        class ScopedHandle(Handle):
+            def __init__(self,root,unit):
+                super().__init__(root,'turn_exit','local-thread','local-turn','canonical_draft')
+                self.unit=unit; self.output_path_prefix=root
+            def assert_active(self): return True
+            def verify_config(self,request): return True
+            def open_transport(self,deadline,cancelled): return ProcessTransport(self.process,deadline,cancelled)
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(mode=0o700); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            binary=Path(root)/'codex'; binary.write_text('x'); binary.chmod(0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            backend=Backend(); supervisor=LocalSupervisor(root+'/db',str(binary),{'HOME':root},backend,lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+            scopes=LocalScopes(root+'/db',backend); unit=scopes.reserve('r'); backend.unit=unit; scopes.bind('r',unit); scopes.close()
+            handle=ScopedHandle(str(output),unit); fenced=[]; executor=CodexExecutor(supervisor,Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with patch.object(supervisor,'preflight',return_value=True), patch('runner.local_supervisor.start_local_process',return_value=handle):
+                    with self.assertRaises(Exception): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
+                row=graph.db.execute('SELECT e.session,e.unit,l.turn,l.status FROM local_execution_scopes e JOIN execution_link_audit l ON l.execution=e.execution').fetchone()
+                self.assertEqual(row,('local-thread',unit,'local-turn','observed'))
+                self.assertEqual(graph.db.execute('SELECT state FROM local_sessions').fetchone(),('active',))
+                self.assertFalse(supervisor.can_resume('r','canonical_draft','local-thread',{},'m'))
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
+
     def test_session_binding_failure_prevents_turn_and_fences(self):
         class UnboundHandle(Handle):
             def bind_session(self,session): raise RuntimeError('binding failed')
@@ -95,6 +125,8 @@ class ExecutorTests(unittest.TestCase):
                     result=executor.execute(run='r',role='asset_production',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
                 row=graph.db.execute('SELECT unit,binding FROM local_turn_scopes WHERE run=? AND role=? AND session=? AND turn=?',('r','asset_production',result['session_id'],result['turn_id'])).fetchone()
                 self.assertEqual(row,(unit,supervisor._binding('r','asset_production',{},'m')[1]))
+                linked=graph.db.execute('SELECT unit,binding FROM local_execution_scopes WHERE run=? AND role=? AND session=?',('r','asset_production',result['session_id'])).fetchone()
+                self.assertEqual(linked,row)
                 self.assertEqual(graph.db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('terminated',))
                 scopes=LocalScopes(root+'/db',backend);unit2=scopes.reserve('r');backend.unit=unit2;backend.state='active';scopes.bind('r',unit2);scopes.close()
                 broken=ScopedHandle(str(output),root+'/db',backend,unit2,corrupt=True)
