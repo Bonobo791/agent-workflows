@@ -17,13 +17,14 @@ it again before authorization. Failure closes the authorization pipe. A hung
 parent leaves the guard waiting only until that deadline, cancellation or exit;
 the guard also checks expiry after reading authorization and before execution.
 
-For reconciliation, the controller holds that write lock while it rechecks
-the exact pending manual assignment, cancelled graph, uncertain or cancelling
-job and absence of graph claims. It requires the committed receipt and matching
-audit, the same recorded invocation and cgroup, two inactive observations, an
-empty recorded cgroup and no current systemd job. The terminated transition
-and a distinct recovery audit commit together. Missing or changed evidence
-leaves the scope unresolved. Legacy unconfirmed launches do not qualify.
+For reconciliation, the controller first checks the receipt and observes the
+scope twice as inactive, with an empty recorded cgroup and no current systemd
+job. These systemd calls run without a database write lock, allowing cancellation
+and other writers to proceed. It then takes the write lock and rechecks the
+same receipt and audit, exact pending manual assignment, cancelled graph,
+uncertain or cancelling job and absence of graph claims. Changed or missing
+evidence leaves the scope unresolved. The terminated transition and distinct
+recovery audit commit together. Legacy unconfirmed launches do not qualify.
 
 This evidence assumes the user systemd manager and the installed
 `systemd-run` implement the tested scope-start behavior, the controller code

@@ -80,7 +80,7 @@ class SystemdScopes:
         from runner.local_stop import start_stop_witness
         try:
             process=start_stop_witness(path,run,unit,nonce,self.environment)
-            return process.wait(timeout=50)==0
+            return process.wait(timeout=90)==0
         except (OSError,ValueError,subprocess.SubprocessError):return False
     def no_pending_job(self,unit):
         try:
@@ -226,15 +226,20 @@ class LocalScopes:
                     or info.get('invocation') not in ('',invocation) or info.get('cgroup') not in ('',cgroup)
                     or self.backend.empty_cgroup(cgroup) is not True or self.backend.no_pending_job(unit) is not True):
                 raise ScopeError('scope quiescence unverified')
+    def _require_launch_receipt(self,run,unit):
+        row=self.db.execute("SELECT s.invocation,s.cgroup,r.pid,r.nonce_hash FROM local_scopes s JOIN local_scope_launch_receipts r ON r.run=s.run AND r.unit=s.unit AND r.invocation=s.invocation AND r.cgroup=s.cgroup WHERE s.run=? AND s.unit=? AND s.state='running'",(run,unit)).fetchone()
+        if not row or not valid_scope_identity(unit,row[0],row[1]) or type(row[2]) is not int or row[2]<=1 or not isinstance(row[3],str) or not re.fullmatch(NONCE_PATTERN,row[3]): raise ScopeError('confirmed launch unavailable')
+        audit=self.db.execute("SELECT 1 FROM local_scope_launch_audit WHERE schema_version=1 AND run=? AND unit=? AND invocation=? AND cgroup=? AND pid=? AND nonce_hash=? AND status='bound'",(run,unit,*row)).fetchone()
+        if not audit: raise ScopeError('launch audit unavailable')
+        return row
     def reconcile_confirmed(self,run,unit,fenced):
+        self._require_recovery_fence(run,fenced)
+        row=self._require_launch_receipt(run,unit)
+        self._require_inactive(unit,*row[:2])
         self.db.execute(BEGIN_WRITE)
         try:
             self._require_recovery_fence(run,fenced)
-            row=self.db.execute("SELECT s.invocation,s.cgroup,r.pid,r.nonce_hash FROM local_scopes s JOIN local_scope_launch_receipts r ON r.run=s.run AND r.unit=s.unit AND r.invocation=s.invocation AND r.cgroup=s.cgroup WHERE s.run=? AND s.unit=? AND s.state='running'",(run,unit)).fetchone()
-            if not row or not valid_scope_identity(unit,row[0],row[1]) or type(row[2]) is not int or row[2]<=1 or not isinstance(row[3],str) or not re.fullmatch(NONCE_PATTERN,row[3]): raise ScopeError('confirmed launch unavailable')
-            audit=self.db.execute("SELECT 1 FROM local_scope_launch_audit WHERE schema_version=1 AND run=? AND unit=? AND invocation=? AND cgroup=? AND pid=? AND nonce_hash=? AND status='bound'",(run,unit,*row)).fetchone()
-            if not audit: raise ScopeError('launch audit unavailable')
-            self._require_inactive(unit,*row[:2])
+            if self._require_launch_receipt(run,unit)!=row:raise ScopeError(ASSIGNMENT_CHANGED)
             last=self.db.execute(SCOPE_AUDIT_LAST).fetchone()[0]
             if self.db.execute("UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='running'",(run,unit,*row[:2])).rowcount!=1: raise ScopeError(ASSIGNMENT_CHANGED)
             if not self.db.execute(TERMINATION_AUDIT,(last,run,unit)).fetchone(): raise ScopeError(TRANSITION_AUDIT_UNAVAILABLE)
@@ -244,11 +249,13 @@ class LocalScopes:
         except Exception:
             self.db.execute('ROLLBACK');raise
     def reconcile_witnessed_stop(self,run,unit,fenced):
+        self._require_recovery_fence(run,fenced)
+        row=self._require_stop_receipt(run,unit)
+        self._require_inactive(unit,*row[:2])
         self.db.execute(BEGIN_WRITE)
         try:
             self._require_recovery_fence(run,fenced)
-            row=self._require_stop_receipt(run,unit)
-            self._require_inactive(unit,row[0],row[1])
+            if self._require_stop_receipt(run,unit)!=row:raise ScopeError(ASSIGNMENT_CHANGED)
             last=self.db.execute(SCOPE_AUDIT_LAST).fetchone()[0]
             if self.db.execute(TERMINATE_STOPPING,(run,unit,*row[:2])).rowcount!=1: raise ScopeError(ASSIGNMENT_CHANGED)
             if not self.db.execute(TERMINATION_AUDIT,(last,run,unit)).fetchone(): raise ScopeError(TRANSITION_AUDIT_UNAVAILABLE)
@@ -268,9 +275,10 @@ class LocalScopes:
         try:
             path=self.db.execute('PRAGMA database_list').fetchone()[2]
             if witness(path,run,unit,nonce) is not True: raise ScopeError('witnessed stop uncertain')
-            self.db.execute(BEGIN_WRITE)
             receipt=self._require_stop_receipt(run,unit)
             self._require_inactive(unit,*receipt[:2])
+            self.db.execute(BEGIN_WRITE)
+            if self._require_stop_receipt(run,unit)!=receipt:raise ScopeError(ASSIGNMENT_CHANGED)
             last=self.db.execute(SCOPE_AUDIT_LAST).fetchone()[0]
             if self.db.execute(TERMINATE_STOPPING,(run,unit,*receipt[:2])).rowcount!=1: raise ScopeError(ASSIGNMENT_CHANGED)
             if not self.db.execute(TERMINATION_AUDIT,(last,run,unit)).fetchone(): raise ScopeError(TRANSITION_AUDIT_UNAVAILABLE)

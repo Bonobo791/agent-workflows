@@ -197,23 +197,63 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
                     with self.assertRaises(ScopeError):scopes.reconcile_confirmed('run',unit,('target','inc'))
                 self.assertEqual(scopes.state('run',unit),'running')
 
-    def test_fence_cannot_change_during_reconciliation(self):
+    def test_reconciliation_allows_writes_and_rechecks_fence_after_observation(self):
         import sqlite3
         from unittest.mock import patch
-        with tempfile.TemporaryDirectory() as root:
-            backend,scopes,unit=self.recovery_fixture(root)
-            other=sqlite3.connect(str(Path(root)/'state.db'),timeout=.01,isolation_level=None)
-            original=backend.inspect;attempts=[]
-            def inspect(value):
-                with self.assertRaises(sqlite3.OperationalError):
-                    other.execute("UPDATE manual_assignments SET state='running' WHERE run='run'")
-                attempts.append(value);return original(value)
-            try:
-                with patch.object(backend,'inspect',side_effect=inspect):
-                    self.assertTrue(scopes.reconcile_confirmed('run',unit,('target','inc')))
-                self.assertEqual(len(attempts),2)
-                self.assertEqual(scopes.db.execute("SELECT state FROM manual_assignments WHERE run='run'").fetchone(),('pending',))
-            finally:other.close()
+        for change_fence in (False,True):
+            with self.subTest(change_fence=change_fence),tempfile.TemporaryDirectory() as root:
+                backend,scopes,unit=self.recovery_fixture(root)
+                other=sqlite3.connect(str(Path(root)/'state.db'),timeout=.01,isolation_level=None)
+                original=backend.inspect;attempts=[]
+                def inspect(value):
+                    other.execute("UPDATE manual_assignments SET state=? WHERE run='run'",('running' if change_fence else 'pending',))
+                    attempts.append(value);return original(value)
+                try:
+                    with patch.object(backend,'inspect',side_effect=inspect):
+                        if change_fence:
+                            with self.assertRaises(ScopeError):scopes.reconcile_confirmed('run',unit,('target','inc'))
+                            self.assertEqual(scopes.state('run',unit),'running')
+                            self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scope_recovery_audit').fetchone(),(0,))
+                        else:self.assertTrue(scopes.reconcile_confirmed('run',unit,('target','inc')))
+                    self.assertEqual(len(attempts),2)
+                finally:other.close()
+
+    def test_changed_receipt_or_audit_during_observation_never_terminates(self):
+        import sqlite3
+        for mode in ('confirmed','witnessed_recovery','normal_stop'):
+            for evidence in ('receipt','audit'):
+                with self.subTest(mode=mode,evidence=evidence),tempfile.TemporaryDirectory() as root:
+                    if mode=='confirmed':backend,scopes,unit=self.recovery_fixture(root)
+                    elif mode=='witnessed_recovery':backend,scopes,unit=self.stop_recovery_fixture(root)
+                    else:
+                        backend,scopes,unit,launch=self.fixture(root);scopes.bind_confirmed('run',unit,launch)
+                        def witness(*_):
+                            scopes.db.execute("UPDATE local_scope_stop_operations SET status='active'")
+                            scopes.db.execute("UPDATE local_scope_stop_operations SET status='completed'")
+                            backend.state='inactive';return True
+                        backend.stop_witnessed=witness
+                    other=sqlite3.connect(str(Path(root)/'state.db'),timeout=.01,isolation_level=None)
+                    changed=[]
+                    def observe(_):
+                        if not changed:
+                            table='local_scope_launch_audit' if mode=='confirmed' else 'local_scope_stop_audit'
+                            if evidence=='audit':other.execute('DELETE FROM '+table)
+                            else:
+                                receipt='local_scope_launch_receipts' if mode=='confirmed' else 'local_scope_stop_operations'
+                                other.execute('BEGIN IMMEDIATE')
+                                other.execute('UPDATE '+receipt+' SET nonce_hash=?',('b'*64,))
+                                other.execute('UPDATE '+table+' SET nonce_hash=?',('b'*64,))
+                                other.execute('COMMIT')
+                            changed.append(True)
+                        return True
+                    backend.no_pending_job=observe
+                    try:
+                        operation=(lambda:scopes.reconcile_confirmed('run',unit,('target','inc'))) if mode=='confirmed' else ((lambda:scopes.reconcile_witnessed_stop('run',unit,('target','inc'))) if mode=='witnessed_recovery' else (lambda:scopes.stop('run',unit)))
+                        with self.assertRaises(ScopeError):operation()
+                        self.assertTrue(changed)
+                        self.assertEqual(scopes.state('run',unit),'running' if mode=='confirmed' else 'stopping')
+                        self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scope_recovery_audit').fetchone(),(0,))
+                    finally:other.close()
 
     def test_inactive_scope_reconciliation_rejects_ambiguous_evidence(self):
         mutations=("DELETE FROM local_scope_launch_receipts", "DELETE FROM local_scope_launch_audit",

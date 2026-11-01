@@ -153,6 +153,12 @@ class LocalStopWitnessTests(unittest.TestCase):
                                                    (path,'run','other.scope',nonce),(path,'run',unit,'not-a-token')):
                 with self.subTest(path=candidate,run=run,unit=selected),patch('runner.local_stop_witness.subprocess.run') as command:
                     self.assertFalse(run_stop(candidate,run,selected,token));command.assert_not_called()
+            original_mode=Path(path).stat().st_mode&0o777
+            Path(path).chmod(0o620)
+            try:
+                with patch('runner.local_stop_witness.subprocess.run') as command:
+                    self.assertFalse(run_stop(path,'run',unit,nonce));command.assert_not_called()
+            finally:Path(path).chmod(original_mode)
             Path(root).chmod(0o755)
             try:
                 with patch('runner.local_stop_witness.subprocess.run') as command:
