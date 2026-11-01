@@ -129,7 +129,7 @@ class SessionStore:
             self._finish_backup(home,generation)
             raise SessionError('credential boundary unverified')
         try:
-            result=exporter(path)
+            result=exporter(path,generation)
             self._finish_backup(home,generation)
             return result
         except Exception: raise SessionError('backup outcome unresolved') from None
@@ -142,7 +142,7 @@ class SessionStore:
         if not row: raise SessionError('backup recovery unavailable')
         home,generation=row; path=str(self.homes/home)
         try:
-            if verify_quiescent(job,path) is not True or verify_safe(path) is not True: raise SessionError('backup recovery unverified')
+            if verify_quiescent(job,path,generation) is not True or verify_safe(path) is not True: raise SessionError('backup recovery unverified')
         except Exception: raise SessionError('backup recovery unverified') from None
         db=self.db; db.execute('BEGIN IMMEDIATE')
         try:

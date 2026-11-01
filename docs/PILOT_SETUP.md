@@ -204,7 +204,10 @@ and that the home is safe, then rechecks its private files before making it idle
 The home must remain an owner-only directory owned by the worker, and any directory scan error blocks recovery;
 an incomplete scan is not evidence that the home is safe.
 Recovery is bound to the exact backup generation; legacy interrupted backups
-without a generation remain fenced for inspection.
+without a generation remain fenced for inspection. The trusted exporter receives
+`(home_path, generation)`, and the quiescence verifier receives
+`(job, home_path, generation)`; it must verify that exact operation. Older
+callback signatures cannot recover a backup.
 No production verifier or control endpoint for that recovery is configured.
 
 The controller image provides a `/data` directory owned by UID/GID 10001 with
