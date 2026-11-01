@@ -178,6 +178,13 @@ with patch('runner.source_fetch.socket.getaddrinfo',return_value=[(socket.AF_INE
         with patch('runner.source_fetch.socket.create_connection',side_effect=expire):
             with self.assertRaises(TimeoutError): connection.connect()
 
+    def test_fetch_forwards_all_validated_addresses(self):
+        fetcher=SourceFetcher(['https://docs.example.com/'])
+        addresses=[(2,1,6,'',('93.184.216.34',443)),(2,1,6,'',('93.184.216.35',443))]
+        with patch('runner.source_fetch.socket.getaddrinfo',return_value=addresses),patch.object(fetcher,'_connection',return_value=Connection(Response())) as factory:
+            fetcher._fetch_direct('https://docs.example.com/')
+        self.assertEqual(factory.call_args.args,('docs.example.com',['93.184.216.34','93.184.216.35']))
+
     def test_rejects_unapproved_urls_and_private_dns_before_connecting(self):
         fetcher=SourceFetcher(['https://docs.example.com/'])
         for url in ('http://docs.example.com/','https://evil.example.com/','https://u:p@docs.example.com/','https://docs.example.com:444/','https://127.0.0.1/','https://docs.example.com/?private=data'):
