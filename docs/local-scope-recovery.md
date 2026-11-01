@@ -37,3 +37,13 @@ audit rollback, and a signed-in synthetic worker crash followed by an
 explicitly exited scope. They do not establish containment against every host
 configuration, recover an interrupted stop request, or establish the outcome
 of an external mutation.
+
+An interrupted stop needs separate evidence. An opt-in experiment in
+`tests/test_stop_witness_live.py` keeps a stop client in flight while killing
+its caller. A separate witness can observe successful client exit afterward;
+if the witness is killed, the client can remain in flight and there is no
+completion evidence. This fixture does not create a durable production
+receipt or authorize reconciliation of a `stopping` scope. A production
+witness would need a unique, audited stop claim and an atomic completion
+record tied to the exact scope identity; timeouts, witness death, and a missing
+record must remain unresolved.
