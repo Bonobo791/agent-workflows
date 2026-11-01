@@ -295,7 +295,8 @@ class StageDispatchTests(unittest.TestCase):
             service,dispatcher,queue,claim=self._blocked_canonical_review_fixture(root)
             original_writer=service.graph.get('r','canonical_draft'); original_review=service.graph.get('r','canonical_review')
             service.docker_executor.writer_status='awaiting_review'
-            self.assertEqual(dispatcher.step('r',queue['token'],claim)['status'],'awaiting_review')
+            first=dispatcher.step('r',queue['token'],claim)
+            self.assertEqual((first['status'],first['correction_outcome']),('blocked','awaiting_review'))
             self.assertEqual(dispatcher.step('r',queue['token'],claim),{'status':'blocked'})
             self.assertEqual(len(service.docker_executor.writer_sessions),2)
             self.assertEqual(service.graph.get('r','canonical_draft'),original_writer)
