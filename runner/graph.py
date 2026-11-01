@@ -156,7 +156,8 @@ class GraphStore:
                 if not current or current['version']!=version: raise GraphError('review changed')
             self._invalidate_stages(run,set(versions)|{'assembly'},'review_context_changed')
             self._lease(run,token)
-            if job[2]<=time.time(): raise GraphError('queue claim unavailable')
+            current=self.db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
+            if not current or current[0]!='running' or not isinstance(current[1],str) or not secrets.compare_digest(current[1],queue_claim) or current[2] is None or current[2]<=time.time(): raise GraphError('queue claim unavailable')
             self.db.execute('COMMIT')
         except Exception:
             self.db.execute('ROLLBACK'); raise
