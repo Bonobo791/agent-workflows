@@ -119,7 +119,8 @@ must not contain private skills, credentials, user data or session histories.
   runs a synthetic admitted task through the actual dispatcher to the freeze
   approval gate. By default it does not approve the gate or verify a campaign.
   Adding `WORKFLOW_TEST_CHANNELS=1` applies a fixture-only freeze approval and
-  exercises all five channel drafts and a separate LinkedIn review. It neither
+  exercises five channel drafts and separate LinkedIn, X, Facebook and Reddit
+  reviews. Reddit is blocked without community context. The test neither
   publishes content nor establishes media or community-context acceptance.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its

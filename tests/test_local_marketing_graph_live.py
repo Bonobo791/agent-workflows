@@ -52,7 +52,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
             service.required_skills={'brief':['brief'],'canonical_draft':['writer'],'canonical_review':['editor'],'source_review':['source']}
             if os.environ.get('WORKFLOW_TEST_CHANNELS')=='1':
                 service.required_skills.update({name+'_draft':['channel-writer'] for name in ('linkedin','x','facebook','instagram','reddit')})
-                service.required_skills['linkedin_review']=['channel-editor']
+                service.required_skills.update({name+'_review':['channel-editor'] for name in ('linkedin','x','facebook','reddit')})
             service.page_rules={'note':{'headings':[{'level':1,'text':'Example Domain'}]}}
             service.source_snapshots=SourceSnapshots(service,SourceFetcher(['https://example.com/'],timeout=15)); service.source_reviewer=SourceReviewer(service)
             task={'task_id':'fixture','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[],'format':'note',
@@ -73,12 +73,14 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 for channel in ('linkedin','x','facebook','instagram','reddit'):
                     outcome=dispatcher.step('r',queue['token'],claim)
                     self.assertEqual((outcome['stage'],outcome['status']),(channel+'_draft','passed'))
-                outcome=dispatcher.step('r',queue['token'],claim)
-                self.assertEqual(outcome['stage'],'linkedin_review'); self.assertIn(outcome['status'],('passed','blocked'))
-                self.assertTrue(dispatcher._verify_recorded_review('r','linkedin_review'))
-                draft=json.loads(service.artifacts.get(service.graph.get('r','linkedin_draft')['version']))
-                review=json.loads(service.artifacts.get(service.graph.get('r','linkedin_review')['version']))
-                self.assertNotEqual(draft['session_id'],review['session_id'])
+                for channel in ('linkedin','x','facebook','reddit'):
+                    outcome=dispatcher.step('r',queue['token'],claim)
+                    self.assertEqual(outcome['stage'],channel+'_review'); self.assertIn(outcome['status'],('passed','blocked'))
+                    if channel=='reddit': self.assertEqual(outcome['status'],'blocked')
+                    self.assertTrue(dispatcher._verify_recorded_review('r',channel+'_review'))
+                    draft=json.loads(service.artifacts.get(service.graph.get('r',channel+'_draft')['version']))
+                    review=json.loads(service.artifacts.get(service.graph.get('r',channel+'_review')['version']))
+                    self.assertNotEqual(draft['session_id'],review['session_id'])
             self.assertFalse(unresolved_scope_rows(service.graph.db,'r')); self.assertFalse(unresolved_scope_rows(service.graph.db,'discovery'))
             completed=True
         finally:
