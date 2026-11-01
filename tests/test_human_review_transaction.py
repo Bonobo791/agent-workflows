@@ -52,6 +52,29 @@ class HumanReviewTransactionTests(unittest.TestCase):
                         self.assertEqual(service.queue.get('r')['status'],'running')
                 finally: service.close()
 
+    def test_completion_rechecks_task_freshness_after_approval(self):
+        from runner.queue import QueueError
+        for freshness in (True, False, 'unavailable'):
+            with self.subTest(freshness=freshness), tempfile.TemporaryDirectory() as root:
+                service=Service(root)
+                try:
+                    service.create('r','marketing','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); claim=service.graph.claim('r',60)
+                    service.graph.db.execute("INSERT INTO graph_stages VALUES('r','assembly','awaiting_review','package',1)")
+                    service.task_intake=SimpleNamespace(revalidate=lambda run:True); service.verify_terminal=lambda run:True
+                    service.human_review=HumanReview(service)
+                    service.human_review.decide('r',queue['token'],claim,'package','approved')
+                    def revalidate(run):
+                        if freshness=='unavailable': raise RuntimeError('offline')
+                        return freshness
+                    service.task_intake.revalidate=revalidate
+                    if freshness is True:
+                        service.finish_job('r',queue['token'])
+                        self.assertEqual(service.queue.get('r')['status'],'completed')
+                    else:
+                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                        self.assertEqual(service.queue.get('r')['status'],'running')
+                finally: service.close()
+
     def test_completion_requires_review_service_only_for_marketing(self):
         from runner.queue import QueueError
         for workflow in ('marketing','engineering'):

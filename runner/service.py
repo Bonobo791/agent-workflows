@@ -293,6 +293,11 @@ class Service:
             return True
         except Exception: return False
     def finish_job(self,run,queue_token):
+        if self.graph._definition(run).name=='marketing':
+            from runner.queue import QueueError
+            try: fresh=self.task_intake is not None and self.task_intake.revalidate(run) is True
+            except Exception: fresh=False
+            if not fresh: raise QueueError('task freshness unavailable or changed')
         def verified(run):
             if not self.verify_terminal(run): return False
             if self.graph._definition(run).name!='marketing': return True
