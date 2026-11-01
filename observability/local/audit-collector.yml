@@ -1,0 +1,25 @@
+# Explicit local-only example. Publish the receiver port only on host loopback.
+extensions:
+  bearertokenauth/server:
+    filename: /config/token
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        traces_url_path: /api/v1/private/otel/v1/traces
+        auth:
+          authenticator: bearertokenauth/server
+exporters:
+  file:
+    path: /store/audit.json
+    rotation:
+      max_megabytes: 10
+      max_backups: 5
+      max_days: 7
+service:
+  extensions: [bearertokenauth/server]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file]

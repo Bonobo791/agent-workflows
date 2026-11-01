@@ -17,6 +17,8 @@ ALERTS={
     'WorkflowAwaitingApproval':'Workflow approval is waiting',
     'WorkflowMetricsStale':'Workflow metrics are stale',
     'WorkflowMetricsMissing':'Workflow metrics are unavailable',
+    'WorkflowAuditDeliveryFailed':'Workflow audit delivery is failing',
+    'WorkflowAuditDeliveryStale':'Workflow audit delivery status is stale or unavailable',
 }
 
 

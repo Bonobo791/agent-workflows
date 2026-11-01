@@ -1,0 +1,14 @@
+[Unit]
+Description=Agent Workflows private audit collector
+
+[Service]
+Type=simple
+KillMode=mixed
+ExecStart=/usr/bin/podman run --rm --pull=never --name=agent-workflows-audit-collector -p 127.0.0.1:14318:4318 --userns=keep-id --user=%U:%G --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp -v %h/.config/agent-workflows/audit-collector:/config:ro,Z -v %h/.local/share/agent-workflows-monitor/audit:/store:rw,Z docker.io/otel/opentelemetry-collector-contrib@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b --config=/config/collector.yml
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

@@ -105,7 +105,9 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             (config / 'web.yml').write_text('basic_auth_users:\n  workflow: "$2b$04$abcdefghijklmnopqrstuuxDugxrpcpW3csMl3JkYMLtX7yxJF.2."\n')
             observability = Path(__file__).resolve().parents[1] / 'observability'
             rules = (observability / 'alerts.yml').read_text()
-            (config / 'alerts.yml').write_text(rules.replace('for: 10m', 'for: 1s'))
+            rules=rules.replace('for: 10m', 'for: 1s')
+            if os.environ.get('WORKFLOW_TEST_AUDIT_ALERT')=='1': rules=rules.replace('for: 5m','for: 1s')
+            (config / 'alerts.yml').write_text(rules)
             alert_config = (observability / 'local' / 'alertmanager.yml').read_text()
             alert_config = alert_config.replace('127.0.0.1:19192', f'127.0.0.1:{receiver.server_port}')
             alert_config = alert_config.replace('group_wait: 10s', 'group_wait: 0s').replace('group_interval: 5m', 'group_interval: 1s')
@@ -119,6 +121,11 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                    'WORKFLOW_METRICS_HTTP_SECRET_FILE': str(config / 'scrape-token'),
                    'WORKFLOW_METRICS_HTTP_PORT': str(metrics_port)}
             env.pop('WORKFLOW_CONTROL_DIR', None)
+            if os.environ.get('WORKFLOW_TEST_AUDIT_ALERT')=='1':
+                health=root/'audit-health'; health.mkdir(mode=0o700)
+                env['WORKFLOW_AUDIT_HEALTH_DIR']=str(health)
+                from runner.audit_health import publish
+                publish(health,True)
             def start_worker():
                 process = subprocess.Popen([sys.executable, '-m', 'runner.worker'], env=env,
                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -267,6 +274,8 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                                          'maxDataPoints': 100, 'datasource': {'type': 'prometheus', 'uid': 'workflow'}}]})
                         query = result['results']['A']
                         self.assertNotIn('error', query)
+                        if os.environ.get('WORKFLOW_TEST_AUDIT_ALERT')=='1' and panel.get('id') in (9,10):
+                            self.assertTrue(query.get('frames'),'audit delivery dashboard has no data')
                         frames += len(query.get('frames', []))
                 self.assertGreater(frames, 0, 'Grafana did not return any dashboard data')
                 if os.environ.get('WORKFLOW_GRAFANA_BROWSER_TEST') == '1':
@@ -310,6 +319,17 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                 try: events.get(timeout=max(0.01,deadline-time.monotonic()))
                 except queue.Empty: break
             wait_up('1')
+            if os.environ.get('WORKFLOW_TEST_AUDIT_ALERT')=='1':
+                def expect_audit(resolved):
+                    deadline=time.monotonic()+45
+                    while time.monotonic()<deadline:
+                        try: title,body=events.get(timeout=1)
+                        except queue.Empty: continue
+                        if 'audit delivery is failing' in body.lower() and ('resolved' in title)==resolved: return
+                    self.fail('missing audit delivery '+('resolution' if resolved else 'failure'))
+                publish(health,False); expect_audit(False)
+                publish(health,True); expect_audit(True)
+                if os.environ.get('WORKFLOW_TEST_AUDIT_ALERT_COMBINED')!='1': return
             def notifications():
                 metrics = request(f'http://127.0.0.1:{alert_port}/metrics', True).decode()
                 return sum(float(line.rsplit('}',1)[1].split()[0]) for line in metrics.splitlines()

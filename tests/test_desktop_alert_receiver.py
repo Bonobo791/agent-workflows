@@ -51,6 +51,12 @@ class DesktopAlertReceiverTests(unittest.TestCase):
         finally:connection.close()
         self.assertEqual(self.received,[])
 
+    def test_audit_delivery_alerts_are_fixed_and_do_not_show_annotations(self):
+        for name in ('WorkflowAuditDeliveryFailed','WorkflowAuditDeliveryStale'):
+            response=self.request({'alerts':[{'status':'firing','labels':{'alertname':name},'annotations':{'summary':'private text'}}]})
+            self.assertEqual(response,204)
+        self.assertEqual(self.received,[('Agent Workflows alert','Workflow audit delivery is failing'),('Agent Workflows alert','Workflow audit delivery status is stale or unavailable')])
+
     def test_duplicate_authorization_is_rejected(self):
         data=b'{"alerts":[]}'
         connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)

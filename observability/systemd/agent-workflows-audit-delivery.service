@@ -1,0 +1,14 @@
+[Unit]
+Description=Deliver a bounded page from each local workflow audit table
+After=agent-workflows-audit-collector.service
+Wants=agent-workflows-audit-collector.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/agent-workflows/audit.env
+ExecStart=/usr/bin/python3 -m runner.audit_delivery --source ${WORKFLOW_AUDIT_SOURCE} --cursor ${WORKFLOW_AUDIT_CURSOR} --key-file ${WORKFLOW_AUDIT_KEY_FILE} --endpoint http://127.0.0.1:14318/api/v1/private/otel/v1/traces --all-present --health-directory ${WORKFLOW_AUDIT_HEALTH_DIR} --token-file %h/.config/agent-workflows/audit-collector/token
+TimeoutStartSec=300s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full

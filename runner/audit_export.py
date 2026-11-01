@@ -128,6 +128,17 @@ def export_page(db, table, after, limit, key, exporter=None):
     return {'status': 'exported', 'cursor': last}
 
 
+def _event_anchor(event,key):
+    encoded=json.dumps(event,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    return hmac.new(key,b'audit-cursor-v1:'+encoded,hashlib.sha256).hexdigest()
+
+
+def _cursor_anchor(db,table,position,key):
+    events,last=read_events(db,table,position-1,1,key)
+    if last!=position or len(events)!=1: return None
+    return _event_anchor(events[0],key)
+
+
 def deliver_page(audit_db, cursor_db, destination, table, limit, key, exporter=None):
     """Export at least once and checkpoint only in a separate local database."""
     if exporter is None: return {'status':'disabled'}
@@ -136,20 +147,41 @@ def deliver_page(audit_db, cursor_db, destination, table, limit, key, exporter=N
     cursor_path=cursor_db.execute('PRAGMA database_list').fetchone()[2]
     if not audit_path or not cursor_path or os.path.samefile(audit_path,cursor_path): raise ValueError('separate durable cursor database required')
     stream=hmac.new(key,json.dumps(['audit-delivery-v1',os.path.realpath(audit_path),destination],separators=(',',':')).encode(),hashlib.sha256).hexdigest()
+    after,anchor=_read_checkpoint(cursor_db,stream,table)
+    if after and (not anchor or anchor[0]!=after or _cursor_anchor(audit_db,table,after,key)!=anchor[1]): return {'status':'inspection_required','cursor':after}
+    events,last=read_events(audit_db,table,after,limit,key)
+    if not events: return {'status':'empty','cursor':after}
+    end_anchor=_event_anchor(events[-1],key)
+    if _cursor_anchor(audit_db,table,last,key)!=end_anchor: return {'status':'inspection_required','cursor':after}
+    try:
+        if exporter(events) is not True: return {'status':'unavailable','cursor':after}
+    except Exception: return {'status':'unavailable','cursor':after}
+    if (after and _cursor_anchor(audit_db,table,after,key)!=anchor[1]) or _cursor_anchor(audit_db,table,last,key)!=end_anchor: return {'status':'inspection_required','cursor':after}
+    return _write_checkpoint(cursor_db,stream,table,after,last,end_anchor)
+
+
+def _read_checkpoint(cursor_db,stream,table):
     cursor_db.execute('CREATE TABLE IF NOT EXISTS export_cursors(stream TEXT NOT NULL, table_name TEXT NOT NULL, position INTEGER NOT NULL CHECK(position>=0), PRIMARY KEY(stream,table_name))')
+    cursor_db.execute('CREATE TABLE IF NOT EXISTS export_cursor_anchors(stream TEXT NOT NULL, table_name TEXT NOT NULL, position INTEGER NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(stream,table_name))')
     cursor_db.execute('BEGIN IMMEDIATE')
     try:
         cursor_db.execute('INSERT OR IGNORE INTO export_cursors VALUES(?,?,0)',(stream,table))
         after=cursor_db.execute('SELECT position FROM export_cursors WHERE stream=? AND table_name=?',(stream,table)).fetchone()[0]
+        anchor=cursor_db.execute('SELECT position,digest FROM export_cursor_anchors WHERE stream=? AND table_name=?',(stream,table)).fetchone()
         cursor_db.execute('COMMIT')
     except Exception:
         cursor_db.execute('ROLLBACK'); raise
-    result=export_page(audit_db,table,after,limit,key,exporter)
-    if result['status']!='exported': return result
+    return after,anchor
+
+
+def _write_checkpoint(cursor_db,stream,table,after,last,end_anchor):
     cursor_db.execute('BEGIN IMMEDIATE')
     try:
-        changed=cursor_db.execute('UPDATE export_cursors SET position=? WHERE stream=? AND table_name=? AND position=?',(result['cursor'],stream,table,after)).rowcount
+        changed=cursor_db.execute('UPDATE export_cursors SET position=? WHERE stream=? AND table_name=? AND position=?',(last,stream,table,after)).rowcount
+        if changed:
+            cursor_db.execute('INSERT OR REPLACE INTO export_cursor_anchors VALUES(?,?,?,?)',(stream,table,last,end_anchor))
         current=cursor_db.execute('SELECT position FROM export_cursors WHERE stream=? AND table_name=?',(stream,table)).fetchone()[0]
+        if changed and (current!=last or cursor_db.execute('SELECT position,digest FROM export_cursor_anchors WHERE stream=? AND table_name=?',(stream,table)).fetchone()!=(last,end_anchor)): raise ValueError('audit cursor checkpoint unavailable')
         cursor_db.execute('COMMIT')
     except Exception:
         cursor_db.execute('ROLLBACK'); raise

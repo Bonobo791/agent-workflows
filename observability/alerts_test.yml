@@ -92,3 +92,109 @@ tests:
       - eval_time: 6m
         alertname: WorkflowUncertainExecution
         exp_alerts: []
+  - name: audit delivery failure resolves after a successful attempt
+    interval: 1m
+    input_series:
+      - series: 'workflow_audit_delivery_configured'
+        values: '1+0x15'
+      - series: 'workflow_audit_delivery_last_attempt_timestamp_seconds'
+        values: '0+60x15'
+      - series: 'workflow_audit_delivery_last_attempt_success'
+        values: '0 0 0 0 0 0 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WorkflowAuditDeliveryFailed
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow audit delivery is failing
+              description: Inspect the local delivery service and collector before retrying.
+      - eval_time: 6m
+        alertname: WorkflowAuditDeliveryFailed
+        exp_alerts: []
+  - name: configured audit delivery never reporting alerts only after startup grace
+    interval: 1m
+    input_series:
+      - series: 'workflow_audit_delivery_configured'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow audit delivery status is stale or unavailable
+              description: Inspect the delivery timer and its private health file.
+  - name: first health snapshot after startup does not alert
+    interval: 1m
+    input_series:
+      - series: 'workflow_audit_delivery_configured'
+        values: '1+0x10'
+      - series: 'workflow_audit_delivery_last_attempt_timestamp_seconds'
+        values: '_ _ _ 180+60x7'
+      - series: 'workflow_audit_delivery_last_attempt_success'
+        values: '_ _ _ 1+0x7'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+  - name: optional audit delivery does not alert when unconfigured
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+  - name: stopped audit delivery becomes stale
+    interval: 1m
+    input_series:
+      - series: 'workflow_audit_delivery_configured'
+        values: '1+0x15'
+      - series: 'workflow_audit_delivery_last_attempt_timestamp_seconds'
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow audit delivery status is stale or unavailable
+              description: Inspect the delivery timer and its private health file.
+  - name: removed failure snapshot immediately reports unavailable status
+    interval: 1m
+    input_series:
+      - series: 'workflow_audit_delivery_configured'
+        values: '1+0x8'
+      - series: 'workflow_audit_delivery_last_attempt_timestamp_seconds'
+        values: '0+60x5 stale'
+      - series: 'workflow_audit_delivery_last_attempt_success'
+        values: '0+0x5 stale'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WorkflowAuditDeliveryFailed
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow audit delivery is failing
+              description: Inspect the local delivery service and collector before retrying.
+      - eval_time: 6m
+        alertname: WorkflowAuditDeliveryFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Workflow audit delivery status is stale or unavailable
+              description: Inspect the delivery timer and its private health file.

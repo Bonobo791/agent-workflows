@@ -158,9 +158,135 @@ SQLite database, advances after the supplied exporter acknowledges success,
 and uses compare-and-swap when senders race. Both databases and the correlation
 key must be kept private; the caller supplies connections and a bounded-time
 exporter. Changing the key, source database path or destination replays history;
-restoring a source at the same path requires explicit cursor reconciliation.
-No background dispatcher or cursor database is configured, so delivery is not
-called by the worker. `OpenTelemetryAuditExporter` adapts these events to an explicitly
+a keyed digest of the last exported projected event detects a missing or changed
+checkpoint after a restore and returns `inspection_required` without advancing.
+A nonzero cursor created before checkpoint digests were introduced also requires
+inspection; do not silently reset it. This detects a changed checkpoint, not all
+possible alterations to earlier history, so stop delivery while restoring the
+source and explicitly reconcile cursors before resuming. A restore racing with
+an export is not atomic across the two databases and may cause duplicate or
+missed delivery.
+
+Recovering a table that reports `inspection_required` (including a cursor written
+before checkpoint digests existed) is a manual decision; delivery never re-anchors
+a position by itself, because an anchor created now would vouch for history nobody
+has verified. Stop the delivery timer, then establish the cause by comparing the
+source database with an independent copy or the collector output. If continuity
+cannot be shown, replay the table: back up the cursor database, then remove that
+table's rows (this affects every source and destination using that cursor database):
+
+```sh
+sqlite3 /private/audit-cursors.db \
+  "DELETE FROM export_cursor_anchors WHERE table_name='graph_audit'; DELETE FROM export_cursors WHERE table_name='graph_audit';"
+```
+
+The next run re-delivers the whole table from its first row and records a fresh
+anchor. Receivers must tolerate duplicates; replay does not remove events already
+delivered. Restart the timer afterwards and confirm the health status is successful.
+There is no supported way to keep an old position without verification. No background dispatcher or cursor database is configured, so delivery is not
+called by the worker. An operator can explicitly deliver one bounded page per selected table:
+
+```sh
+python -m runner.audit_delivery --source /private/state.db --cursor /private/audit-cursors.db \
+  --key-file /private/audit-key --endpoint http://127.0.0.1:5173/api/v1/private/otel/v1/traces \
+  --table graph_audit --table claim_audit
+```
+
+Select distinct existing tables, or use `--all-present` to select every known
+audit table present in a worker database. That mode requires the core graph,
+claim, job, action and attempt tables. The command checks that every
+selected table exists before sending, processes them in the supplied order, and
+stops at the first unavailable or ambiguous result. Each table has its own
+cursor; repeat the command to drain additional pages. Multiple tables produce a
+JSON object of per-table results. A nonzero exit can follow successful earlier
+tables, whose cursors remain committed.
+
+The database directories and files must be owned by the current user and private;
+the source must already exist. Delivery holds the checked database descriptors
+until their SQLite connections close and verifies the opened database identity.
+Keep source restoration and cursor reconciliation outside an active delivery.
+The key is an owner-only file with at least 32
+characters and must remain stable for replay. An optional `--token-file` supplies
+an owner-only bearer token. Install `requirements-observability.txt` separately.
+The endpoint must be explicit; HTTP is allowed only on loopback. The command
+prints only a delivery status and returns nonzero for unavailable or ambiguous
+outcomes. Schedule it only after the destination's authentication, retention and
+access controls have been verified. The local receiver test does not establish
+compatibility with a deployed Opik server.
+
+A disposable compatibility test also sends synthetic events to the official
+OpenTelemetry Collector with its OTLP/HTTP trace path explicitly configured
+([receiver documentation](https://github.com/open-telemetry/opentelemetry-collector/blob/main/receiver/otlpreceiver/README.md)).
+On 2026-11-01 it passed using collector 0.164.0, local image ID
+`sha256:ee8d3ccd0de2384b135504d71fa9b99a2a585572384bcd01e01b509c9f9c4d89`
+and manifest digest `sha256:28b6d41ac51bff6b41ba5e8fe503569ffb9d6a1ea90f7a78419e86f34e44f750`.
+The test stops and restarts the collector, checks retry and cursor persistence,
+and verifies debug output excludes the synthetic raw run and content. Run it
+only with a trusted local image using:
+
+```sh
+WORKFLOW_TEST_OTEL_IMAGE=<image-id> python -m unittest tests.test_audit_collector_integration
+```
+ Its debug exporter and
+loopback listener do not establish durable storage, authentication, retention,
+or Opik compatibility.
+
+`observability/local/audit-collector.yml` is an opt-in Collector Contrib example
+with bearer authentication and a rotating file exporter. Publish its receiver
+only on host loopback; provide a private `/config/token` and private `/store`
+directory. Anyone holding the token can submit arbitrary telemetry, so restrict
+access to the token and stored files. The example requests rotation at 10 MB,
+up to five backups and seven days for rotated files. Age cleanup happens only
+when a size rotation occurs; the active file can remain longer. The
+[upstream file exporter documentation](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/fileexporter/README.md)
+states that files are not fsynced, so an acknowledged export is not proof of
+crash-durable storage. It has no exporter queue or retry and is not an Opik
+backend. Choose retention and backups for the actual deployment.
+
+On 2026-11-01 an isolated test used Collector Contrib 0.164.0, image ID
+`sha256:28ebddf51f59e38ac800c9f91120726cfb312af377da8908807e0b566a82b017`
+and manifest digest `sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b`.
+It verified rejected missing/wrong bearer tokens, cursor preservation on rejection,
+synthetic delivery after restart, file persistence and size-triggered rotation.
+It did not test age-based cleanup, backup limits, a host crash, or installation.
+
+Optional user-systemd examples are provided for a collector and periodic
+bounded delivery in `observability/systemd`. They are not installed or enabled.
+Place the collector example at `~/.config/agent-workflows/audit-collector/collector.yml`
+and a distinct owner-only bearer token at `audit-collector/token`; create the
+private output directory `~/.local/share/agent-workflows-monitor/audit`. Pull the
+pinned image only after reviewing it. Copy `observability/local/audit.env.example`
+to `~/.config/agent-workflows/audit.env` with absolute paths to the private
+worker database, separate cursor database, stable correlation key, and checkout.
+The delivery unit runs `/usr/bin/python3`; `requirements-observability.txt`
+must be installed for that interpreter. If using a virtual environment instead,
+change the unit to its absolute Python path before enabling it.
+The collector unit publishes only host loopback port 14318. The timer runs one
+bounded page per currently present audit table once per minute after the prior
+run finishes; nonzero status is recorded by systemd and retried at the next
+interval. New tables are picked up on a later run. To monitor delivery, set `WORKFLOW_AUDIT_HEALTH_DIR` in both `audit.env` and
+`monitor.env` to the same private directory. Create it before enabling delivery
+with `install -d -m 0700 /absolute/private/health-directory`. The command atomically records
+only the last attempt time and success or failure there; the authenticated
+metrics endpoint exposes those values. The alert rules signal a failed attempt
+after five minutes, stale attempts after five minutes without an update,
+and missing or invalid configured health on the next rule evaluation. If monitoring is not configured,
+no audit delivery alert is emitted. These checks do not guarantee the backlog is
+drained or establish durable retention. Review the units and file-exporter
+limitations above before enabling them.
+The delivery unit uses `PrivateTmp=yes`: its checkout, database, cursor, key and
+`WORKFLOW_AUDIT_HEALTH_DIR` directory must not be under a host `/tmp` path hidden from that unit. On 2026-11-01 the
+collector and delivery commands and their hardening properties passed as
+temporary user-systemd units, including collector stop and restart. The timer
+was syntax-checked, but none of these units was installed or exercised as a
+persistent service. To repeat the transient delivery test, set
+`WORKFLOW_TEST_AUDIT_SYSTEMD=1` alongside `WORKFLOW_TEST_OTEL_CONTRIB_IMAGE` in
+the collector integration command above.
+
+```sh
+WORKFLOW_TEST_OTEL_CONTRIB_IMAGE=<image-id> python -m unittest tests.test_audit_collector_auth_integration
+```
+ `OpenTelemetryAuditExporter` adapts these events to an explicitly
 provided OpenTelemetry SDK log exporter and acknowledges only SDK success. Its
 optional dependencies are pinned in `requirements-observability.txt`; no
 endpoint or exporter is enabled automatically. The caller must bound exporter
@@ -262,8 +388,8 @@ non-activated Prometheus rule file. Alertmanager deduplication and routing are
 deployment configuration and have not been configured or verified here.
 `observability/dashboard.json` is an importable Grafana dashboard definition
 for the same snapshot metrics; its evidence-gaps panel explicitly identifies
-unavailable measurements. Neither the dashboard nor alert rules have been
-imported into a live service. Prometheus `promtool` 3.15.1 validated the rule
+unavailable measurements. The disposable integration probes described above exercised dashboard import
+and alert routing; no persistent production service is configured here. Prometheus `promtool` 3.15.1 validated the rule
 syntax and `promtool test rules observability/alerts_test.yml` exercised alert
 wait periods, resolution, and stale versus missing snapshots locally. This does
 not verify collection, alert routing, notifications, or deployment.

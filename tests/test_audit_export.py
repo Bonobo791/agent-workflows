@@ -266,6 +266,85 @@ class AuditExportTests(unittest.TestCase):
                 with self.assertRaises(ValueError): deliver_page(graph.db,graph.db,'x','graph_audit',10,b'x'*32,lambda _:True)
             finally: cursors.close(); graph.close()
 
+    def test_restored_older_state_does_not_silently_skip_audit_history(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/state.db'); graph.register(engineering_definition()); graph.create('run','engineering'); token=graph.claim('run',60)
+            graph.finish('run','intake',graph.prepare('run','intake',token),'passed','result',token)
+            snapshot=sqlite3.connect(root+'/snapshot.db'); graph.db.backup(snapshot)
+            graph.finish('run','plan',graph.prepare('run','plan',token),'passed','result',token)
+            cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None)
+            try:
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda _:True)['cursor'],2)
+                snapshot.backup(graph.db)
+                seen=[]
+                result=deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda events:seen.extend(events) or True)
+                self.assertEqual(result,{'status':'inspection_required','cursor':2})
+                self.assertEqual(seen,[])
+            finally: cursor.close(); snapshot.close(); graph.close()
+
+    def test_changed_checkpoint_and_legacy_cursor_require_inspection(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/state.db'); graph.register(engineering_definition()); graph.create('run','engineering'); token=graph.claim('run',60)
+            graph.finish('run','intake',graph.prepare('run','intake',token),'passed','result',token)
+            cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None)
+            try:
+                deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda _:True)
+                graph.db.execute("UPDATE graph_audit SET status='failed' WHERE id=1")
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda _:True),{'status':'inspection_required','cursor':1})
+                graph.db.execute("UPDATE graph_audit SET status='passed' WHERE id=1")
+                cursor.execute('DELETE FROM export_cursor_anchors')
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda _:True),{'status':'inspection_required','cursor':1})
+            finally: cursor.close(); graph.close()
+
+    def test_documented_cursor_reset_replays_table_without_accepting_old_position(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/state.db'); graph.register(engineering_definition()); graph.create('run','engineering'); token=graph.claim('run',60)
+            graph.finish('run','intake',graph.prepare('run','intake',token),'passed','result',token)
+            cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None); key=b'x'*32; sent=[]
+            try:
+                first=deliver_page(graph.db,cursor,'target','graph_audit',10,key,lambda events:sent.append(len(events)) or True)
+                cursor.execute('DELETE FROM export_cursor_anchors')
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,key,lambda _:True),{'status':'inspection_required','cursor':first['cursor']})
+                cursor.execute("DELETE FROM export_cursor_anchors WHERE table_name='graph_audit'")
+                cursor.execute("DELETE FROM export_cursors WHERE table_name='graph_audit'")
+                replayed=deliver_page(graph.db,cursor,'target','graph_audit',10,key,lambda events:sent.append(len(events)) or True)
+                self.assertEqual(sent,[first['cursor'],first['cursor']]); self.assertEqual(replayed['cursor'],first['cursor'])
+                self.assertEqual(cursor.execute('SELECT COUNT(*) FROM export_cursor_anchors').fetchone()[0],1)
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,key,lambda _:True)['status'],'empty')
+            finally: cursor.close(); graph.close()
+
+    def test_history_change_during_export_does_not_advance_cursor(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/state.db'); graph.register(engineering_definition()); graph.create('run','engineering'); token=graph.claim('run',60)
+            graph.finish('run','intake',graph.prepare('run','intake',token),'passed','result',token)
+            cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None)
+            try:
+                def change(_):
+                    graph.db.execute("UPDATE graph_audit SET status='failed' WHERE id=1")
+                    return True
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,change),{'status':'inspection_required','cursor':0})
+                self.assertEqual(cursor.execute('SELECT position FROM export_cursors').fetchone(),(0,))
+            finally: cursor.close(); graph.close()
+
+    def test_anchor_write_failure_does_not_acknowledge_delivered_page(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/state.db'); graph.register(engineering_definition()); graph.create('run','engineering'); token=graph.claim('run',60)
+            graph.finish('run','intake',graph.prepare('run','intake',token),'passed','result',token)
+            cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None)
+            try:
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda _:False)['status'],'unavailable')
+                cursor.execute("CREATE TRIGGER reject_anchor BEFORE INSERT ON export_cursor_anchors BEGIN SELECT RAISE(IGNORE); END")
+                with self.assertRaises(ValueError): deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda _:True)
+                self.assertEqual(cursor.execute('SELECT position FROM export_cursors').fetchone(),(0,))
+                cursor.execute('DROP TRIGGER reject_anchor')
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda _:True),{'status':'exported','cursor':1})
+            finally: cursor.close(); graph.close()
+
     def test_concurrent_delivery_never_moves_cursor_backwards(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as root:

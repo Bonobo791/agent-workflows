@@ -49,3 +49,36 @@ groups:
         annotations:
           summary: Workflow metrics are unavailable
           description: Check collector and scrape configuration; absence is not zero activity.
+      - alert: WorkflowAuditDeliveryFailed
+        expr: workflow_audit_delivery_last_attempt_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow audit delivery is failing
+          description: Inspect the local delivery service and collector before retrying.
+      # Stopped delivery: the latest attempt is older than five minutes.
+      - alert: WorkflowAuditDeliveryStale
+        expr: time() - workflow_audit_delivery_last_attempt_timestamp_seconds > 300
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow audit delivery status is stale or unavailable
+          description: Inspect the delivery timer and its private health file.
+      # A status that existed within the last day disappeared (deleted or invalid file): alert at once.
+      - alert: WorkflowAuditDeliveryStale
+        expr: (workflow_audit_delivery_configured == 1 unless on() workflow_audit_delivery_last_attempt_timestamp_seconds) and on() (count_over_time(workflow_audit_delivery_last_attempt_timestamp_seconds[1d]) > 0)
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow audit delivery status is stale or unavailable
+          description: Inspect the delivery timer and its private health file.
+      # No status was ever reported: allow 15 minutes for the first timer run before alerting.
+      - alert: WorkflowAuditDeliveryStale
+        expr: (workflow_audit_delivery_configured == 1 unless on() workflow_audit_delivery_last_attempt_timestamp_seconds) unless on() (count_over_time(workflow_audit_delivery_last_attempt_timestamp_seconds[1d]) > 0)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow audit delivery status is stale or unavailable
+          description: Inspect the delivery timer and its private health file.

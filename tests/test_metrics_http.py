@@ -50,5 +50,18 @@ class MetricsHttpTests(unittest.TestCase):
         self.server.collect=lambda:'x'*65537
         self.assertEqual(self.request()[0],503)
 
+    def test_optional_audit_health_is_appended_without_exposing_paths(self):
+        import os
+        import tempfile
+        from unittest.mock import patch
+        from runner.audit_health import publish
+        from runner.metrics_http import collect_metrics
+        with tempfile.TemporaryDirectory() as root:
+            publish(root,False)
+            with patch.dict(os.environ,{'WORKFLOW_AUDIT_HEALTH_DIR':root}), patch('runner.metrics_http.read_metrics',return_value='worker_metric 1\n'):
+                result=collect_metrics()
+            self.assertIn('workflow_audit_delivery_last_attempt_success 0\n',result)
+            self.assertNotIn(root,result)
+
     def test_invalid_secret_is_rejected(self):
         with self.assertRaises(ValueError):build_server('short',lambda:'',port=0)
