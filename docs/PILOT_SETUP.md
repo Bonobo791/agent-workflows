@@ -24,6 +24,8 @@ must not contain private skills, credentials, user data or session histories.
   under the private state directory. Local engineering uses the separately
   provisioned and explicitly bound checkout described below. Never put
   credentials in this JSON file.
+  If the scope preflight reports an inspection path, retain its state database
+  and inspect the recorded unit and systemd scope before retrying or cleanup.
   To inspect the current launch inputs without printing configuration values,
   run `python -m runner.local_config_inspect /absolute/path/to/codex /private/state`.
   The directory must already exist and be owner-only. The command prints the

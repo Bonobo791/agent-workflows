@@ -35,14 +35,14 @@ def sandbox_preflight(executable,environment):
 
 def scope_preflight(environment):
     """Check a real user scope kills a synthetic detached child."""
-    import os, select
+    import os, select, sys
     from runner.local_scope import LocalScopes, SystemdScopes
     manager={k:environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in environment}
     manager['PATH']='/usr/bin:/bin'
     backend=SystemdScopes(manager)
-    process=None; scopes=None; unit=None
+    process=None; scopes=None; unit=None; root=None; clean=False
     try:
-        with tempfile.TemporaryDirectory(prefix='agent-workflows-scope-preflight-') as root:
+        with tempfile.TemporaryDirectory(prefix='agent-workflows-scope-preflight-',delete=False) as root:
             scopes=LocalScopes(str(Path(root)/'state.db'),backend);unit=scopes.reserve('preflight')
             code='import subprocess,time; p=subprocess.Popen(["/usr/bin/sleep","60"],start_new_session=True); print(p.pid,flush=True); time.sleep(60)'
             process=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/python3','-c',code],env=manager,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
@@ -59,15 +59,24 @@ def scope_preflight(environment):
             if scopes.stop('preflight',unit) is not True: return False
             process.wait(timeout=10)
             try: os.kill(child,0); return False
-            except ProcessLookupError: return True
+            except ProcessLookupError:
+                clean=True
+                return True
     except (OSError,ValueError,TypeError,subprocess.SubprocessError,RuntimeError): return False
     finally:
+        if scopes is not None and unit is not None:
+            try:
+                if scopes.state('preflight',unit)=='running': scopes.stop('preflight',unit)
+            except Exception: pass
         if process is not None and process.poll() is None:
             process.terminate()
             try: process.wait(timeout=5)
             except subprocess.TimeoutExpired: process.kill();process.wait()
-        if unit is not None:
-            try: backend.stop(unit)
-            except Exception: pass
         if scopes is not None: scopes.close()
         if process is not None and process.stdout is not None: process.stdout.close()
+        if root is not None:
+            if clean or process is None:
+                import shutil
+                shutil.rmtree(root)
+            else:
+                print('Scope preflight requires inspection: '+root,file=sys.stderr)
