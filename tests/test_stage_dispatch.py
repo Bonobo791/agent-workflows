@@ -6,6 +6,18 @@ from runner.stage_dispatch import StageDispatcher, StageError
 from tests.source_fixture import outputs as fixture_outputs, verifier as fixture_verifier
 
 class StageDispatchTests(unittest.TestCase):
+    def test_verified_other_channel_asset_does_not_supply_instagram_media(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                manifest=service.artifacts.put(json.dumps({'assets':[{'channel':'linkedin','artifact_ref':'media'}]}).encode())
+                record=service.artifacts.put(json.dumps({'status':'passed','manifest_ref':manifest}).encode())
+                with patch.object(service.graph,'get',return_value={'status':'passed','version':record}), patch('runner.openfilm_review.verify_evidence',return_value=True):
+                    self.assertIsNone(StageDispatcher(service)._instagram_asset_inputs('r'))
+                with patch.object(service.graph,'get',return_value={'status':'passed','version':record}), patch('runner.openfilm_review.verify_evidence',return_value=False):
+                    with self.assertRaises(StageError): StageDispatcher(service)._instagram_asset_inputs('r')
+            finally: service.close()
     def test_binary_canonical_output_is_blocked_before_review(self):
         from pathlib import Path
         from runner.manual_lifecycle import ManualLifecycle

@@ -583,7 +583,7 @@ class StageDispatcher:
             if record.get('status')!='passed' or not verify_evidence(service,run,record): raise ValueError('asset evidence unavailable')
             manifest=json.loads(service.artifacts.get(record['manifest_ref']))
             refs=[item['artifact_ref'] for item in manifest['assets'] if item['channel']=='instagram']
-            if not refs: raise ValueError('Instagram media unavailable')
+            if not refs: return None
             return {'refs':[state['version'],record['manifest_ref'],record['report_ref'],*refs],
                     'review':{'manifest':manifest,'report':json.loads(service.artifacts.get(record['report_ref'])),'coverage':record.get('review_coverage')}}
         except Exception: raise StageError('verified Instagram media unavailable') from None
