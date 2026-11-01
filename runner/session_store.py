@@ -18,6 +18,7 @@ class SessionError(RuntimeError): pass
 _WRITERS={'implement','canonical_draft','linkedin_draft','x_draft','facebook_draft','instagram_draft','reddit_draft'}
 _FORBIDDEN=re.compile(r'(?i)(?:\.env(?:\..*)?|auth(?:entication)?(?:[._-].*)?|config\.toml|.*(?:token|credential|secret|private[-_]?key).*|.*\.(?:pem|key|p12))$')
 _BACKUP_HOME_CHANGED='backup home changed'
+_WRITE_TRANSACTION='BEGIN IMMEDIATE'
 
 def _name(value):
     return isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}',value) and value not in ('.','..')
@@ -55,7 +56,7 @@ class SessionStore:
         self.db.execute('''CREATE TABLE IF NOT EXISTS homes(id TEXT PRIMARY KEY,run TEXT NOT NULL,role TEXT NOT NULL,config TEXT NOT NULL,skills TEXT NOT NULL,session TEXT UNIQUE,state TEXT NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS home_claims(job TEXT PRIMARY KEY,home TEXT NOT NULL,state TEXT NOT NULL)''')
         self.db.execute('CREATE TABLE IF NOT EXISTS backup_generations(home TEXT PRIMARY KEY,generation TEXT NOT NULL,identity TEXT)')
-        self.db.execute('BEGIN IMMEDIATE')
+        self.db.execute(_WRITE_TRANSACTION)
         try:
             if 'identity' not in {row[1] for row in self.db.execute('PRAGMA table_info(backup_generations)')}:
                 self.db.execute('ALTER TABLE backup_generations ADD COLUMN identity TEXT')
@@ -66,7 +67,7 @@ class SessionStore:
     def acquire(self,run,role,job,config,skills,session=None,verify_safe=None):
         if not all(_name(x) for x in (run,role,job)) or not _digest(config) or not _digest(skills) or (session is not None and not _name(session)): raise SessionError('invalid session identity')
         if session is not None and role not in _WRITERS: raise SessionError('reviewers cannot resume')
-        db=self.db; db.execute('BEGIN IMMEDIATE')
+        db=self.db; db.execute(_WRITE_TRANSACTION)
         try:
             if db.execute('SELECT 1 FROM home_claims WHERE job=?',(job,)).fetchone(): raise SessionError('assignment already used')
             if session is not None:
@@ -97,7 +98,7 @@ class SessionStore:
         except Exception: return False
     def bind(self,job,session):
         if not _name(job) or not _name(session): raise SessionError('invalid session identity')
-        db=self.db; db.execute('BEGIN IMMEDIATE')
+        db=self.db; db.execute(_WRITE_TRANSACTION)
         try:
             row=db.execute("SELECT h.id,h.session FROM homes h JOIN home_claims c ON c.home=h.id WHERE c.job=? AND c.state='active' AND h.state='active'",(job,)).fetchone()
             if not row or (row[1] is not None and row[1]!=session): raise SessionError('session assignment unavailable')
@@ -116,7 +117,7 @@ class SessionStore:
         except OSError: raise SessionError('state unavailable') from None
     def release(self,job,verify_stopped):
         if not callable(verify_stopped) or verify_stopped(job) is not True: raise SessionError('writer termination unverified')
-        db=self.db; db.execute('BEGIN IMMEDIATE')
+        db=self.db; db.execute(_WRITE_TRANSACTION)
         try:
             row=db.execute("SELECT home FROM home_claims WHERE job=? AND state='active'",(job,)).fetchone()
             if not row: raise SessionError('active assignment unavailable')
@@ -125,7 +126,7 @@ class SessionStore:
             db.execute("UPDATE home_claims SET state='released' WHERE job=?",(job,)); db.execute('COMMIT')
         except Exception: db.execute('ROLLBACK'); raise
     def _reserve_idle(self,job,state):
-        db=self.db; db.execute('BEGIN IMMEDIATE')
+        db=self.db; db.execute(_WRITE_TRANSACTION)
         try:
             row=db.execute("SELECT h.id FROM homes h JOIN home_claims c ON c.home=h.id WHERE c.job=? AND c.state='released' AND h.state='idle'",(job,)).fetchone()
             if not row: raise SessionError('idle state unavailable')
@@ -158,7 +159,7 @@ class SessionStore:
             self._finish_backup(job,home,generation,identity)
             return result
     def _finish_backup(self,job,home,generation,identity):
-        db=self.db;db.execute('BEGIN IMMEDIATE')
+        db=self.db;db.execute(_WRITE_TRANSACTION)
         try:
             if self._check_home(home)!=identity:raise SessionError(_BACKUP_HOME_CHANGED)
             changed=db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM home_claims WHERE job=? AND home=? AND state='released') AND EXISTS(SELECT 1 FROM backup_generations WHERE home=? AND generation=? AND identity=?)",(home,job,home,home,generation,identity)).rowcount
