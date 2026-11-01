@@ -16,7 +16,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
         from runner.local_config_inspect import inspect_config
         from runner.local_process import start_local_process
         from runner.local_scope import SystemdScopes, unresolved_scope_rows
-        from runner.local_supervisor import LocalSupervisor
+        from runner.manual_lifecycle import ManualLifecycle
         from runner.model_policy import ModelPolicy
         from runner.protocol import AppServer
         from runner.service import Service
@@ -25,6 +25,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
         from runner.source_reviewer import SourceReviewer
         from runner.source_snapshots import SourceSnapshots
         from runner.stage_dispatch import StageDispatcher
+        from runner.worker import manual_fence_ready
 
         temporary=tempfile.TemporaryDirectory(prefix='workflow-marketing-graph-live-',delete=False)
         root=Path(temporary.name); workspace=root/'workspace'; workspace.mkdir(mode=0o700)
@@ -45,7 +46,8 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
             manual=Path(os.environ['OPENFILM_TEST_MANUAL']).read_text()
             directory=skills/'openfilm'; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text(manual)
             directory=skills/'asset-editor'; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text('Independently inspect the supplied fixture images and evidence. Do not infer missing evidence.')
-        service=Service(str(root)); completed=False
+        service=Service(str(root)); service.state_db_path=str(root/'state.db')
+        service.lifecycle=ManualLifecycle(service.state_db_path,'fixture','fixture-incarnation'); completed=False
         try:
             config=inspect_config(os.environ['CODEX_TEST_EXECUTABLE'],str(workspace),os.environ); backend=SystemdScopes(os.environ)
             discovery=start_local_process(str(root/'state.db'),'discovery',str(workspace),config['codex_executable'],os.environ,backend,lambda:True,config['disabled_integrations'])
@@ -54,12 +56,11 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 self.assertTrue(discovery.verify_config(app._request)); self.assertIsInstance(app._request('account/read',{'refreshToken':False}).get('account'),dict)
                 policy=ModelPolicy(); policy.discover(app._request)
             finally: discovery.finish()
-            if render:
-                from runner.local_config import local_supervisor_factory
-                supervisor=local_supervisor_factory(config,os.environ,str(root))(service); supervisor.fence=lambda run:True
-            else: supervisor=LocalSupervisor(str(root/'state.db'),config['codex_executable'],os.environ,backend,lambda run:True,lambda run,role:str(workspace),lambda:True,config['disabled_integrations'])
+            from runner.local_config import local_supervisor_factory
+            supervisor=local_supervisor_factory(config,os.environ,str(root))(service)
+            supervisor.fence=lambda run:manual_fence_ready(service,run)
             service.model_supervisor=supervisor; service.model_policy=policy
-            service.model_executor=CodexExecutor(supervisor,service.provenance,service.artifacts,lambda run:None,model_policy=policy)
+            service.model_executor=CodexExecutor(supervisor,service.provenance,service.artifacts,service.fence_execution,model_policy=policy)
             service.skill_resolver=SkillResolver([str(skills)])
             service.required_skills={'brief':['brief'],'canonical_draft':['writer'],'canonical_review':['editor'],'source_review':['source']}
             if os.environ.get('WORKFLOW_TEST_CHANNELS')=='1':
@@ -77,8 +78,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 jobs=root/'jobs'; jobs.mkdir(mode=0o700)
                 runtime=DockerConfig({'socket':os.environ['OPENFILM_PODMAN_SOCKET'],'image':os.environ['OPENFILM_PODMAN_IMAGE'],'network':'none','job_root':str(jobs),'engine':'podman-rootless'},root)
                 service.docker_assignments=DockerAssignments(str(root/'state.db'),UnixEngine(runtime.socket),runtime.image)
-                service.docker_supervisor=DockerSupervisor(service.docker_assignments,runtime,lambda run:True)
-                service.state_db_path=str(root/'state.db'); service.fence_execution_detached=lambda run:None
+                service.docker_supervisor=DockerSupervisor(service.docker_assignments,runtime,lambda run:manual_fence_ready(service,run))
                 service.required_skills.update({'asset_production':['openfilm'],'asset_review':['asset-editor']})
                 verifier=PodmanRenderPolicy(runtime,os.environ)
                 builder=CodexOpenFilmProjectBuilder(service,verifier,timeout_seconds=300)
@@ -99,7 +99,8 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
             task={'task_id':'fixture','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[],'format':'note',
                   'description':'Write a short note with the exact Markdown heading # Example Domain. The only claims are that the HTML document title is Example Domain and the domain is for documentation examples. Use only https://example.com/ as source; assign source-1 and evidence-1 and distinct claim IDs. Do not add claims.'}
             if render: task['description']+=' For the separate visual asset only, request one Instagram PNG at 1080 by 1080 pixels with no external media; its visible text must be the exact approved heading Example Domain. This visual restriction does not limit the note body.'
-            service.create('r','marketing','fixture'); service.enqueue('r'); queue=service.queue.claim('fixture',1200); claim=service.graph.claim('r',1200)
+            service.create('r','marketing','fixture'); service.enqueue('r'); queue=service.lifecycle.claim(1200); claim=service.graph.claim('r',1200)
+            self.assertTrue(manual_fence_ready(service,'r'))
             task_ref=service.artifacts.put(json.dumps(task).encode())
             service.graph.db.execute('CREATE TABLE task_input_versions(run TEXT PRIMARY KEY,source_version TEXT NOT NULL,artifact_ref TEXT NOT NULL)')
             service.graph.db.execute('INSERT INTO task_input_versions VALUES(?,?,?)',('r','fixture-v1',task_ref))
@@ -160,12 +161,14 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                     self.assertEqual(review.decide('r',queue['token'],claim,version,'approved')['version'],version)
                     self.assertEqual(review.current('r')['decision'],'approved')
             self.assertFalse(unresolved_scope_rows(service.graph.db,'r')); self.assertFalse(unresolved_scope_rows(service.graph.db,'discovery'))
+            service.request_lifecycle_stop('r')
+            self.assertFalse(manual_fence_ready(service,'r'))
             completed=True
         finally:
             if service.docker_assignments is not None:
                 for (cid,) in service.docker_assignments.db.execute('SELECT container_id FROM docker_assignments WHERE container_id IS NOT NULL').fetchall():
                     if not re.fullmatch(r'[0-9a-f]{64}',cid): raise RuntimeError('fixture container identity unavailable')
                     subprocess.run(['/usr/bin/podman','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,check=True)
-            service.close()
+            service.lifecycle.close(); service.close()
             if completed: temporary.cleanup()
             else: print('Private marketing-graph fixture retained at '+str(root))

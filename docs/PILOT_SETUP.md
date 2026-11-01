@@ -128,6 +128,9 @@ must not contain private skills, credentials, user data or session histories.
   `OPENFILM_PODMAN_IMAGE` and `OPENFILM_PODMAN_SOCKET` runs an offline still
   render and independent image review in that fixture. Its platform authority
   is synthetic; the probe does not establish actual platform compliance.
+  The fixture uses the real manual assignment and launch fence for the local
+  model and renderer, then requests a manual stop and verifies the fence closes.
+  It does not simulate an in-flight failure or establish crash recovery.
   `WORKFLOW_TEST_DECISION=1` additionally exercises a fixture-only decision on
   the exact assembled version, with synthetic task freshness. It is not a
   human decision on a real package.
