@@ -205,6 +205,29 @@ WORKFLOW_TEST_OTEL_IMAGE=<image-id> python -m unittest tests.test_audit_collecto
  Its debug exporter and
 loopback listener do not establish durable storage, authentication, retention,
 or Opik compatibility.
+
+`observability/local/audit-collector.yml` is an opt-in Collector Contrib example
+with bearer authentication and a rotating file exporter. Publish its receiver
+only on host loopback; provide a private `/config/token` and private `/store`
+directory. Anyone holding the token can submit arbitrary telemetry, so restrict
+access to the token and stored files. The example requests rotation at 10 MB,
+up to five backups and seven days for rotated files. Age cleanup happens only
+when a size rotation occurs; the active file can remain longer. The
+[upstream file exporter documentation](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/fileexporter/README.md)
+states that files are not fsynced, so an acknowledged export is not proof of
+crash-durable storage. It has no exporter queue or retry and is not an Opik
+backend. Choose retention and backups for the actual deployment.
+
+On 2026-11-01 an isolated test used Collector Contrib 0.164.0, image ID
+`sha256:28ebddf51f59e38ac800c9f91120726cfb312af377da8908807e0b566a82b017`
+and manifest digest `sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b`.
+It verified rejected missing/wrong bearer tokens, cursor preservation on rejection,
+synthetic delivery after restart, file persistence and size-triggered rotation.
+It did not test age-based cleanup, backup limits, a host crash, or installation.
+
+```sh
+WORKFLOW_TEST_OTEL_CONTRIB_IMAGE=<image-id> python -m unittest tests.test_audit_collector_auth_integration
+```
  `OpenTelemetryAuditExporter` adapts these events to an explicitly
 provided OpenTelemetry SDK log exporter and acknowledges only SDK success. Its
 optional dependencies are pinned in `requirements-observability.txt`; no
