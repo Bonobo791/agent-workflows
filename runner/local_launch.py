@@ -19,10 +19,10 @@ class LaunchError(RuntimeError): pass
 def reap_after_failure(process):
     def wait():
         try:process.wait()
-        except (OSError,ChildProcessError):pass
+        except OSError:pass
     try:process.wait(timeout=1)
     except subprocess.TimeoutExpired:threading.Thread(target=wait,daemon=True).start()
-    except (OSError,ChildProcessError):pass
+    except OSError:pass
 
 
 class GuardedLaunch:
