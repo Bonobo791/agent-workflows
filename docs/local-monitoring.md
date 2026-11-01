@@ -28,6 +28,11 @@ The endpoint does not configure a collector, retention, or API protection.
 it does not display incoming annotations. Delivery is at least once: a retry
 after a partially delivered batch can repeat a notification. A successful
 `notify-send` invocation does not establish that a person saw the notification.
+On one local KDE Plasma host, a clearly labeled synthetic call to the same
+`desktop_notify` function returned successfully. A temporary user-systemd unit
+with the example receiver's hardening settings could also query the desktop
+notification service. These separate checks do not establish display, human
+acknowledgment, or delivery from an installed receiver service.
 
 Each token must be a distinct 32–128 character string containing only ASCII
 letters, digits, underscore, or hyphen, stored in an owner-only regular file.
@@ -122,9 +127,12 @@ shortened timing, isolated temporary storage, and synthetic credentials. It
 checks that both APIs reject unauthenticated requests, and that a worker outage
 and recovery produce firing and resolved alerts through the full path. It also
 restarts both containers with temporary persistent directories and verifies
-Prometheus retains an earlier snapshot. It does not verify Alertmanager's
-deduplication history, a real desktop notification, or production alert wait
-times.
+Prometheus retains an earlier snapshot. After Alertmanager restarts, it waits
+for the still-firing outage alert to return and checks that no duplicate firing
+arrives during an eight-second window. This covers a graceful restart with a
+synthetic receiver and shortened alert timing; it does not cover hard crashes,
+production-duration deduplication, a displayed desktop notification, or production
+alert wait times.
 With `WORKFLOW_GRAFANA_TEST=1`, it also starts the pinned Grafana service,
 provisions the dashboard and authenticated datasource with synthetic secrets,
 queries every panel expression, and checks the dashboard after restart. This
@@ -153,3 +161,11 @@ Alertmanager test substitutes a callback for actual desktop notifications.
 If integration cleanup fails, it still attempts the remaining resources and
 retains its private temporary fixture directory for inspection; the failure
 identifies that directory. Successful cleanup removes it.
+
+On 2026-11-01, the combined systemd, Grafana and browser integration passed
+on the local host against commit `471240c` with the cached images listed above.
+It verified synthetic outage firing and resolution, API authentication,
+dashboard data and restart persistence. The browser signed in, found a queued
+job series, and checked the evidence explanation at desktop and mobile sizes.
+The receiver used a synthetic callback; this run does not establish that a
+person saw a notification or that the production monitoring stack is deployed.
