@@ -26,7 +26,7 @@ def main(argv):
     if os.write(ack_fd,receipt)!=len(receipt): raise OSError('incomplete launch receipt')
     os.close(ack_fd)
     remaining=deadline-time.monotonic()
-    if remaining<=0 or not select.select([go_fd],[],[],remaining)[0] or time.monotonic()>=deadline or os.read(go_fd,1)!=b'G':
+    if remaining<=0 or not select.select([go_fd],[],[],remaining)[0] or os.read(go_fd,1)!=b'G' or time.monotonic()>=deadline:
         raise OSError('launch authorization unavailable')
     os.close(go_fd)
     # The trusted controller selects this argv and environment; no shell is used.

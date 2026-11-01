@@ -11,6 +11,13 @@ class Supervisor:
     def fence(self,run):return True
 
 class LocalCommandTests(unittest.TestCase):
+    def test_cleanup_reaps_client_even_after_scope_stopped(self):
+        from unittest.mock import Mock
+        from runner.local_command import _cleanup_command
+        process=Mock(stdin=None,stdout=None)
+        _cleanup_command(None,'run','unit',process,True)
+        process.wait.assert_called_once_with(timeout=1)
+
     @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
     def test_guarded_command_executes_after_scope_receipt(self):
         import time

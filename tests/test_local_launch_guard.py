@@ -14,6 +14,25 @@ GUARD=Path(__file__).resolve().parents[1]/'runner'/'local_launch_guard.py'
 
 
 class LocalLaunchGuardTests(unittest.TestCase):
+    def test_guard_rejects_authorization_read_after_deadline(self):
+        from unittest.mock import patch
+        from runner import local_launch_guard as guard
+        ack_read,ack_write=os.pipe();go_read,go_write=os.pipe();clock=[0]
+        read=os.read
+        def delayed_read(fd,size):
+            data=read(fd,size);clock[0]=2
+            return data
+        try:
+            os.write(go_write,b'G')
+            argv=[str(GUARD),str(ack_write),str(go_read),'a'*64,'1','/usr/bin/true']
+            with patch.object(guard.time,'monotonic',side_effect=lambda:clock[0]),patch.object(guard.os,'read',side_effect=delayed_read),patch.object(guard.os,'execve') as execute:
+                with self.assertRaises(OSError):guard.main(argv)
+                execute.assert_not_called()
+        finally:
+            for fd in (ack_read,ack_write,go_read,go_write):
+                try:os.close(fd)
+                except OSError:pass
+
     def test_parent_can_authorize_after_slow_scope_binding(self):
         ack_read,ack_write=os.pipe();go_read,go_write=os.pipe();process=None
         try:
