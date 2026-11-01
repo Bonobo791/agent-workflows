@@ -31,8 +31,9 @@ class ControllerComposeCleanupTests(unittest.TestCase):
             item=real_temporary(*args,**kwargs);created.append(item);return item
         try:
             with patch.dict('os.environ',{'CONTROLLER_TEST_IMAGE':'synthetic','CONTROLLER_TEST_DOCKER_HOST':'unix:///synthetic'}),patch('tests.test_controller_compose_integration.tempfile.TemporaryDirectory',side_effect=temporary),patch('pathlib.Path.write_text',side_effect=OSError('setup failed')),patch('tests.test_controller_compose_integration.subprocess.run') as run:
+                fixture=ControllerComposeTests()
                 with self.assertRaisesRegex(OSError,'setup failed'):
-                    ControllerComposeTests().test_private_secret_and_state_survive_stop_and_start()
+                    fixture.test_private_secret_and_state_survive_stop_and_start()
                 run.assert_called_once()
                 self.assertFalse(Path(created[0].name).exists())
         finally:
