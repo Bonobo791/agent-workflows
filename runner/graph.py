@@ -278,7 +278,8 @@ class GraphStore:
                 if event.rowcount!=1 or not self.db.execute("SELECT 1 FROM invalidation_audit WHERE id=? AND schema_version=1 AND run=? AND stage=? AND status='invalidated' AND reason=?",(event.lastrowid,run,stage,audit_reason)).fetchone(): raise GraphError('invalidation audit unavailable')
                 event=self.db.execute('INSERT INTO graph_audit(schema_version,run,stage,status,version,revision,created) VALUES(1,?,?,?,?,?,?)',(run,stage,'invalidated',row[0],row[1],self.clock()))
                 if event.rowcount!=1 or not self.db.execute("SELECT 1 FROM graph_audit WHERE id=? AND schema_version=1 AND run=? AND stage=? AND status='invalidated' AND version=? AND revision=?",(event.lastrowid,run,stage,*row)).fetchone(): raise GraphError('stage audit unavailable')
-                self.db.execute('DELETE FROM graph_stages WHERE run=? AND stage=?',(run,stage))
+                removed=self.db.execute('DELETE FROM graph_stages WHERE run=? AND stage=?',(run,stage))
+                if removed.rowcount!=1 or self.db.execute('SELECT 1 FROM graph_stages WHERE run=? AND stage=?',(run,stage)).fetchone(): raise GraphError('stage invalidation unavailable')
     def invalidate(self,run,stage,snapshot,token,reason='unspecified'):
         if reason not in ('unspecified','cache_miss','gate_changed','artifact_unavailable','skills_unavailable','upstream_unavailable','task_changed'): raise GraphError('invalid invalidation reason')
         self.db.execute('BEGIN IMMEDIATE')
