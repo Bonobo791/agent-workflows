@@ -13,6 +13,17 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    def test_pending_job_check_requires_exact_unit_and_empty_job(self):
+        from unittest.mock import patch
+        from runner.local_scope import SystemdScopes
+        backend=SystemdScopes({})
+        for value,expected in (('Id=unit.scope\nJob=\n',True),('Id=unit.scope\nJob=42\n',False),
+                               ('Id=other.scope\nJob=\n',False),('Id=unit.scope\n',False),
+                               ('Id=unit.scope\nJob=\nJob=\n',False)):
+            with self.subTest(value=value),patch.object(backend,'_run',return_value=value):
+                self.assertIs(backend.no_pending_job('unit.scope'),expected)
+        with patch.object(backend,'_run',side_effect=ScopeError('unavailable')):
+            self.assertFalse(backend.no_pending_job('unit.scope'))
     def test_reservation_audit_failure_is_not_reported_as_existing_scope(self):
         with tempfile.TemporaryDirectory() as root:
             scopes=LocalScopes(root+'/state.db',Backend())

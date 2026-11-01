@@ -272,11 +272,22 @@ the recovery procedure below for those cases.
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.
+For a previously guarded launch that has already exited, the owner can call
+`reconcile_local_scope` with that run and unit. It requires the recorded launch
+receipt and audit, the exact fenced run, an inactive unit with no systemd job,
+and an empty recorded cgroup. An unconfirmed launch or interrupted stop remains
+unresolved. This operation does not confirm the worker stopped, release a
+workspace, or resolve remote requests.
+Review [local scope recovery evidence](local-scope-recovery.md) and its host
+and systemd assumptions before using the reconciliation control.
 
 For new local model executions, approved commands, and push snapshots, the
 workspace claim and its reserved scope are recorded together. A reserved scope
 is not proof of a launch; an absent or ambiguous launch still remains fenced.
 Older claims without a scope binding are not backfilled.
+Guarded launches wait for the scope identity and launch receipt to be committed;
+the final run-fence check and authorization share a database write lock with
+cancellation. A missing receipt or a lost fence prevents the target from starting.
 
 If the stop response includes `local_workspace`, the owner can call
 `release_local_workspace` with the exact `run`, `assignment`, and `unit` after

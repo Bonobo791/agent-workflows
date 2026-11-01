@@ -81,7 +81,11 @@ class WorkerProcessTests(unittest.TestCase):
     def test_late_scope_launch_after_worker_crash_stays_fenced(self):
         self._exercise_interrupted_worker(True,unbound=True,late=True)
 
-    def _exercise_interrupted_worker(self,hard_crash,unbound=False,late=False):
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1' and os.environ.get('WORKFLOW_TEST_CODEX'),'real user systemd and signed-in Codex not configured')
+    def test_sigkill_recovers_guarded_scope_that_exited_before_restart(self):
+        self._exercise_interrupted_worker(True,vanished=True)
+
+    def _exercise_interrupted_worker(self,hard_crash,unbound=False,late=False,vanished=False):
         code="""
 import os, subprocess, sys, time
 from pathlib import Path
@@ -191,7 +195,7 @@ worker.main()
                 self.assertEqual(process.returncode,-9 if hard_crash else 0,stderr.decode())
                 self.assertNotIn(b'x'*40,stdout+stderr)
                 if hard_crash:
-                    self._recover_crashed_worker(root,env,code,unbound,late)
+                    self._recover_crashed_worker(root,env,code,unbound,late,vanished)
                     return
                 self._assert_shutdown_fenced(root,path)
             finally:
@@ -203,8 +207,22 @@ worker.main()
         failure=(root/'stage-error').read_text() if (root/'stage-error').exists() else 'no stage result'
         self.assertTrue((root/'stage-entered').exists(),failure)
 
-    def _recover_crashed_worker(self,root,env,code,unbound,late):
+    def _recover_crashed_worker(self,root,env,code,unbound,late,vanished=False):
         import sqlite3
+        if vanished:
+            from runner.local_scope import SystemdScopes
+            backend=SystemdScopes(os.environ)
+            with sqlite3.connect(root/'state.db') as db:
+                row=db.execute("SELECT s.unit,s.cgroup FROM local_scopes s JOIN local_scope_launch_receipts r ON r.unit=s.unit WHERE s.run='r' AND s.state='running'").fetchone()
+            self.assertIsNotNone(row)
+            observed=backend.inspect(row[0])
+            if observed['active']=='active':backend.stop(row[0])
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                observed=backend.inspect(row[0])
+                if observed['active']=='inactive' and backend.empty_cgroup(row[1]):break
+                time.sleep(.05)
+            self.assertEqual(observed['active'],'inactive');self.assertTrue(backend.empty_cgroup(row[1]))
         if unbound:
             with sqlite3.connect(root/'state.db') as db:
                 row=db.execute("SELECT unit,state,invocation,cgroup FROM local_scopes WHERE run='r'").fetchone()
@@ -247,7 +265,12 @@ worker.main()
                     time.sleep(.05)
                 self.assertEqual(observed['active'],'active')
                 self.assertTrue(observed['cgroup']); self.assertTrue(observed['invocation'])
-            result=action({'action':'stop_local_scope','run':'r','unit':unit})
+            from runner.local_scope import SystemdScopes
+            observed=SystemdScopes(os.environ).inspect(unit)
+            operation='reconcile_local_scope' if not unbound and observed['active']=='inactive' else 'stop_local_scope'
+            if vanished:self.assertEqual(operation,'reconcile_local_scope')
+            result=action({'action':operation,'run':'r','unit':unit})
+            self.assertTrue(result['ok'],result)
             self.assertEqual(result['result'],{'unit':unit,'state':'terminated'})
             if unbound:
                 self.assertEqual(unit,row[0])

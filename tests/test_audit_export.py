@@ -18,6 +18,25 @@ from runner.otel_audit import OpenTelemetryAuditExporter, OpenTelemetryAuditTrac
 
 
 class AuditExportTests(unittest.TestCase):
+    def test_launch_receipt_projection_correlates_without_private_identity(self):
+        from runner.otel_audit import _attributes
+        key=b'x'*32
+        row={'id':1,'schema_version':1,'run':'private-run','unit':'private-unit',
+             'invocation':'private-invocation','cgroup':'private-cgroup','pid':123,
+             'nonce_hash':'private-nonce','status':'bound','created':1}
+        event=project_event('local_scope_launch_audit',row,key)
+        scope=project_event('local_scope_audit',{'id':2,'schema_version':1,'run':'private-run',
+                            'unit':'private-unit','state':'running','created':1},key)
+        self.assertEqual(event['scope_id'],scope['scope_id'])
+        self.assertEqual(_attributes(event)['kind'],'local_scope_launch_audit')
+        self.assertNotIn('private',str(event))
+        self.assertNotIn('pid',event);self.assertNotIn('nonce_hash',event)
+        recovery=project_event('local_scope_recovery_audit',{'id':3,'schema_version':1,'run':'private-run',
+                               'unit':'private-unit','status':'reconciled','created':1},key)
+        self.assertEqual(recovery['scope_id'],scope['scope_id'])
+        self.assertEqual(_attributes(recovery)['status'],'reconciled')
+        self.assertNotIn('private',str(recovery))
+
     def test_checkpoint_delivery_replays_without_exposing_worker_identities(self):
         import sqlite3
         from types import SimpleNamespace

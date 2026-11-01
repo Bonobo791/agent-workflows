@@ -3,6 +3,7 @@
 A reserved scope is not proof of launch. Ambiguous starts and stops stay fenced.
 """
 from pathlib import Path, PurePosixPath
+import hashlib
 import re
 import secrets
 import sqlite3
@@ -64,6 +65,18 @@ class SystemdScopes:
         if set(fields)!={'Id','LoadState','ActiveState','InvocationID','ControlGroup'}: raise ScopeError('invalid scope inspection')
         return dict(id=fields['Id'],load=fields['LoadState'],active=fields['ActiveState'],invocation=fields['InvocationID'],cgroup=fields['ControlGroup'])
     def stop(self,unit): self._run('stop',unit); return True
+    def no_pending_job(self,unit):
+        try:
+            result=self._run('show',unit,'--property=Id','--property=Job').splitlines()
+            return sorted(result)==sorted(['Id='+unit,'Job='])
+        except ScopeError:return False
+    def pid_in_cgroup(self,pid,cgroup):
+        if type(pid) is not int or pid<=1 or not isinstance(cgroup,str) or not cgroup.startswith('/'): return False
+        try:
+            with (Path('/proc')/str(pid)/'cgroup').open() as stream: content=stream.read(65537)
+            if len(content)>65536:return False
+            return [line for line in content.splitlines() if line.startswith('0::')]==['0::'+cgroup]
+        except (OSError,UnicodeError):return False
     def empty_cgroup(self,path):
         parts=PurePosixPath(path).parts
         if not path.startswith('/') or not parts or any(p in ('.','..') for p in parts): return False
@@ -89,6 +102,11 @@ class LocalScopes:
         except sqlite3.IntegrityError:
             self.db.close(); raise ScopeError('conflicting unresolved scopes') from None
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,unit TEXT NOT NULL,state TEXT NOT NULL,created REAL NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_launch_receipts(run TEXT NOT NULL,unit TEXT PRIMARY KEY,invocation TEXT NOT NULL,cgroup TEXT NOT NULL,pid INTEGER NOT NULL,nonce_hash TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_launch_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,unit TEXT NOT NULL,invocation TEXT NOT NULL,cgroup TEXT NOT NULL,pid INTEGER NOT NULL,nonce_hash TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_recovery_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
+        self.db.execute("""CREATE TRIGGER IF NOT EXISTS local_scope_launch_receipt_audit_insert AFTER INSERT ON local_scope_launch_receipts BEGIN
+            INSERT INTO local_scope_launch_audit(schema_version,run,unit,invocation,cgroup,pid,nonce_hash,status,created) VALUES(1,NEW.run,NEW.unit,NEW.invocation,NEW.cgroup,NEW.pid,NEW.nonce_hash,'bound',(julianday('now')-2440587.5)*86400.0); END""")
         self.db.execute("""CREATE TRIGGER IF NOT EXISTS local_scope_audit_insert AFTER INSERT ON local_scopes BEGIN
             INSERT INTO local_scope_audit(schema_version,run,unit,state,created) VALUES(1,NEW.run,NEW.unit,NEW.state,(julianday('now')-2440587.5)*86400.0); END""")
         self.db.execute("""CREATE TRIGGER IF NOT EXISTS local_scope_audit_update AFTER UPDATE OF state ON local_scopes WHEN OLD.state != NEW.state BEGIN
@@ -129,12 +147,70 @@ class LocalScopes:
         group=info.get('cgroup','')
         if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or not valid_scope_identity(unit,info.get('invocation'),group): raise ScopeError('active scope identity unverified')
         self._transition(run,unit,'running',"UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit))
+    def bind_confirmed(self,run,unit,launch):
+        from runner.local_launch import GuardedLaunch
+        if (not isinstance(launch,GuardedLaunch) or launch.receipt!=(launch.process.pid,launch.nonce) or launch.go_fd is None
+                or not isinstance(launch.nonce,str) or not re.fullmatch(r'[0-9a-f]{64}',launch.nonce)
+                or type(launch.process.pid) is not int or launch.process.pid<=1 or launch.process.poll() is not None):
+            raise ScopeError('launch confirmation unavailable')
+        info=self.backend.inspect(unit);group=info.get('cgroup','')
+        if (info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active'
+                or not valid_scope_identity(unit,info.get('invocation'),group)
+                or not callable(getattr(self.backend,'pid_in_cgroup',None))
+                or self.backend.pid_in_cgroup(launch.process.pid,group) is not True
+                or launch.process.poll() is not None): raise ScopeError('launch identity unverified')
+        nonce_hash=hashlib.sha256(bytes.fromhex(launch.nonce)).hexdigest()
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            scope_last=self.db.execute('SELECT COALESCE(MAX(id),0) FROM local_scope_audit').fetchone()[0]
+            launch_last=self.db.execute('SELECT COALESCE(MAX(id),0) FROM local_scope_launch_audit').fetchone()[0]
+            if self.db.execute("UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit)).rowcount!=1: raise ScopeError('scope assignment changed')
+            if not self.db.execute("SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state='running'",(scope_last,run,unit)).fetchone(): raise ScopeError('scope transition audit unavailable')
+            self.db.execute('INSERT INTO local_scope_launch_receipts VALUES(?,?,?,?,?,?)',(run,unit,info['invocation'],group,launch.process.pid,nonce_hash))
+            if not self.db.execute("SELECT 1 FROM local_scope_launch_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND invocation=? AND cgroup=? AND pid=? AND nonce_hash=? AND status='bound'",(launch_last,run,unit,info['invocation'],group,launch.process.pid,nonce_hash)).fetchone(): raise ScopeError('launch confirmation audit unavailable')
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK');raise
     def assert_active(self,run,unit):
         row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
         if not row or row[2]!='running': raise ScopeError('running scope unavailable')
         info=self.backend.inspect(unit)
         if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or info.get('invocation')!=row[0] or info.get('cgroup')!=row[1]: raise ScopeError('scope identity changed')
         return True
+    def release_confirmed(self,run,unit,launch,fence):
+        from runner.local_launch import GuardedLaunch
+        if not isinstance(launch,GuardedLaunch) or not callable(fence) or launch.receipt!=(launch.process.pid,launch.nonce): raise ScopeError('launch authorization unavailable')
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            row=self.db.execute("SELECT r.pid,r.nonce_hash FROM local_scopes s JOIN local_scope_launch_receipts r ON r.run=s.run AND r.unit=s.unit AND r.invocation=s.invocation AND r.cgroup=s.cgroup JOIN local_scope_launch_audit a ON a.run=r.run AND a.unit=r.unit AND a.invocation=r.invocation AND a.cgroup=r.cgroup AND a.pid=r.pid AND a.nonce_hash=r.nonce_hash AND a.schema_version=1 AND a.status='bound' WHERE s.run=? AND s.unit=? AND s.state='running'",(run,unit)).fetchone()
+            if not row or row!=(launch.process.pid,hashlib.sha256(bytes.fromhex(launch.nonce)).hexdigest()) or fence() is not True: raise ScopeError('launch authorization unavailable')
+            launch.release()
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK');raise
+    def reconcile_confirmed(self,run,unit,fenced):
+        if not isinstance(fenced,tuple) or len(fenced)!=2 or any(not isinstance(x,str) or not x for x in fenced): raise ScopeError('invalid recovery fence')
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            fence=self.db.execute("SELECT 1 FROM manual_assignments a JOIN manual_workers w ON w.target=a.target JOIN jobs j ON j.run=a.run JOIN graph_runs g ON g.id=a.run WHERE a.run=? AND a.target=? AND a.incarnation=? AND a.state='pending' AND w.incarnation=a.incarnation AND w.state='assigned' AND j.status IN ('cancelling','uncertain') AND g.status='cancelled'",(run,*fenced)).fetchone()
+            if not fence or self.db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone(): raise ScopeError('recovery fence changed')
+            row=self.db.execute("SELECT s.invocation,s.cgroup,r.pid,r.nonce_hash FROM local_scopes s JOIN local_scope_launch_receipts r ON r.run=s.run AND r.unit=s.unit AND r.invocation=s.invocation AND r.cgroup=s.cgroup WHERE s.run=? AND s.unit=? AND s.state='running'",(run,unit)).fetchone()
+            if not row or not valid_scope_identity(unit,row[0],row[1]) or type(row[2]) is not int or row[2]<=1 or not isinstance(row[3],str) or not re.fullmatch(r'[0-9a-f]{64}',row[3]): raise ScopeError('confirmed launch unavailable')
+            audit=self.db.execute("SELECT 1 FROM local_scope_launch_audit WHERE schema_version=1 AND run=? AND unit=? AND invocation=? AND cgroup=? AND pid=? AND nonce_hash=? AND status='bound'",(run,unit,*row)).fetchone()
+            if not audit: raise ScopeError('launch audit unavailable')
+            for _ in range(2):
+                info=self.backend.inspect(unit)
+                if (info.get('id')!=unit or info.get('active')!='inactive' or info.get('load') not in ('loaded','not-found')
+                        or (info.get('load')=='loaded' and info.get('invocation') not in ('',row[0]))
+                        or self.backend.empty_cgroup(row[1]) is not True or self.backend.no_pending_job(unit) is not True): raise ScopeError('scope quiescence unverified')
+            last=self.db.execute('SELECT COALESCE(MAX(id),0) FROM local_scope_audit').fetchone()[0]
+            if self.db.execute("UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='running'",(run,unit,*row[:2])).rowcount!=1: raise ScopeError('scope assignment changed')
+            if not self.db.execute("SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state='terminated'",(last,run,unit)).fetchone(): raise ScopeError('scope transition audit unavailable')
+            cursor=self.db.execute("INSERT INTO local_scope_recovery_audit(schema_version,run,unit,status,created) VALUES(1,?,?,'reconciled',(julianday('now')-2440587.5)*86400.0)",(run,unit))
+            if cursor.rowcount!=1 or not self.db.execute("SELECT 1 FROM local_scope_recovery_audit WHERE id=? AND schema_version=1 AND run=? AND unit=? AND status='reconciled'",(cursor.lastrowid,run,unit)).fetchone(): raise ScopeError('recovery audit unavailable')
+            self.db.execute('COMMIT');return True
+        except Exception:
+            self.db.execute('ROLLBACK');raise
     def stop(self,run,unit):
         self.assert_active(run,unit)
         row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()

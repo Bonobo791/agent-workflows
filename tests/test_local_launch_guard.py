@@ -10,7 +10,7 @@ import time
 import unittest
 import uuid
 
-GUARD=Path(__file__).resolve().parent/'fixtures'/'local_launch_guard.py'
+GUARD=Path(__file__).resolve().parents[1]/'runner'/'local_launch_guard.py'
 
 
 class LocalLaunchGuardTests(unittest.TestCase):
