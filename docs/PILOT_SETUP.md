@@ -124,6 +124,10 @@ must not contain private skills, credentials, user data or session histories.
   asset production, Instagram and Reddit before assembling a human-review
   package. The test does not publish or establish media, community-context or
   human acceptance.
+  Adding `WORKFLOW_TEST_RENDER=1`, `OPENFILM_TEST_MANUAL`,
+  `OPENFILM_PODMAN_IMAGE` and `OPENFILM_PODMAN_SOCKET` runs an offline still
+  render and independent image review in that fixture. Its platform authority
+  is synthetic; the probe does not establish actual platform compliance.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
