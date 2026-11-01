@@ -256,6 +256,20 @@ class GraphStore:
             self.db.execute('COMMIT')
         except Exception:
             self.db.execute('ROLLBACK'); raise
+    def close_unadopted_correction(self,run,stage,token,input_hash,correction_id,result_version):
+        """Record a completed correction turn whose gate did not pass without replacing the approved writer or blocking review evidence."""
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            self._lease(run,token)
+            row=self.db.execute("SELECT writer_version,review_stage,review_version FROM correction_attempts WHERE id=? AND run=? AND writer_stage=? AND input_hash=? AND state='running'",(correction_id,run,stage,input_hash)).fetchone()
+            writer=self.get(run,stage)
+            review=self.get(run,row[1]) if row else None
+            if not row or not writer or writer['status']!='passed' or writer['version']!=row[0] or not review or review['status']!='blocked' or review['version']!=row[2]: raise GraphError('correction completion mismatch')
+            if self.db.execute("UPDATE graph_attempts SET status='completed' WHERE run=? AND stage=? AND version=? AND status='uncertain'",(run,stage,input_hash)).rowcount!=1: raise GraphError('attempt unavailable')
+            self.db.execute("UPDATE correction_attempts SET state='completed',result_version=? WHERE id=?",(result_version,correction_id))
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK'); raise
     def prepare(self, run, stage, token):
         self._lease(run,token)
         return self._snapshot(run,stage)

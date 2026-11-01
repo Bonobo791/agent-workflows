@@ -443,6 +443,7 @@ class StageDispatcher:
             if str(exc)=='required skills unavailable': return {'stage':stage,'status':'blocked','reason':'required skills unavailable'}
             if str(exc)=='subscription limit reached; run paused' and service.graph.quota_paused('default'): return {'stage':stage,'status':'rate_limited','reason':'subscription quota paused; explicit resume required'}
             raise
+        if runner.correction_outcome is not None: return {'stage':stage,'status':runner.correction_outcome,'artifact_ref':ref,'reason':'correction not adopted; approved draft and blocked review retained'}
         return {'stage':stage,'status':service.graph.get(run,stage)['status'],'artifact_ref':ref}
 
     def _discover_model(self,run,queue_claim,graph_claim):
