@@ -85,9 +85,7 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
                 with self.assertRaises(ScopeError):scopes.release_confirmed('run',unit,launch,lambda:change!='fence')
                 launch.close();self.assertEqual(os.read(self.go_read,1),b'')
 
-    def recovery_fixture(self,root):
-        backend,scopes,unit,launch=self.fixture(root)
-        scopes.bind_confirmed('run',unit,launch);backend.state='inactive'
+    def add_fence(self,scopes):
         scopes.db.executescript("""CREATE TABLE manual_assignments(run TEXT,target TEXT,incarnation TEXT,state TEXT);
             CREATE TABLE manual_workers(target TEXT,incarnation TEXT,state TEXT);
             CREATE TABLE jobs(run TEXT,status TEXT);
@@ -97,7 +95,44 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
             INSERT INTO manual_workers VALUES('target','inc','assigned');
             INSERT INTO jobs VALUES('run','uncertain');
             INSERT INTO graph_runs VALUES('run','cancelled');""")
+
+    def recovery_fixture(self,root):
+        backend,scopes,unit,launch=self.fixture(root)
+        scopes.bind_confirmed('run',unit,launch);backend.state='inactive'
+        self.add_fence(scopes)
         return backend,scopes,unit
+
+    def stop_recovery_fixture(self,root):
+        backend,scopes,unit,launch=self.fixture(root)
+        scopes.bind_confirmed('run',unit,launch);scopes.reserve_stop('run',unit)
+        scopes.db.execute("UPDATE local_scope_stop_operations SET status='active' WHERE unit=?",(unit,))
+        scopes.db.execute("UPDATE local_scope_stop_operations SET status='completed' WHERE unit=?",(unit,))
+        backend.state='inactive';self.add_fence(scopes)
+        return backend,scopes,unit
+
+    def test_completed_witnessed_stop_can_be_reconciled_with_exact_fence(self):
+        with tempfile.TemporaryDirectory() as root:
+            backend,scopes,unit=self.stop_recovery_fixture(root)
+            self.assertTrue(scopes.reconcile_witnessed_stop('run',unit,('target','inc')))
+            self.assertEqual(scopes.state('run',unit),'terminated')
+            self.assertEqual(scopes.db.execute('SELECT status FROM local_scope_recovery_audit').fetchone(),('reconciled_stop',))
+
+    def test_witnessed_stop_reconciliation_rejects_incomplete_or_changed_evidence(self):
+        mutations=("UPDATE local_scope_stop_operations SET status='active'", "DELETE FROM local_scope_stop_audit WHERE status='completed'",
+                   "DELETE FROM local_scope_stop_audit WHERE status='active'", "DELETE FROM local_scope_stop_audit WHERE status='pending'",
+                   "UPDATE local_scope_stop_operations SET cgroup='/wrong'", "UPDATE manual_assignments SET state='running'")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as root:
+                backend,scopes,unit=self.stop_recovery_fixture(root);scopes.db.execute(mutation)
+                with self.assertRaises(ScopeError):scopes.reconcile_witnessed_stop('run',unit,('target','inc'))
+                self.assertEqual(scopes.state('run',unit),'stopping')
+
+    def test_witnessed_stop_reconciliation_rolls_back_without_recovery_audit(self):
+        with tempfile.TemporaryDirectory() as root:
+            backend,scopes,unit=self.stop_recovery_fixture(root)
+            scopes.db.execute("CREATE TRIGGER ignore_recovery BEFORE INSERT ON local_scope_recovery_audit BEGIN SELECT RAISE(IGNORE); END")
+            with self.assertRaises(ScopeError):scopes.reconcile_witnessed_stop('run',unit,('target','inc'))
+            self.assertEqual(scopes.state('run',unit),'stopping')
 
     def test_inactive_confirmed_scope_requires_exact_fence_and_audit(self):
         with tempfile.TemporaryDirectory() as root:
@@ -192,4 +227,23 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
                 self.assertEqual(service.actions.db.execute("SELECT status FROM external_actions WHERE run='run' AND action='remote_push'").fetchone(),('uncertain',))
                 with self.assertRaises(ActionConflict):service.actions.approve('run','remote_push','v2','owner')
                 with self.assertRaises(ControlError):control.handle('secret',request)
+            finally:lifecycle.close();service.close()
+
+    def test_owner_control_reconciles_only_completed_witnessed_stop(self):
+        from runner.control import ControlError,ControlPlane
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.service import Service
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root);lifecycle=ManualLifecycle(str(Path(root)/'state.db'),'target','inc');service.lifecycle=lifecycle
+            try:
+                service.create('run','marketing','task');service.enqueue('run');lifecycle.claim()
+                backend,scopes,unit,launch=self.fixture(root);scopes.bind_confirmed('run',unit,launch);scopes.reserve_stop('run',unit)
+                service.model_supervisor=SimpleNamespace(backend=backend);service.request_lifecycle_stop('run')
+                backend.state='inactive';control=ControlPlane(service,'secret');request={'action':'reconcile_local_scope','run':'run','unit':unit}
+                with self.assertRaises(ControlError):control.handle('secret',request)
+                scopes.db.execute("UPDATE local_scope_stop_operations SET status='active' WHERE unit=?",(unit,))
+                with self.assertRaises(ControlError):control.handle('secret',request)
+                scopes.db.execute("UPDATE local_scope_stop_operations SET status='completed' WHERE unit=?",(unit,))
+                self.assertEqual(control.handle('secret',request),{'unit':unit,'state':'terminated'})
+                self.assertEqual(lifecycle.status('run')['status'],'pending')
             finally:lifecycle.close();service.close()

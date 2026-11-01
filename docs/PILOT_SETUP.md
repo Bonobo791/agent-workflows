@@ -275,7 +275,8 @@ with that run and unit: it binds an observed active scope and verifies terminati
 For a previously guarded launch that has already exited, the owner can call
 `reconcile_local_scope` with that run and unit. It requires the recorded launch
 receipt and audit, the exact fenced run, an inactive unit with no systemd job,
-and an empty recorded cgroup. An unconfirmed launch or interrupted stop remains
+and an empty recorded cgroup. A `stopping` scope also qualifies when its exact
+audited stop witness has completed; a missing or incomplete receipt remains
 unresolved. This operation does not confirm the worker stopped, release a
 workspace, or resolve remote requests.
 Review [local scope recovery evidence](local-scope-recovery.md) and its host
@@ -316,9 +317,9 @@ observation means systemd inspection failed; a null empty result means no cgroup
 was recorded or systemd inspection failed. These observations are not atomic
 and do not prove a launch or stop request is quiescent; inspection changes no
 recovery state.
-An unobserved launch or interrupted stop remains fenced, as does any unresolved
-engineering workspace claim. Operator stop confirmation still requires the exact
-incarnation and termination attestation.
+An unobserved launch or a stop without a completed witness remains fenced, as
+does any unresolved engineering workspace claim. Operator stop confirmation
+still requires the exact incarnation and termination attestation.
 
 Marketing source review requires either the configured local snapshot authority
 or an independently authenticated source-tool authority. Missing, stale or

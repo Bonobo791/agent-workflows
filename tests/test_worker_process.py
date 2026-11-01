@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 class WorkerProcessTests(unittest.TestCase):
@@ -212,7 +213,7 @@ worker.main()
         if vanished:
             from runner.local_scope import SystemdScopes
             backend=SystemdScopes(os.environ)
-            with sqlite3.connect(root/'state.db') as db:
+            with closing(sqlite3.connect(root/'state.db')) as db:
                 row=db.execute("SELECT s.unit,s.cgroup FROM local_scopes s JOIN local_scope_launch_receipts r ON r.unit=s.unit WHERE s.run='r' AND s.state='running'").fetchone()
             self.assertIsNotNone(row)
             observed=backend.inspect(row[0])
@@ -224,7 +225,7 @@ worker.main()
                 time.sleep(.05)
             self.assertEqual(observed['active'],'inactive');self.assertTrue(backend.empty_cgroup(row[1]))
         if unbound:
-            with sqlite3.connect(root/'state.db') as db:
+            with closing(sqlite3.connect(root/'state.db')) as db:
                 row=db.execute("SELECT unit,state,invocation,cgroup FROM local_scopes WHERE run='r'").fetchone()
                 self.assertEqual(row[1:],('starting',None,None))
             from runner.local_scope import SystemdScopes
@@ -255,7 +256,7 @@ worker.main()
             if late:
                 self.assertFalse(action({'action':'stop_local_scope','run':'r','unit':unit})['ok'])
                 self.assertFalse(action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})['ok'])
-                with sqlite3.connect(root/'state.db') as db:
+                with closing(sqlite3.connect(root/'state.db')) as db:
                     self.assertEqual(db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('starting',))
                 (root/'launcher-release').write_text('go')
                 deadline=time.monotonic()+10
@@ -283,7 +284,7 @@ worker.main()
 
     def _assert_shutdown_fenced(self,root,path):
         import sqlite3
-        with sqlite3.connect(root/'state.db') as db:
+        with closing(sqlite3.connect(root/'state.db')) as db:
             self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('cancelled',))
             self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
             self.assertEqual(db.execute("SELECT state FROM manual_assignments WHERE run='r'").fetchone(),('pending',))
@@ -335,7 +336,7 @@ worker.main()
             os.close(launcher_fd)
         if os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1' and (root/'state.db').exists():
             import re
-            with sqlite3.connect(root/'state.db') as db:
+            with closing(sqlite3.connect(root/'state.db')) as db:
                 try: rows=db.execute("SELECT unit FROM local_scopes WHERE run='r'").fetchall()
                 except sqlite3.OperationalError: rows=[]
             for (unit,) in rows:
@@ -369,7 +370,7 @@ worker.main()
                 self.assertEqual(process.returncode,0,stderr.decode());self.assertNotIn(b'x'*40,stdout+stderr)
                 self.assertFalse((Path(root)/'control.sock').exists())
             run_worker(True);run_worker(False)
-            with sqlite3.connect(Path(root)/'state.db') as db:
+            with closing(sqlite3.connect(Path(root)/'state.db')) as db:
                 self.assertEqual(db.execute("SELECT workflow,status FROM graph_runs WHERE id='r'").fetchone(),('marketing','active'))
     def test_local_mode_starts_only_with_private_pinned_configuration(self):
         import hashlib

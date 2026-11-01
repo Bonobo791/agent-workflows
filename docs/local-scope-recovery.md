@@ -19,8 +19,7 @@ job and absence of graph claims. It requires the committed receipt and matching
 audit, the same recorded invocation and cgroup, two inactive observations, an
 empty recorded cgroup and no current systemd job. The terminated transition
 and a distinct recovery audit commit together. Missing or changed evidence
-leaves the scope unresolved. Legacy unconfirmed launches and scopes already in
-`stopping` do not qualify.
+leaves the scope unresolved. Legacy unconfirmed launches do not qualify.
 
 This evidence assumes the user systemd manager and the installed
 `systemd-run` implement the tested scope-start behavior, the controller code
@@ -42,8 +41,9 @@ An interrupted stop needs separate evidence. An opt-in experiment in
 `tests/test_stop_witness_live.py` keeps a stop client in flight while killing
 its caller. A separate witness can observe successful client exit afterward;
 if the witness is killed, the client can remain in flight and there is no
-completion evidence. This fixture does not create a durable production
-receipt or authorize reconciliation of a `stopping` scope. A production
-witness would need a unique, audited stop claim and an atomic completion
-record tied to the exact scope identity; timeouts, witness death, and a missing
-record must remain unresolved.
+completion evidence. Normal systemd stops reserve an audited operation and
+use the detached witness to record successful client completion against the
+exact scope identity. The owner can reconcile a fenced `stopping` scope after
+that record, its ordered audit and inactive, empty scope are verified.
+Timeouts, witness death, legacy stops without a receipt, and missing audit
+evidence remain unresolved.

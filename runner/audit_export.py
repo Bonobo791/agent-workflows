@@ -10,7 +10,7 @@ from runner.graph import engineering_definition, marketing_definition
 STAGES = frozenset(engineering_definition().dependencies) | frozenset(marketing_definition().dependencies)
 ROLES = STAGES | frozenset(('source_review','asset_review','platform_review'))
 TOOL_KINDS = frozenset(('mcpToolCall','webSearch','commandExecution'))
-STATUSES = frozenset(('passed', 'blocked', 'failed', 'skipped', 'untested', 'unsuitable', 'awaiting_review', 'awaiting_approval', 'rate_limited', 'invalidated', 'resumed', 'reused', 'uncertain', 'completed', 'observed', 'bound', 'open', 'resolved', 'not_executed', 'queued', 'starting', 'running', 'stopping', 'terminated', 'reconciled', 'cancelling', 'cancelled', 'claimed', 'released', 'pending', 'stopped', 'requested', 'requesting', 'restart_pending', 'restart_requested', 'restart_requesting', 'restart_uncertain', 'restarted', 'checkpointed', 'replacement_registered', 'revoked', 'approved', 'rejected', 'admitted', 'executed', 'desired_state_observed'))
+STATUSES = frozenset(('passed', 'blocked', 'failed', 'skipped', 'untested', 'unsuitable', 'awaiting_review', 'awaiting_approval', 'rate_limited', 'invalidated', 'resumed', 'reused', 'uncertain', 'completed', 'observed', 'bound', 'open', 'resolved', 'not_executed', 'queued', 'starting', 'running', 'active', 'stopping', 'terminated', 'reconciled', 'reconciled_stop', 'cancelling', 'cancelled', 'claimed', 'released', 'pending', 'stopped', 'requested', 'requesting', 'restart_pending', 'restart_requested', 'restart_requesting', 'restart_uncertain', 'restarted', 'checkpointed', 'replacement_registered', 'revoked', 'approved', 'rejected', 'admitted', 'executed', 'desired_state_observed'))
 CONFIRMATIONS = frozenset(('operator-attested', 'independently-verified'))
 INVALIDATION_REASONS = frozenset(('unspecified','cache_miss','gate_changed','artifact_unavailable','skills_unavailable','upstream_unavailable','task_changed','upstream_invalidated','upstream_changed','graph_migration'))
 TABLES = {
@@ -35,6 +35,7 @@ TABLES = {
     'local_scope_audit': (None, 'state'),
     'local_scope_launch_audit': (None, 'status'),
     'local_scope_recovery_audit': (None, 'status'),
+    'local_scope_stop_audit': (None, 'status'),
     'local_turn_scope_audit': (None, 'status'),
     'workspace_recovery_audit': (None, 'status'),
     'checkpoint_audit': (None, 'status'),
@@ -67,7 +68,7 @@ def project_event(table, row, key):
         execution = row.get('assignment')
     elif table in ('execution_launch_audit','execution_link_audit'):
         execution = row.get('execution')
-    scope = row.get('unit') if table in ('local_scope_audit','local_scope_launch_audit','local_scope_recovery_audit','local_turn_scope_audit','workspace_recovery_audit','workspace_scope_audit','local_command_launch_audit') else None
+    scope = row.get('unit') if table in ('local_scope_audit','local_scope_launch_audit','local_scope_recovery_audit','local_scope_stop_audit','local_turn_scope_audit','workspace_recovery_audit','workspace_scope_audit','local_command_launch_audit') else None
     task = row.get('task_id') if table in ('task_admission_audit','claim_audit') else None
     attempt = [run,stage,row.get('version'),row.get('count')] if table == 'attempt_audit' and isinstance(stage,str) and isinstance(row.get('version'),str) and row['version'] and type(row.get('count')) is int and row['count']>0 else None
     return {
