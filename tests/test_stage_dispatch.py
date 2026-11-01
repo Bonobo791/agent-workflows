@@ -6,6 +6,43 @@ from runner.stage_dispatch import StageDispatcher, StageError
 from tests.source_fixture import outputs as fixture_outputs, verifier as fixture_verifier
 
 class StageDispatchTests(unittest.TestCase):
+    def test_verified_other_channel_asset_does_not_supply_instagram_media(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                manifest=service.artifacts.put(json.dumps({'assets':[{'channel':'linkedin','artifact_ref':'media'}]}).encode())
+                record=service.artifacts.put(json.dumps({'status':'passed','manifest_ref':manifest}).encode())
+                with patch.object(service.graph,'get',return_value={'status':'passed','version':record}), patch('runner.openfilm_review.verify_evidence',return_value=True):
+                    self.assertIsNone(StageDispatcher(service)._instagram_asset_inputs('r'))
+                with patch.object(service.graph,'get',return_value={'status':'passed','version':record}), patch('runner.openfilm_review.verify_evidence',return_value=False):
+                    with self.assertRaises(StageError): StageDispatcher(service)._instagram_asset_inputs('r')
+            finally: service.close()
+    def test_binary_canonical_output_is_blocked_before_review(self):
+        from pathlib import Path
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.skills import SkillResolver
+        class Policy:
+            def for_role(self,role): return {'model':'fixture','effort':'medium'}
+        class Executor:
+            def __init__(self,store): self.store=store
+            def execute(self,**kw):
+                data=b'\x89PNG\r\n\x1a\n' if kw['role']=='canonical_draft' else b'brief'
+                ref=self.store.put(data); outputs=fixture_outputs(self.store,kw['role'],ref)
+                return {'session_id':kw['role']+'-session','outputs':outputs,'output':json.dumps({'stage':kw['role'],'status':'passed','input_versions':kw['input_versions'],'outputs':outputs,'findings':[]})}
+        with tempfile.TemporaryDirectory() as root:
+            skill=Path(root)/'skills'/'role'; skill.mkdir(parents=True); (skill/'SKILL.md').write_text('fixture')
+            service=Service(root); service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc')
+            try:
+                service.create('r','marketing','task'); service.enqueue('r'); queue=service.lifecycle.claim(); claim=service.claim('r')
+                task={'task_id':'task','format':'guide','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[]}
+                ref=service.artifacts.put(json.dumps(task).encode()); service.graph.db.execute('CREATE TABLE task_input_versions(run TEXT PRIMARY KEY,source_version TEXT NOT NULL,artifact_ref TEXT NOT NULL)'); service.graph.db.execute('INSERT INTO task_input_versions VALUES(?,?,?)',('r','v1',ref))
+                service.source_verifier=fixture_verifier; service.docker_executor=Executor(service.artifacts); service.model_policy=Policy(); service.skill_resolver=SkillResolver([skill.parent]); service.required_skills={'brief':['role'],'canonical_draft':['role']}
+                dispatcher=StageDispatcher(service)
+                for _ in range(3): outcome=dispatcher.step('r',queue['token'],claim)
+                self.assertEqual((outcome['stage'],outcome['status']),('canonical_draft','blocked'))
+                self.assertIsNone(service.graph.get('r','canonical_review'))
+            finally: service.lifecycle.close(); service.close()
     def test_source_only_review_block_does_not_request_draft_correction(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)
@@ -293,7 +330,9 @@ class StageDispatchTests(unittest.TestCase):
             def execute(self,**kw):
                 if kw['role']=='canonical_draft':
                     self.writer_calls+=1
-                    if self.writer_calls==2: self.assert_feedback= 'page_structure_judgment' in kw['prompt']
+                    if self.writer_calls==2:
+                        self.assert_feedback= 'page_structure_judgment' in kw['prompt']
+                        self.correction_payload=json.JSONDecoder().raw_decode(kw['prompt'].split('\n',1)[1])[0]
                     data=b'No required heading' if self.writer_calls==1 else b'# Fixture\n\nCorrected text'
                 else: data=b'synthetic brief'
                 ref=self.service.artifacts.put(data); refs=fixture_outputs(self.service.artifacts,kw['role'],ref)
@@ -316,8 +355,15 @@ class StageDispatchTests(unittest.TestCase):
                 for _ in range(4): result=dispatcher.step('r',queue['token'],claim)
                 self.assertEqual((result['stage'],result['status']),('canonical_review','blocked'))
                 record=json.loads(service.artifacts.get(result['artifact_ref'])); self.assertIn('_page_structure_blocked',record)
+                service.page_rules={'guide':{'headings':[{'level':1,'text':'Changed'}]}}
+                with self.assertRaises(StageError): dispatcher._model_stage('r','canonical_draft',queue['token'],claim,feedback_ref=result['artifact_ref'])
+                self.assertEqual(service.docker_executor.writer_calls,1)
+                service.page_rules={'guide':{'headings':[{'level':1,'text':'Fixture'}]}}
                 self.assertEqual(dispatcher.step('r',queue['token'],claim)['stage'],'canonical_draft')
                 self.assertTrue(service.docker_executor.assert_feedback)
+                payload=service.docker_executor.correction_payload
+                self.assertEqual(payload['artifacts']['page_rules'],{'format':'guide','headings':[{'level':1,'text':'Fixture'}]})
+                self.assertIn(record['_page_rules'],payload['input_versions'])
                 self.assertEqual(dispatcher.step('r',queue['token'],claim)['status'],'passed')
                 self.assertEqual(service.docker_executor.reviews,2)
             finally: service.lifecycle.close(); service.close()
@@ -330,11 +376,14 @@ class StageDispatchTests(unittest.TestCase):
         class Policy:
             def for_role(self,role): return {'model':'synthetic-terra','effort':'medium'}
         class Executor:
-            def __init__(self,service): self.service=service; self.counter=0
+            def __init__(self,service): self.service=service; self.counter=0; self.channel_calls={}
             def execute(self,**kw):
+                if kw['role']=='asset_brief': self.asset_call=kw
+                if kw['role']=='linkedin_draft': self.channel_calls[kw['role']]=kw
                 self.counter+=1; ref=self.service.artifacts.put((('# Fixture\n\n' if kw['role']=='canonical_draft' else '')+'content '+kw['role']).encode()); refs=fixture_outputs(self.service.artifacts,kw['role'],ref)
                 return {'session_id':kw.get('session_id') or 'session-'+str(self.counter),'outputs':refs,'output':json.dumps({'stage':kw['role'],'status':'passed','input_versions':kw['input_versions'],'outputs':refs,'findings':[]})}
             def review(self,subject,**kw):
+                if kw['role']=='linkedin_review': self.channel_calls[kw['role']]=kw
                 self.counter+=1; session='review-'+str(self.counter); ref=self.service.artifacts.put(('review '+kw['role']).encode())
                 output=json.dumps({'stage':kw['role'],'status':'passed','input_versions':kw['input_versions'],'outputs':[ref],'findings':[]})
                 self.service.provenance.bind(kw['run'],kw['role'],session,kw['skills'],kw['claim'],fresh=True,subject=subject)
@@ -344,7 +393,7 @@ class StageDispatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             skills=Path(root)/'skills'; (skills/'role').mkdir(parents=True); (skills/'role'/'SKILL.md').write_text('Synthetic role')
             service=Service(root); service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc'); service.create('r','marketing','task'); service.enqueue('r'); queue=service.lifecycle.claim(); claim=service.claim('r')
-            task={'task_id':'task','format':'guide','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[]}
+            task={'task_id':'task','format':'guide','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[],'description':'Create an Instagram PNG at 1080 by 1080 pixels.'}
             ref=service.artifacts.put(json.dumps(task).encode()); service.graph.db.execute('CREATE TABLE IF NOT EXISTS task_input_versions(run TEXT PRIMARY KEY, source_version TEXT NOT NULL, artifact_ref TEXT NOT NULL)'); service.graph.db.execute('INSERT INTO task_input_versions VALUES(?,?,?)',('r','v1',ref))
             service.source_verifier=fixture_verifier; service.docker_executor=Executor(service); service.model_policy=Policy(); service.skill_resolver=SkillResolver([skills])
             service.page_rules={'guide':{'headings':[{'level':1,'text':'Fixture'}]}}
@@ -384,6 +433,45 @@ class StageDispatchTests(unittest.TestCase):
                 result=dispatcher.step('r',queue['token'],claim)
                 if result.get('status')=='awaiting_review': break
             self.assertEqual(result['status'],'awaiting_review'); self.assertEqual(service.graph.get('r','asset_production')['status'],'blocked')
+            for role in ('linkedin_draft','linkedin_review'):
+                call=service.docker_executor.channel_calls[role]
+                payload=json.loads(call['prompt'].split('\n')[1])
+                self.assertEqual(json.loads(payload['artifacts']['admitted_task']),task)
+                self.assertIn(ref,call['input_versions'])
+                if role.endswith('_review'):
+                    frozen=json.loads(service.artifacts.get(service.graph.get('r','freeze')['version']))
+                    canonical=json.loads(service.artifacts.get(frozen['content_ref']))['outputs'][0]
+                    self.assertEqual(payload['artifacts']['frozen_content'],service.artifacts.get(canonical).decode())
+                    self.assertIn(canonical,call['input_versions'])
+            changed=service.artifacts.put(b'{"task_id":"changed"}')
+            service.graph.db.execute('UPDATE task_input_versions SET artifact_ref=? WHERE run=?',(changed,'r'))
+            with self.assertRaises(StageError): dispatcher._verify_recorded_review('r','linkedin_review')
+            service.graph.db.execute('UPDATE task_input_versions SET artifact_ref=? WHERE run=?',(ref,'r'))
+            old_assembly=service.graph.get('r','assembly')['version']
+            from runner.human_review import HumanReview
+            HumanReview(service)
+            service.graph.db.execute("INSERT INTO human_review_decisions VALUES(?,?,'approved','local-owner',0)",('r',old_assembly))
+            old_review=service.graph.get('r','linkedin_review')
+            legacy=json.loads(service.artifacts.get(old_review['version']))
+            legacy['input_versions']=legacy['input_versions'][:1]
+            legacy_ref=service.artifacts.put(json.dumps(legacy).encode())
+            service.graph.db.execute("UPDATE graph_stages SET version=? WHERE run='r' AND stage='linkedin_review'",(legacy_ref,))
+            freeze_version=service.graph.get('r','freeze')['version']
+            with self.assertRaises(GraphError): service.graph.invalidate_legacy_channel_reviews('r',claim,'wrong',{'linkedin_review':legacy_ref},freeze_version,ref)
+            with self.assertRaises(GraphError): service.graph.invalidate_legacy_channel_reviews('r',claim,queue['token'],{'linkedin_review':legacy_ref},'stale',ref)
+            service.graph.db.execute("INSERT INTO graph_attempts VALUES('r','reddit_draft','uncertain-probe',1,'uncertain')")
+            with self.assertRaises(GraphError): dispatcher.step('r',queue['token'],claim)
+            self.assertEqual(service.graph.get('r','assembly')['version'],old_assembly)
+            service.graph.db.execute("DELETE FROM graph_attempts WHERE version='uncertain-probe'")
+            migrated=dispatcher.step('r',queue['token'],claim)
+            self.assertEqual((migrated['stage'],migrated['status']),('linkedin_review','passed'))
+            self.assertIsNone(service.graph.get('r','assembly'))
+            self.assertTrue(dispatcher._verify_recorded_review('r','linkedin_review'))
+            self.assertEqual(service.graph.db.execute('SELECT version FROM human_review_decisions WHERE run=?',('r',)).fetchone()[0],old_assembly)
+            asset_call=service.docker_executor.asset_call
+            asset_payload=json.loads(asset_call['prompt'].split('\n')[1])
+            self.assertEqual(json.loads(asset_payload['artifacts']['admitted_task']),task)
+            self.assertIn(ref,asset_call['input_versions'])
             self.assertEqual(service.graph.get('r','instagram_review')['status'],'blocked')
             instagram=json.loads(service.artifacts.get(service.graph.get('r','instagram_review')['version']))
             self.assertIn('asset',instagram['_blocked_reason'])

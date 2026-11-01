@@ -17,8 +17,10 @@ class RedditContextTests(unittest.TestCase):
         self.queue=service.queue.claim('worker',60)['token']; self.claim=service.claim('run')
         store=service.artifacts; self.subject=store.put(b'Synthetic Reddit draft')
         empty=store.put(json.dumps({'outputs':[]}).encode()); draft=store.put(json.dumps({'outputs':[self.subject],'session_id':'writer'}).encode())
+        canonical=store.put(json.dumps({'outputs':[store.put(b'Synthetic frozen content')]}).encode())
+        freeze=store.put(json.dumps({'content_ref':canonical}).encode())
         for stage in ('intake','brief','canonical_draft','canonical_review','freeze','reddit_draft'):
-            service.graph.finish('run',stage,service.graph.prepare('run',stage,self.claim),'passed',draft if stage=='reddit_draft' else empty,self.claim)
+            service.graph.finish('run',stage,service.graph.prepare('run',stage,self.claim),'passed',draft if stage=='reddit_draft' else freeze if stage=='freeze' else empty,self.claim)
         service.graph.db.execute('CREATE TABLE task_input_versions(run TEXT PRIMARY KEY,source_version TEXT NOT NULL,artifact_ref TEXT NOT NULL)')
         service.graph.db.execute('INSERT INTO task_input_versions VALUES(?,?,?)',('run','v1',empty))
         class Skills:

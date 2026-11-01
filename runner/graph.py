@@ -138,6 +138,29 @@ class GraphStore:
             self.db.execute('COMMIT'); return True
         except Exception:
             self.db.execute('ROLLBACK'); raise
+    def invalidate_legacy_channel_reviews(self,run,token,queue_claim,versions,freeze_version,task_ref):
+        if not versions or any(stage not in {channel+'_review' for channel in CHANNELS} for stage in versions): raise GraphError('invalid review migration')
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            self._lease(run,token)
+            job=self.db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
+            if not job or job[0]!='running' or not isinstance(queue_claim,str) or not isinstance(job[1],str) or not secrets.compare_digest(job[1],queue_claim) or job[2] is None or job[2]<=time.time(): raise GraphError('queue claim unavailable')
+            if self._definition(run).name!='marketing' or self.db.execute("SELECT 1 FROM graph_attempts WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved stage attempt')
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_actions'").fetchone() and self.db.execute("SELECT 1 FROM external_actions WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved external action')
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone() and self.db.execute("SELECT 1 FROM local_scopes WHERE run=? AND state IS NOT 'terminated'",(run,)).fetchone(): raise GraphError('unresolved local scope')
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone() and self.db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated')",(run,)).fetchone(): raise GraphError('unresolved worker execution')
+            freeze=self.get(run,'freeze'); task=self.db.execute('SELECT artifact_ref FROM task_input_versions WHERE run=?',(run,)).fetchone()
+            if not freeze or freeze['status']!='passed' or freeze['version']!=freeze_version or not task or task[0]!=task_ref: raise GraphError('review inputs changed')
+            for stage,version in versions.items():
+                current=self.get(run,stage)
+                if not current or current['version']!=version: raise GraphError('review changed')
+            self._invalidate_stages(run,set(versions)|{'assembly'},'review_context_changed')
+            self._lease(run,token)
+            current=self.db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
+            if not current or current[0]!='running' or not isinstance(current[1],str) or not secrets.compare_digest(current[1],queue_claim) or current[2] is None or current[2]<=time.time(): raise GraphError('queue claim unavailable')
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK'); raise
     def session(self,run,role):
         row=self.db.execute('SELECT session FROM graph_sessions WHERE run=? AND role=?',(run,role)).fetchone()
         return row[0] if row else None
@@ -252,9 +275,13 @@ class GraphStore:
         for stage in sorted(stages):
             row=self.db.execute('SELECT version,revision FROM graph_stages WHERE run=? AND stage=?',(run,stage)).fetchone()
             if row:
-                self.db.execute('INSERT INTO invalidation_audit(schema_version,run,stage,status,reason,created) VALUES(1,?,?,?,?,?)',(run,stage,'invalidated',reason if root is None or stage==root else 'upstream_invalidated',self.clock()))
-                self.db.execute('INSERT INTO graph_audit(schema_version,run,stage,status,version,revision,created) VALUES(1,?,?,?,?,?,?)',(run,stage,'invalidated',row[0],row[1],self.clock()))
-                self.db.execute('DELETE FROM graph_stages WHERE run=? AND stage=?',(run,stage))
+                audit_reason=reason if root is None or stage==root else 'upstream_invalidated'
+                event=self.db.execute('INSERT INTO invalidation_audit(schema_version,run,stage,status,reason,created) VALUES(1,?,?,?,?,?)',(run,stage,'invalidated',audit_reason,self.clock()))
+                if event.rowcount!=1 or not self.db.execute("SELECT 1 FROM invalidation_audit WHERE id=? AND schema_version=1 AND run=? AND stage=? AND status='invalidated' AND reason=?",(event.lastrowid,run,stage,audit_reason)).fetchone(): raise GraphError('invalidation audit unavailable')
+                event=self.db.execute('INSERT INTO graph_audit(schema_version,run,stage,status,version,revision,created) VALUES(1,?,?,?,?,?,?)',(run,stage,'invalidated',row[0],row[1],self.clock()))
+                if event.rowcount!=1 or not self.db.execute("SELECT 1 FROM graph_audit WHERE id=? AND schema_version=1 AND run=? AND stage=? AND status='invalidated' AND version=? AND revision=?",(event.lastrowid,run,stage,*row)).fetchone(): raise GraphError('stage audit unavailable')
+                removed=self.db.execute('DELETE FROM graph_stages WHERE run=? AND stage=?',(run,stage))
+                if removed.rowcount!=1 or self.db.execute('SELECT 1 FROM graph_stages WHERE run=? AND stage=?',(run,stage)).fetchone(): raise GraphError('stage invalidation unavailable')
     def invalidate(self,run,stage,snapshot,token,reason='unspecified'):
         if reason not in ('unspecified','cache_miss','gate_changed','artifact_unavailable','skills_unavailable','upstream_unavailable','task_changed'): raise GraphError('invalid invalidation reason')
         self.db.execute('BEGIN IMMEDIATE')

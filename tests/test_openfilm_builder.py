@@ -16,6 +16,40 @@ from runner.manual_lifecycle import ManualLifecycle
 
 
 class MediaAttachmentTests(unittest.TestCase):
+    def test_project_author_cannot_change_or_reorder_attempt_inputs(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.openfilm_builder import CodexOpenFilmProjectBuilder
+        from runner.service import Service
+        from runner.skills import SkillResolver
+        with tempfile.TemporaryDirectory() as root:
+            skill=Path(root)/'skills'/'author'; skill.mkdir(parents=True); (skill/'SKILL.md').write_text('fixture')
+            service=Service(root)
+            try:
+                service.create('r','marketing','synthetic'); claim=service.graph.claim('r',60)
+                service.model_supervisor=SimpleNamespace(db=str(Path(root)/'state.db'),policy_hash='a'*64,verify_policy=lambda:True)
+                service.docker_supervisor=SimpleNamespace(config=SimpleNamespace(policy_hash='b'*64))
+                service.model_policy=SimpleNamespace(for_role=lambda role:{'model':'fixture'})
+                service.skill_resolver=SkillResolver([str(skill.parent)]); service.required_skills={'asset_production':['author']}
+                content=service.artifacts.put(b'Approved text'); brief={'content_ref':content,'assets':[{'media':[]}]}
+                brief_ref=service.artifacts.put(json.dumps(brief).encode()); attempt='1'*64
+                raw=io.BytesIO()
+                with zipfile.ZipFile(raw,'w') as archive: archive.writestr('film.html','fixture')
+                project=service.artifacts.put(raw.getvalue())
+                builder=CodexOpenFilmProjectBuilder(service,lambda _:True)
+                def execute(**kwargs):
+                    inputs=list(kwargs['input_versions'])
+                    if variant=='changed': inputs[2]='2'*64
+                    elif variant=='reordered': inputs.reverse()
+                    else: inputs.pop()
+                    response={'stage':'asset_production','status':'passed','input_versions':inputs,'outputs':[project],'findings':[]}
+                    return {'output':json.dumps(response),'outputs':[project]}
+                for variant in ('changed','reordered','missing'):
+                    with self.subTest(variant=variant),patch.object(builder,'ready',return_value=True),patch.object(builder,'_active',return_value=True),patch('runner.openfilm_builder.CodexExecutor') as executor,patch('runner.openfilm_builder._attach_media') as attach:
+                        executor.return_value.execute.side_effect=execute
+                        with self.assertRaisesRegex(ValueError,'project output invalid'): builder.build(run='r',attempt_id=attempt,brief_ref=brief_ref,brief=brief,canonical='Approved text',graph_claim=claim,queue_claim='fixture')
+                        attach.assert_not_called()
+            finally: service.close()
     def test_media_is_private_per_asset_and_reproducible(self):
         with tempfile.TemporaryDirectory() as root:
             store=ArtifactStore(root)
@@ -115,6 +149,7 @@ class BuilderRuntimeTests(unittest.TestCase):
                 service.graph.db.execute("INSERT INTO openfilm_render_jobs(assignment,task_run,attempt_id,policy_hash,state,brief_ref) VALUES(?,?,?,?,?,?)",('of-'+attempt,'run',attempt,service.openfilm_backend.policy_hash,'building',brief_ref))
                 built=builder.build(run='run',attempt_id=attempt,brief_ref=brief_ref,brief=brief,canonical='Approved text',graph_claim=claim,queue_claim=job['token'])
                 self.assertIn('Render each video\'s supplied captions visibly',Handler.prompt)
+                self.assertIn('third input_versions entry is the attempt identifier',Handler.prompt)
                 self.assertTrue(builder.verify('run',attempt,brief_ref,built['project_ref'],built['proof_ref']))
                 with zipfile.ZipFile(io.BytesIO(service.artifacts.get(built['project_ref']))) as z: self.assertEqual(z.read('media/'+media+'.png'),service.artifacts.get(media))
                 self.assertFalse(builder.verify('run','2'*64,brief_ref,built['project_ref'],built['proof_ref']))

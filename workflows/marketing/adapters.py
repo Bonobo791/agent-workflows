@@ -17,20 +17,19 @@ class AdapterError(RuntimeError): pass
 ROLE_INPUTS = {
     'intake': ('task',), 'brief': ('task',),
     'canonical_draft': ('brief',), 'canonical_review': ('brief', 'canonical_draft'),
-    **{f'{channel}_draft': ('freeze',) for channel in CHANNELS},
-    **{f'{channel}_review': (f'{channel}_draft',) for channel in CHANNELS},
+    **{f'{channel}_draft': ('freeze','task') for channel in CHANNELS},
+    **{f'{channel}_review': (f'{channel}_draft','freeze','task') for channel in CHANNELS},
     'asset_brief': ('freeze',),
 }
 PROMPTS = {
     'intake': 'Validate the task is ready and identify its requested format.',
     'brief': 'Prepare the brief and a candidate primary-source evidence register. This writer cannot fetch network sources; a separate reviewer will fetch approved URLs and verify every claim. Do not claim sources were checked by this writer or invent claims. Return passed when the brief and candidate register are complete; the separate source gate determines whether their claims are supported.',
-    'canonical_draft': 'Write the requested canonical asset, following the brief and page-type requirements. The source_verification artifact is the independent source-gate result; it supersedes the brief writer’s lack of network access.',
-    'canonical_review': 'Independently review editorial quality, factual evidence and SEO/GEO. Return structured findings.',
-    **{f'{channel}_draft': f'Create a distinct {channel} draft from the frozen source.' for channel in CHANNELS},
-    **{f'{channel}_review': f'Independently review the {channel} draft and report platform-specific findings.' for channel in CHANNELS},
+    'canonical_draft': 'Write the requested canonical copy as UTF-8 Markdown, following the brief and page-type requirements. Media production happens after freeze; do not render or substitute an image for the copy. The source_verification artifact is the independent source-gate result; it supersedes the brief writer’s lack of network access.',
+    'canonical_review': 'Independently review the supplied canonical draft in the task field for editorial quality, factual evidence and SEO/GEO. Media production and channel-specific checks happen after freeze; do not require rendered media at this stage. Return structured findings.',
+    **{f'{channel}_draft': f'Create a distinct {channel} draft from the frozen source, using the admitted task for channel requirements. Return passed when the draft is ready for independent review, or blocked with a reason if it cannot be drafted. A passed draft is not publication approval.' for channel in CHANNELS},
+    **{f'{channel}_review': f'Independently review the {channel} draft against the frozen source and admitted task, and report platform-specific findings.' for channel in CHANNELS},
     'asset_brief': 'Prepare a versioned media brief; do not claim proposed media exists.',
 }
-PROMPTS['linkedin_review'] = 'Independently review the LinkedIn draft and report platform-specific findings.'
 PROMPTS['reddit_review'] += ' Check current community rules, relevance and affiliation; block if unsuitable.'
 PROMPTS['instagram_review'] += ' Missing verified media must block.'
 

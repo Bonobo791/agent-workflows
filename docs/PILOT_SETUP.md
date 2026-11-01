@@ -107,6 +107,30 @@ must not contain private skills, credentials, user data or session histories.
   Approved JSON sources are size-limited and must parse as valid JSON. Changing
   the fetcher changes its snapshot policy, so older snapshots require a fresh
   fetch and review.
+  `WORKFLOW_TEST_PUBLIC_SOURCE=1 python -m unittest tests.test_source_snapshot_live`
+  checks a disposable snapshot against `https://example.com/` and confirms a
+  changed fetch policy invalidates it. It does not validate marketing claims.
+  With `WORKFLOW_TEST_SYSTEMD=1` and `CODEX_TEST_EXECUTABLE` set, the opt-in
+  `tests.test_source_reviewer_live` also performs signed-in source review,
+  canonical writing and independent review turns against that fixture. These
+  calls do not advance the workflow graph or approve a package. Failed runs
+  retain their private state for inspection.
+  `tests.test_local_marketing_graph_live`, with the same opt-in variables,
+  runs a synthetic admitted task through the actual dispatcher to the freeze
+  approval gate. By default it does not approve the gate or verify a campaign.
+  Adding `WORKFLOW_TEST_CHANNELS=1` applies a fixture-only freeze approval and
+  exercises five channel drafts and separate LinkedIn, X, Facebook and Reddit
+  reviews. With no render adapter or community context, it also checks blocked
+  asset production, Instagram and Reddit before assembling a human-review
+  package. The test does not publish or establish media, community-context or
+  human acceptance.
+  Adding `WORKFLOW_TEST_RENDER=1`, `OPENFILM_TEST_MANUAL`,
+  `OPENFILM_PODMAN_IMAGE` and `OPENFILM_PODMAN_SOCKET` runs an offline still
+  render and independent image review in that fixture. Its platform authority
+  is synthetic; the probe does not establish actual platform compliance.
+  `WORKFLOW_TEST_DECISION=1` additionally exercises a fixture-only decision on
+  the exact assembled version, with synthetic task freshness. It is not a
+  human decision on a real package.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
@@ -165,6 +189,11 @@ A separate opt-in cancellation test stops a running synthetic renderer and
 checks the container is terminated while the attempt remains uncertain and
 no result is committed. This does not reconcile an interrupted stop or
 establish full marketing workflow acceptance.
+Channel reviews bind the frozen source and admitted task as well as the draft.
+When a running task has older reviews without these inputs, dispatch invalidates
+those reviews and the assembled package only with current claims and no
+unresolved work. The reviews must run again and any new package needs a new
+human decision; decisions on earlier package versions remain in history.
 The standard local worker constructs the renderer when the Podman runtime
 configuration is present. Its policy check verifies the socket owner and
 access, rootless Podman, seccomp, SELinux, the pinned image ID and the renderer

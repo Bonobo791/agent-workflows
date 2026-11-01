@@ -19,7 +19,9 @@ Prior reuse is not backfilled. Stage invalidations are in `graph_audit`, but
 `invalidation_audit` additionally records bounded reasons for explicit
 invalidation calls, stage completion and graph migration, and labels affected
 downstream stages. Both audit inserts and the affected stage deletions share one
-transaction. Historical invalidation reasons are not backfilled.
+transaction. Each insert is verified before deleting the stage; a suppressed or
+altered audit row rolls back the invalidation. Historical invalidation reasons
+are not backfilled.
 `task_admission_audit` records successful intake, readiness blocks and duplicate
 admission rejection, with the normalized readiness reasons and an admitted task
 artifact reference kept private. Successful admission and its audit are atomic;

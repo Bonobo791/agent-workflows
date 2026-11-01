@@ -37,7 +37,16 @@ class SourceSnapshots:
         graph._lease(run,claim)
         created=time.time();bundle={'run':run,'register_ref':register_ref,'draft_ref':draft_ref,'policy_hash':self.policy_hash,'created':created,'sources':items}
         reference=store.put(json.dumps(bundle,sort_keys=True,separators=(',',':')).encode())
-        graph.db.execute('INSERT INTO source_snapshots VALUES(?,?,?,?,?,?)',(reference,run,register_ref,draft_ref,self.policy_hash,created))
+        graph.db.execute('BEGIN IMMEDIATE')
+        try:
+            graph._lease(run,claim)
+            if cancelled() or self._policy()!=self.policy_hash: raise SourceFetchError('source request cancelled or policy changed')
+            graph.db.execute('INSERT INTO source_snapshots VALUES(?,?,?,?,?,?)',(reference,run,register_ref,draft_ref,self.policy_hash,created))
+            graph._lease(run,claim)
+            if cancelled() or self._policy()!=self.policy_hash: raise SourceFetchError('source request cancelled or policy changed')
+            graph.db.execute('COMMIT')
+        except Exception:
+            graph.db.execute('ROLLBACK'); raise
         return reference
     def verify(self,run,register_ref,draft_ref,reference):
         try:
