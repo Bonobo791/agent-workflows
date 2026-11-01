@@ -39,11 +39,11 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         db.execute('INSERT INTO docker_assignments VALUES(?,?,?,?)',(a,'id','terminated','fixture')); db.execute('INSERT INTO docker_terminal_evidence VALUES(?,?,?,?)',(a,'id','exited',1))
         self.registry.release('run-1',a); self.assertEqual(self.registry.claim('run-1',b,self.policy),path)
     def _rejected_correction_fixture(self):
-        from runner.engineering_dispatch import _UNADOPTED
+        from runner.graph import UNADOPTED_SQL
         self.registry.register(*self.args,self.registry.binding_hash(*self.args))
         (self.repo/'new.txt').write_text('approved'); git(self.repo,'add','new.txt'); git(self.repo,'commit','-m','approved'); approved=git(self.repo,'rev-parse','HEAD')
         (self.repo/'new.txt').write_text('rejected'); git(self.repo,'commit','-am','rejected'); rejected=git(self.repo,'rev-parse','HEAD')
-        db=self.service.graph.db; db.execute(_UNADOPTED); db.execute('INSERT INTO engineering_unadopted VALUES(?,?,?,?)',('run-1',1,approved,rejected))
+        db=self.service.graph.db; db.execute(UNADOPTED_SQL); db.execute('INSERT INTO engineering_unadopted VALUES(?,?,?,?)',('run-1',1,approved,rejected))
         return approved,rejected
     def test_rerun_after_rejected_correction_restores_approved_commit_and_keeps_rejected_work(self):
         from runner.engineering_dispatch import recover_unadopted, workspace_snapshot
@@ -55,6 +55,11 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         self.assertEqual(git(self.repo,'rev-parse','refs/recovery/run-1/'+rejected),rejected)
         self.assertIsNone(self.service.graph.db.execute('SELECT 1 FROM engineering_unadopted').fetchone())
         recover_unadopted(self.service,'run-1')
+    def test_recovery_refuses_malformed_revisions(self):
+        self._rejected_correction_fixture()
+        for bad in ('../x','HEAD','A'*40,''):
+            with self.assertRaises(WorkspaceError): self.registry.recover_unadopted(*self.args[:6],bad,self.base)
+            with self.assertRaises(WorkspaceError): self.registry.recover_unadopted(*self.args[:6],self.base,bad)
     def test_recovery_resumes_after_reset_and_refuses_unexpected_state(self):
         from runner.engineering_dispatch import EngineeringError, recover_unadopted
         approved,rejected=self._rejected_correction_fixture()

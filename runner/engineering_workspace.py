@@ -62,6 +62,7 @@ class EngineeringWorkspace:
         except OSError: raise WorkspaceError('workspace unavailable') from None
     def recover_unadopted(self,run,repository,base,branch,owner,policy,approved,rejected):
         """Preserve a rejected correction commit under a recovery ref, then restore the approved commit. Any mismatch leaves the workspace untouched."""
+        if not all(isinstance(x,str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',x) for x in (approved,rejected)): raise WorkspaceError('invalid recovery revision')
         path=self.verify(run,repository,base,branch,owner,policy)
         ref='refs/recovery/'+run+'/'+rejected
         head=self._git(path,'rev-parse','--verify','HEAD^{commit}')

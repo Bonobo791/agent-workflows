@@ -58,7 +58,7 @@ class GraphRunner:
                     self.graph.invalidate(run,parent,snapshot,token,reason='upstream_unavailable')
                     raise ExecutionError('upstream skill inputs changed')
         visit(stage)
-    def execute(self,run,stage,token,inputs,required_dependencies=None,correction_id=None):
+    def execute(self,run,stage,token,inputs,required_dependencies=None,correction_id=None,unadopted=None):
         if self.graph.quota_paused(self.quota_scope): raise ExecutionError('subscription quota paused; explicit resume required')
         if stage in EXTERNAL_STAGES: raise ExecutionError('external stage requires a separate approved integration')
         self._verify_upstream_skills(run,stage,token)
@@ -123,7 +123,7 @@ class GraphRunner:
             output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
             ref=self.artifacts.put(output)
             if correction_id is not None and status!='passed':
-                self.graph.close_unadopted_correction(run,stage,token,input_hash,correction_id,ref)
+                self.graph.close_unadopted_correction(run,stage,token,input_hash,correction_id,ref,unadopted or None)
                 self.correction_outcome=status
                 return ref
             self.graph.finish(run,stage,snapshot,status,ref,token,completion_input=input_hash,skill_fingerprint=skill_fingerprint,session_record=result.get('session_id') if resumable else None,correction_id=correction_id)

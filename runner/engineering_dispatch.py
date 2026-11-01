@@ -5,6 +5,7 @@ import secrets
 import sqlite3
 import time
 from runner.engineering_workspace import EngineeringWorkspace
+from runner.graph import UNADOPTED_SQL
 from runner.graph_runner import GraphRunner
 from runner.structured import parse_marketing_result, RESULT_INSTRUCTIONS
 
@@ -25,11 +26,9 @@ def workspace_snapshot(service,run,assignment=None):
         return {'repository':row[0],'base':row[1],'branch':row[2],'head':head,'path':path,'policy':row[5],'diff':diff}
     finally: registry.close()
 
-_UNADOPTED='CREATE TABLE IF NOT EXISTS engineering_unadopted(run TEXT PRIMARY KEY,correction_id INTEGER NOT NULL,approved TEXT NOT NULL,rejected TEXT NOT NULL)'
-
 def recover_unadopted(service,run):
     """Before a fresh implementation, restore the approved commit after a rejected correction; otherwise leave the workspace blocked for inspection."""
-    db=service.graph.db; db.execute(_UNADOPTED)
+    db=service.graph.db; db.execute(UNADOPTED_SQL)
     row=db.execute('SELECT approved,rejected FROM engineering_unadopted WHERE run=?',(run,)).fetchone()
     if not row: return
     local=service.model_supervisor
@@ -99,6 +98,7 @@ def dispatch(dispatcher,run,stage,queue_claim,graph_claim,feedback_ref=None,corr
         after=workspace_snapshot(service,run)
         if name=='implement':
             if after['head']==after['base'] or not after['diff'] or (correction_id is not None and after['head']==before['head']): raise EngineeringError('implementation commit or diff missing')
+            if correction_id is not None: unadopted.update(approved=before['head'],rejected=after['head'])
             evidence={k:after[k] for k in ('repository','base','branch','head','policy')}; evidence['diff_ref']=service.artifacts.put(after['diff'].encode())
             parsed['evidence_ref']=service.artifacts.put(json.dumps(evidence,sort_keys=True).encode()); parsed['commit']=after['head']
         else:
@@ -124,12 +124,10 @@ def dispatch(dispatcher,run,stage,queue_claim,graph_claim,feedback_ref=None,corr
         if result.get('status')=='passed': return True
         if result.get('status') in ('blocked','failed'): return 'blocked'
         return False
+    unadopted={}
     runner=GraphRunner(service.graph,service.artifacts,specialist,gate,skill_resolver=service.skill_resolver,required_skills=service.required_skills)
-    ref=runner.execute(run,stage,graph_claim,{'inputs':refs,'head':before['head']},correction_id=correction_id)
-    if runner.correction_outcome is not None:
-        service.graph.db.execute(_UNADOPTED); rejected=workspace_snapshot(service,run)['head']
-        if rejected!=before['head']: service.graph.db.execute('INSERT INTO engineering_unadopted VALUES(?,?,?,?)',(run,correction_id,before['head'],rejected))
-        return {'stage':stage,'status':'blocked','correction_outcome':runner.correction_outcome,'artifact_ref':ref,'reason':'correction not adopted; approved implementation and blocked review retained'}
+    ref=runner.execute(run,stage,graph_claim,{'inputs':refs,'head':before['head']},correction_id=correction_id,unadopted=unadopted)
+    if runner.correction_outcome is not None: return {'stage':stage,'status':'blocked','correction_outcome':runner.correction_outcome,'artifact_ref':ref,'reason':'correction not adopted; approved implementation and blocked review retained'}
     return {'stage':stage,'status':service.graph.get(run,stage)['status'],'artifact_ref':ref}
 
 def approval_package(service,run):
