@@ -53,7 +53,9 @@ class SkillResolver:
             matches=[]
             for root in self.roots:
                 try:
-                    path=(root/name/'SKILL.md').resolve(strict=True)
+                    entry=root/name/'SKILL.md'
+                    if entry.is_symlink(): raise SkillError('skill package symlink unavailable')
+                    path=entry.resolve(strict=True)
                     if not path.is_relative_to(root) or not path.is_file(): continue
                     if path.stat().st_size>262144: raise SkillError('skill too large')
                     matches.append(path)

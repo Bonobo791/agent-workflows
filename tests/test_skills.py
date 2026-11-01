@@ -63,6 +63,13 @@ class SkillTests(unittest.TestCase):
             os.mkfifo(package/'pipe')
             with self.assertRaises(SkillError):SkillResolver([root]).resolve(['seo'])
 
+    def test_entry_point_symlink_cannot_redirect_the_package_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            other=Path(root)/'other'; other.mkdir(); (other/'SKILL.md').write_text('target')
+            seo=Path(root)/'seo'; seo.mkdir(); (seo/'required.md').write_text('reference')
+            (seo/'SKILL.md').symlink_to(other/'SKILL.md')
+            with self.assertRaises(SkillError): SkillResolver([root]).resolve(['seo'])
+
     def test_unreadable_reference_directory_is_not_silently_omitted(self):
         with tempfile.TemporaryDirectory() as root:
             package=Path(root)/'seo';reference=package/'references';reference.mkdir(parents=True)
