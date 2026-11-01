@@ -83,3 +83,9 @@ late launch stayed fenced until the owner observed and stopped it. A previously
 bound scope stopped outside the controller stayed fenced because it lacked the
 required reconciliation evidence. These are isolated test cases, not evidence
 that arbitrary in-flight launches or remote outcomes can be recovered.
+
+The host run at `471240c` also passed all eight tests in
+`tests.test_scope_stop_live` and `tests.test_stop_witness_live`, including
+stops interrupted before, during, and after the request and a killed witness.
+These tests use temporary scopes and synthetic processes; an incomplete witness
+still leaves the actual stop outcome unresolved.
