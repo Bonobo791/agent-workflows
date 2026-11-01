@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import json
 import os
+import select
 from pathlib import Path
 from unittest.mock import patch
 from runner.local_process import LocalProcessError, start_local_process
@@ -38,8 +39,9 @@ class LocalProcessTests(unittest.TestCase):
                 self.assertNotIn('ACCESS_TOKEN',kwargs['env'])
             with patch('runner.local_process.start_guarded',side_effect=self.guarded_launch(backend,process,check)):
                 handle=start_local_process(root+'/state.db','run',str(work),str(binary),{'HOME':root,'ACCESS_TOKEN':'secret'},backend,lambda:True,{'mcp_servers':[],'plugins':[]})
-            self.assertEqual(os.read(self.last_go_read,1),b'G')
             self.assertTrue(Path(handle.output_dir).is_dir()); self.assertFalse(Path(handle.output_dir).is_relative_to(work))
+            self.assertTrue(select.select([self.last_go_read],[],[],0)[0])
+            self.assertEqual(os.read(self.last_go_read,1),b'G')
             self.assertTrue(handle.assert_active());self.assertTrue(handle.finish())
             scopes=LocalScopes(root+'/state.db',backend)
             try:self.assertEqual(scopes.state('run',handle.unit),'terminated')
@@ -52,10 +54,11 @@ class LocalProcessTests(unittest.TestCase):
                 with self.assertRaises(LocalProcessError): start_local_process(root+'/state.db','run',root,str(binary),{'HOME':root},backend,lambda:False,{'mcp_servers':[],'plugins':[]})
                 launch.assert_not_called()
     def test_binding_failure_closes_authorization_pipe(self):
+        from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as root:
             binary=Path(root)/'codex';binary.write_text('synthetic');binary.chmod(0o700)
             work=Path(root)/'work';work.mkdir(mode=0o700)
-            backend=Backend();process=FakeProcess();launches=[]
+            backend=Backend();process=FakeProcess();process.wait=Mock(return_value=0);launches=[]
             start=self.guarded_launch(backend,process)
             def launch(*args,**kwargs):
                 result=start(*args,**kwargs);launches.append(result);return result
@@ -63,6 +66,7 @@ class LocalProcessTests(unittest.TestCase):
                 with self.assertRaises(LocalProcessError):
                     start_local_process(root+'/state.db','run',str(work),str(binary),{'HOME':root},backend,lambda:True,{'mcp_servers':[],'plugins':[]})
             self.assertEqual(os.read(self.last_go_read,1),b'')
+            process.wait.assert_called_once_with(timeout=1)
     def test_failed_binding_reaps_real_guard_process(self):
         from runner.local_launch import start_guarded
         with tempfile.TemporaryDirectory() as root:

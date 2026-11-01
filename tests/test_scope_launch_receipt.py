@@ -75,6 +75,23 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
                 self.assertEqual(os.read(self.go_read,1),b'G')
             finally:other.close()
 
+    def test_release_commit_failure_preserves_durable_launch_evidence(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            backend,scopes,unit,launch=self.fixture(root);scopes.bind_confirmed('run',unit,launch)
+            db=scopes.db
+            class FailCommit:
+                def execute(self,sql,*args):
+                    if sql=='COMMIT':raise sqlite3.OperationalError('commit unavailable')
+                    return db.execute(sql,*args)
+                def close(self):db.close()
+            scopes.db=FailCommit()
+            with self.assertRaises(sqlite3.OperationalError):scopes.release_confirmed('run',unit,launch,lambda:True)
+            self.assertEqual(os.read(self.go_read,1),b'G')
+            self.assertEqual(scopes.state('run',unit),'running')
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM local_scope_launch_receipts').fetchone(),(1,))
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM local_scope_launch_audit').fetchone(),(1,))
+
     def test_release_rejects_changed_scope_or_fence(self):
         for change in ('fence','scope','receipt','audit','deadline'):
             with self.subTest(change=change),tempfile.TemporaryDirectory() as root:
@@ -142,11 +159,12 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
             self.assertEqual(scopes.db.execute('SELECT run,unit,status FROM local_scope_recovery_audit').fetchone(),('run',unit,'reconciled'))
 
     def test_reconciliation_audit_failure_rolls_back_termination(self):
-        for action in ("SELECT RAISE(ABORT,'unavailable')",'SELECT RAISE(IGNORE)'):
+        import sqlite3
+        for action,error in (("SELECT RAISE(ABORT,'unavailable')",sqlite3.IntegrityError),('SELECT RAISE(IGNORE)',ScopeError)):
             with self.subTest(action=action),tempfile.TemporaryDirectory() as root:
                 backend,scopes,unit=self.recovery_fixture(root)
                 scopes.db.execute('CREATE TRIGGER reject_recovery BEFORE INSERT ON local_scope_recovery_audit BEGIN '+action+'; END')
-                with self.assertRaises(Exception):scopes.reconcile_confirmed('run',unit,('target','inc'))
+                with self.assertRaises(error):scopes.reconcile_confirmed('run',unit,('target','inc'))
                 self.assertEqual(scopes.state('run',unit),'running')
         with tempfile.TemporaryDirectory() as root:
             backend,scopes,unit=self.recovery_fixture(root)
@@ -168,6 +186,16 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
                 with self.assertRaises(ScopeError):scopes.reconcile_confirmed('run',unit,('target','inc'))
             self.assertEqual(scopes.state('run',unit),'running')
             self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scope_recovery_audit').fetchone(),(0,))
+
+    def test_reconciliation_rejects_changed_observed_identity(self):
+        from unittest.mock import patch
+        for key,value in (('cgroup','/other.scope'),('invocation','b'*32)):
+            with self.subTest(key=key),tempfile.TemporaryDirectory() as root:
+                backend,scopes,unit=self.recovery_fixture(root)
+                observed={**backend.inspect(unit),key:value}
+                with patch.object(backend,'inspect',return_value=observed):
+                    with self.assertRaises(ScopeError):scopes.reconcile_confirmed('run',unit,('target','inc'))
+                self.assertEqual(scopes.state('run',unit),'running')
 
     def test_fence_cannot_change_during_reconciliation(self):
         import sqlite3

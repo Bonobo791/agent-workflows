@@ -45,8 +45,9 @@ class LocalCommandTests(unittest.TestCase):
                 groups.append(backend.inspect(unit)['cgroup'])
                 raise ScopeError('audit unavailable')
             with patch.object(LocalScopes,'bind_confirmed',autospec=True,side_effect=reject):
+                deadline=time.monotonic()+30
                 with self.assertRaises(LocalCommandError):
-                    _run_scoped(supervisor,'run',root,['/usr/bin/touch',str(marker)],{'PATH':'/usr/bin:/bin'},time.monotonic()+30,1024,units.append)
+                    _run_scoped(supervisor,'run',root,['/usr/bin/touch',str(marker)],{'PATH':'/usr/bin:/bin'},deadline,1024,units.append)
             deadline=time.monotonic()+10
             while time.monotonic()<deadline and not backend.empty_cgroup(groups[0]):time.sleep(.05)
             self.assertTrue(backend.empty_cgroup(groups[0]));self.assertFalse(marker.exists())

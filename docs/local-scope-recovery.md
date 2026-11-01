@@ -12,6 +12,9 @@ observed scope, then commits the scope identity, receipt and audit together.
 The final fence check and authorization hold the state database write lock, so
 cancellation cannot commit between those two operations. If the parent dies
 before authorization, the guard sees the closed pipe and exits.
+The parent controls launch deadlines and closes the authorization pipe on
+failure. The guard does not impose a shorter timeout while scope binding is
+still in progress; a hung parent leaves it waiting until cancellation or exit.
 
 For reconciliation, the controller holds that write lock while it rechecks
 the exact pending manual assignment, cancelled graph, uncertain or cancelling

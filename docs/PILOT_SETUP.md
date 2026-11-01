@@ -320,9 +320,11 @@ recovery state.
 An unobserved launch or a stop without a completed witness remains fenced, as
 does any unresolved engineering workspace claim. Operator stop confirmation
 still requires the exact incarnation and termination attestation.
-If systemd forgets a previously bound scope, an empty cgroup alone does not
-establish that its launch request is quiescent. Legacy scopes without a guarded
-launch receipt remain unresolved and must not be replayed.
+If a legacy bound scope without a guarded receipt exits and systemd forgets the
+unit before the stop control runs, it stays unresolved even with an empty cgroup.
+Only the guarded-launch evidence described above qualifies for
+`reconcile_local_scope`; an empty observation alone never authorizes stop
+confirmation or replay. Interrupted stops require their completed, audited witness.
 
 An opt-in real sandbox probe can check the specific parent cgroup file and user
 D-Bus socket on the local host:

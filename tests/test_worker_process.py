@@ -251,25 +251,13 @@ worker.main()
 
     def _recover_crashed_worker(self,root,env,code,unbound,late,vanished=False,externally_stopped=False):
         import sqlite3
-        if vanished:
-            from runner.local_scope import SystemdScopes
-            backend=SystemdScopes(os.environ)
-            with closing(sqlite3.connect(root/'state.db')) as db:
-                row=db.execute("SELECT s.unit,s.cgroup FROM local_scopes s JOIN local_scope_launch_receipts r ON r.unit=s.unit WHERE s.run='r' AND s.state='running'").fetchone()
-            self.assertIsNotNone(row)
-            observed=backend.inspect(row[0])
-            if observed['active']=='active':backend.stop(row[0])
-            deadline=time.monotonic()+10
-            while time.monotonic()<deadline:
-                observed=backend.inspect(row[0])
-                if observed['active']=='inactive' and backend.empty_cgroup(row[1]):break
-                time.sleep(.05)
-            self.assertEqual(observed['active'],'inactive');self.assertTrue(backend.empty_cgroup(row[1]))
-        if externally_stopped:
+        if vanished or externally_stopped:
             from runner.local_scope import SystemdScopes, valid_scope_identity
             backend=SystemdScopes(os.environ)
             with closing(sqlite3.connect(root/'state.db')) as db:
                 unit,invocation,cgroup,state=db.execute("SELECT unit,invocation,cgroup,state FROM local_scopes WHERE run='r'").fetchone()
+                if vanished:
+                    self.assertIsNotNone(db.execute('SELECT 1 FROM local_scope_launch_receipts WHERE run=? AND unit=? AND invocation=? AND cgroup=?',('r',unit,invocation,cgroup)).fetchone())
             self.assertEqual(state,'running')
             self.assertTrue(valid_scope_identity(unit,invocation,cgroup))
             observed=backend.inspect(unit)

@@ -14,6 +14,22 @@ GUARD=Path(__file__).resolve().parents[1]/'runner'/'local_launch_guard.py'
 
 
 class LocalLaunchGuardTests(unittest.TestCase):
+    def test_parent_can_authorize_after_slow_scope_binding(self):
+        ack_read,ack_write=os.pipe();go_read,go_write=os.pipe();process=None
+        try:
+            process=subprocess.Popen([sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),'a'*64,str(time.monotonic()+20),
+                sys.executable,'-c','pass'],pass_fds=(ack_write,go_read),stderr=subprocess.DEVNULL)
+            os.close(ack_write);ack_write=None;os.close(go_read);go_read=None
+            self.assertTrue(select.select([ack_read],[],[],5)[0]);os.read(ack_read,1024)
+            time.sleep(10.2)
+            self.assertIsNone(process.poll(),'guard expired before the parent completed binding')
+            os.write(go_write,b'G');os.close(go_write);go_write=None
+            self.assertEqual(process.wait(timeout=5),0)
+        finally:
+            for fd in (ack_read,ack_write,go_read,go_write):
+                if fd is not None:os.close(fd)
+            if process is not None and process.poll() is None:process.kill();process.wait(timeout=5)
+
     def test_target_waits_for_go_and_does_not_inherit_receipt_pipe(self):
         with tempfile.TemporaryDirectory() as root:
             marker=Path(root)/'executed';ack_read,ack_write=os.pipe();go_read,go_write=os.pipe();nonce='a'*64

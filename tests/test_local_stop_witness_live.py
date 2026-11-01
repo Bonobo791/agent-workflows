@@ -12,6 +12,7 @@ import time
 import unittest
 
 from runner.local_scope import LocalScopes,SystemdScopes
+from tests.test_stop_witness_live import require_pidfd,finish_pidfd
 
 
 @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
@@ -20,13 +21,10 @@ class LocalStopWitnessLiveTests(unittest.TestCase):
         self._exercise_owner_recovery(False)
 
     def test_killed_witness_leaves_interrupted_stop_fenced(self):
-        if not hasattr(os,'pidfd_open') or not hasattr(signal,'pidfd_send_signal'):self.skipTest('pidfd required')
-        try:probe=os.pidfd_open(os.getpid())
-        except OSError:self.skipTest('pidfd unavailable')
-        os.close(probe)
         self._exercise_owner_recovery(True)
 
     def _exercise_owner_recovery(self,kill_witness):
+        require_pidfd(self)
         from runner.control import ControlError,ControlPlane
         from runner.manual_lifecycle import ManualLifecycle
         from runner.service import Service
@@ -94,10 +92,8 @@ scopes=LocalScopes(sys.argv[1],SystemdScopes(os.environ));scopes.stop('run',sys.
             if worker is not None and worker.poll() is None:worker.kill();worker.wait(timeout=5)
             for fd in (client_fd,witness_fd):
                 if fd is not None:
-                    if not select.select([fd],[],[],5)[0]:
-                        try:signal.pidfd_send_signal(fd,signal.SIGKILL)
-                        except ProcessLookupError:pass
-                        safe=False
+                    if not select.select([fd],[],[],0)[0]:safe=False
+                    finish_pidfd(fd)
                     os.close(fd)
             if launcher is not None:
                 try:launcher.wait(timeout=5)
@@ -106,10 +102,7 @@ scopes=LocalScopes(sys.argv[1],SystemdScopes(os.environ));scopes.stop('run',sys.
             if safe:shutil.rmtree(root)
 
     def test_witness_records_stop_after_its_parent_is_killed(self):
-        if not hasattr(os,'pidfd_open'):self.skipTest('pidfd required')
-        try:probe=os.pidfd_open(os.getpid())
-        except OSError:self.skipTest('pidfd unavailable')
-        os.close(probe)
+        require_pidfd(self)
         target='''import signal,sys,time
 from pathlib import Path
 def stop(*_):
@@ -157,12 +150,8 @@ while True:time.sleep(.1)
             release.touch()
             if worker is not None and worker.poll() is None:worker.kill();worker.wait(timeout=5)
             if witness_fd is not None:
-                finished=bool(select.select([witness_fd],[],[],5)[0])
-                if not finished and hasattr(signal,'pidfd_send_signal'):
-                    try:signal.pidfd_send_signal(witness_fd,signal.SIGKILL)
-                    except ProcessLookupError:pass
-                    safe=False
-                os.close(witness_fd)
+                if not select.select([witness_fd],[],[],0)[0]:safe=False
+                finished=finish_pidfd(witness_fd);os.close(witness_fd)
             if not safe and (witness_fd is None or finished):
                 try:
                     observed=backend.inspect(unit);group=group or observed.get('cgroup')
