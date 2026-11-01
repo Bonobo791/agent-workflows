@@ -35,6 +35,26 @@ must not contain private skills, credentials, user data or session histories.
   This is a candidate for the inspected directory, not proof of isolation:
   each actual workspace is checked separately at runtime, and changed binaries
   or inherited integrations fail closed.
+- Optional host unit: `deploy/systemd/agent-workflows-local.service` reads
+  `~/.config/agent-workflows/worker.env`; use `deploy/local/worker.env.example`
+  as a private path-only template. Set the control directory to the same
+  owner-only state directory, use the inspected native runtime configuration,
+  and add the task, role and other configuration paths needed by the intended
+  workflow. The service uses the user's existing Codex sign-in and must have
+  access to the user systemd bus. Review the user manager's inherited environment
+  and `PATH`; do not place credentials in the environment file. It is not
+  installed or enabled by this repository. `Restart=no` prevents automatic
+  service restart after failure; it does not prove that a separate execution scope
+  stopped. After interruption, use the exact manual stop and recovery procedure
+  below before starting a replacement or retrying work.
+
+  On 2026-11-01, a temporary user unit using the example command and hardening
+  properties started with an inspected local runtime and preserved a synthetic
+  queued job across stop and restart. A separate scoped `account/read` verified
+  the existing sign-in; no workflow stage or real task was executed by that
+  test. To repeat it, set `CODEX_TEST_EXECUTABLE` to the absolute Codex launcher
+  and `WORKFLOW_TEST_SYSTEMD=1`, then run
+  `python -m unittest tests.test_local_worker_systemd_live`.
 - `WORKFLOW_TASK_CONFIG_FILE`: an owner-only JSON object with `run`, `workflow`,
   `project`, `number`, `ready_columns`, `completed_columns`,
   `blocker_direction`, `plan_endpoint`, `github_owner`, `github_repo` and

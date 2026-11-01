@@ -1,0 +1,15 @@
+[Unit]
+Description=Agent Workflows private local worker
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/agent-workflows/worker.env
+ExecStart=/usr/bin/python3 -m runner.worker
+Restart=no
+KillMode=mixed
+TimeoutStopSec=45s
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
