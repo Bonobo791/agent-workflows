@@ -38,6 +38,37 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         db=self.registry.db
         db.execute('INSERT INTO docker_assignments VALUES(?,?,?,?)',(a,'id','terminated','fixture')); db.execute('INSERT INTO docker_terminal_evidence VALUES(?,?,?,?)',(a,'id','exited',1))
         self.registry.release('run-1',a); self.assertEqual(self.registry.claim('run-1',b,self.policy),path)
+    def _rejected_correction_fixture(self):
+        from runner.engineering_dispatch import _UNADOPTED
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
+        (self.repo/'new.txt').write_text('approved'); git(self.repo,'add','new.txt'); git(self.repo,'commit','-m','approved'); approved=git(self.repo,'rev-parse','HEAD')
+        (self.repo/'new.txt').write_text('rejected'); git(self.repo,'commit','-am','rejected'); rejected=git(self.repo,'rev-parse','HEAD')
+        db=self.service.graph.db; db.execute(_UNADOPTED); db.execute('INSERT INTO engineering_unadopted VALUES(?,?,?,?)',('run-1',1,approved,rejected))
+        return approved,rejected
+    def test_rerun_after_rejected_correction_restores_approved_commit_and_keeps_rejected_work(self):
+        from runner.engineering_dispatch import recover_unadopted, workspace_snapshot
+        approved,rejected=self._rejected_correction_fixture()
+        self.assertIn('rejected',workspace_snapshot(self.service,'run-1')['diff'])
+        recover_unadopted(self.service,'run-1')
+        snapshot=workspace_snapshot(self.service,'run-1')
+        self.assertEqual(snapshot['head'],approved); self.assertNotIn('rejected',snapshot['diff'])
+        self.assertEqual(git(self.repo,'rev-parse','refs/recovery/run-1/'+rejected),rejected)
+        self.assertIsNone(self.service.graph.db.execute('SELECT 1 FROM engineering_unadopted').fetchone())
+        recover_unadopted(self.service,'run-1')
+    def test_recovery_resumes_after_reset_and_refuses_unexpected_state(self):
+        from runner.engineering_dispatch import EngineeringError, recover_unadopted
+        approved,rejected=self._rejected_correction_fixture()
+        (self.repo/'dirty.txt').write_text('operator work')
+        with self.assertRaises(EngineeringError): recover_unadopted(self.service,'run-1')
+        self.assertEqual(git(self.repo,'rev-parse','HEAD'),rejected); self.assertEqual((self.repo/'dirty.txt').read_text(),'operator work')
+        self.assertRaises(subprocess.CalledProcessError,git,self.repo,'rev-parse','--verify','refs/recovery/run-1/'+rejected)
+        (self.repo/'dirty.txt').unlink(); (self.repo/'other.txt').write_text('x'); git(self.repo,'add','other.txt'); git(self.repo,'commit','-m','other')
+        with self.assertRaises(EngineeringError): recover_unadopted(self.service,'run-1')
+        self.assertNotEqual(git(self.repo,'rev-parse','HEAD'),approved)
+        git(self.repo,'reset','-q','--hard',rejected)
+        git(self.repo,'update-ref','refs/recovery/run-1/'+rejected,rejected); git(self.repo,'reset','-q','--hard',approved)
+        recover_unadopted(self.service,'run-1')
+        self.assertEqual(git(self.repo,'rev-parse','HEAD'),approved)
     def test_git_verification_allows_unrelated_database_writes(self):
         import sqlite3
         from unittest.mock import patch

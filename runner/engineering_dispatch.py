@@ -25,6 +25,23 @@ def workspace_snapshot(service,run,assignment=None):
         return {'repository':row[0],'base':row[1],'branch':row[2],'head':head,'path':path,'policy':row[5],'diff':diff}
     finally: registry.close()
 
+_UNADOPTED='CREATE TABLE IF NOT EXISTS engineering_unadopted(run TEXT PRIMARY KEY,correction_id INTEGER NOT NULL,approved TEXT NOT NULL,rejected TEXT NOT NULL)'
+
+def recover_unadopted(service,run):
+    """Before a fresh implementation, restore the approved commit after a rejected correction; otherwise leave the workspace blocked for inspection."""
+    db=service.graph.db; db.execute(_UNADOPTED)
+    row=db.execute('SELECT approved,rejected FROM engineering_unadopted WHERE run=?',(run,)).fetchone()
+    if not row: return
+    local=service.model_supervisor
+    registry=EngineeringWorkspace(local.engineering_root if local is not None else service.docker_supervisor.config.job_root.parent)
+    try:
+        binding=registry.db.execute('SELECT repository,base,branch,owner,policy FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
+        if not binding: raise EngineeringError('workspace binding unavailable')
+        registry.recover_unadopted(run,binding[0],binding[1],binding[2],binding[3],binding[4],*row)
+    except Exception: raise EngineeringError('rejected correction recovery requires inspection') from None
+    finally: registry.close()
+    db.execute('DELETE FROM engineering_unadopted WHERE run=?',(run,))
+
 def dispatch(dispatcher,run,stage,queue_claim,graph_claim,feedback_ref=None,correction_id=None):
     service=dispatcher.service
     if stage=='test' and (service.command_supervisor is None or not service.command_supervisor.ready()): return {'stage':'test','status':'blocked','reason':'trusted command supervisor unavailable'}
@@ -34,6 +51,7 @@ def dispatch(dispatcher,run,stage,queue_claim,graph_claim,feedback_ref=None,corr
     try: model=service.model_policy.for_role(stage)['model']
     except Exception:
         dispatcher._discover_model(run,queue_claim,graph_claim); model=service.model_policy.for_role(stage)['model']
+    if stage=='implement' and correction_id is None: recover_unadopted(service,run)
     before=workspace_snapshot(service,run)
     task=service.graph.db.execute('SELECT artifact_ref FROM task_input_versions WHERE run=?',(run,)).fetchone()
     if not task: raise EngineeringError('task input unavailable')
@@ -108,7 +126,10 @@ def dispatch(dispatcher,run,stage,queue_claim,graph_claim,feedback_ref=None,corr
         return False
     runner=GraphRunner(service.graph,service.artifacts,specialist,gate,skill_resolver=service.skill_resolver,required_skills=service.required_skills)
     ref=runner.execute(run,stage,graph_claim,{'inputs':refs,'head':before['head']},correction_id=correction_id)
-    if runner.correction_outcome is not None: return {'stage':stage,'status':'blocked','correction_outcome':runner.correction_outcome,'artifact_ref':ref,'reason':'correction not adopted; approved implementation and blocked review retained'}
+    if runner.correction_outcome is not None:
+        service.graph.db.execute(_UNADOPTED); rejected=workspace_snapshot(service,run)['head']
+        if rejected!=before['head']: service.graph.db.execute('INSERT INTO engineering_unadopted VALUES(?,?,?,?)',(run,correction_id,before['head'],rejected))
+        return {'stage':stage,'status':'blocked','correction_outcome':runner.correction_outcome,'artifact_ref':ref,'reason':'correction not adopted; approved implementation and blocked review retained'}
     return {'stage':stage,'status':service.graph.get(run,stage)['status'],'artifact_ref':ref}
 
 def approval_package(service,run):

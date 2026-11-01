@@ -60,6 +60,23 @@ class EngineeringWorkspace:
             if initial and self._git(path,'status','--porcelain','--untracked-files=all'): raise WorkspaceError('workspace not clean')
             return str(path)
         except OSError: raise WorkspaceError('workspace unavailable') from None
+    def recover_unadopted(self,run,repository,base,branch,owner,policy,approved,rejected):
+        """Preserve a rejected correction commit under a recovery ref, then restore the approved commit. Any mismatch leaves the workspace untouched."""
+        path=self.verify(run,repository,base,branch,owner,policy)
+        ref='refs/recovery/'+run+'/'+rejected
+        head=self._git(path,'rev-parse','--verify','HEAD^{commit}')
+        if self._git(path,'status','--porcelain','--untracked-files=all'): raise WorkspaceError('workspace contains uncommitted changes')
+        if self._git(path,'rev-parse','--verify',approved+'^{commit}')!=approved or self._git(path,'rev-parse','--verify',rejected+'^{commit}')!=rejected: raise WorkspaceError('recovery revision unavailable')
+        self._git(path,'merge-base','--is-ancestor',approved,rejected)
+        if head==rejected:
+            if self._git(path,'for-each-ref','--format=%(objectname)',ref) not in ('',rejected): raise WorkspaceError('recovery ref conflict')
+            self._git(path,'update-ref',ref,rejected)
+        elif head!=approved: raise WorkspaceError('workspace revision mismatch')
+        if self._git(path,'rev-parse','--verify',ref+'^{commit}')!=rejected: raise WorkspaceError('recovery ref unavailable')
+        if head==rejected:
+            self._git(path,'reset','--hard',approved)
+            if self._git(path,'rev-parse','--verify','HEAD^{commit}')!=approved: raise WorkspaceError('workspace restore failed')
+        return ref
     def binding_hash(self,run,repository,base,branch,owner,policy):
         import hashlib, json
         data={'run':run,'repository':repository,'base':base,'branch':branch,'owner':owner,'path':str(self.allowed/run/'repo'),'policy':policy}
