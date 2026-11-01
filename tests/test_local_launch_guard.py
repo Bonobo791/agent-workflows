@@ -20,7 +20,7 @@ class LocalLaunchGuardTests(unittest.TestCase):
             process=None
             try:
                 target='from pathlib import Path; import time; Path('+repr(str(marker))+').touch(); time.sleep(1)'
-                process=subprocess.Popen([sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),nonce,
+                process=subprocess.Popen([sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),nonce,str(time.monotonic()+10),
                     sys.executable,'-c',target],pass_fds=(ack_write,go_read),
                     stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                 os.close(ack_write);ack_write=None;os.close(go_read);go_read=None
@@ -49,7 +49,7 @@ class LocalLaunchGuardTests(unittest.TestCase):
             process=None
             try:
                 target='from pathlib import Path; Path('+repr(str(marker))+').touch()'
-                process=subprocess.Popen([sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),'a'*64,
+                process=subprocess.Popen([sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),'a'*64,str(time.monotonic()+10),
                     sys.executable,'-c',target],pass_fds=(ack_write,go_read),
                     stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                 os.close(ack_write);ack_write=None;os.close(go_read);go_read=None
@@ -70,7 +70,7 @@ class LocalLaunchGuardTests(unittest.TestCase):
             marker=Path(root)/'executed';ack_read,ack_write=os.pipe();go_read,go_write=os.pipe()
             try:
                 target='from pathlib import Path; Path('+repr(str(marker))+').touch()'
-                result=subprocess.run([sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),'bad-nonce',
+                result=subprocess.run([sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),'bad-nonce',str(time.monotonic()+10),
                     sys.executable,'-c',target],pass_fds=(ack_write,go_read),
                     stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
                 self.assertNotEqual(result.returncode,0);self.assertFalse(marker.exists())
@@ -84,7 +84,7 @@ class LocalLaunchGuardTests(unittest.TestCase):
         backend=SystemdScopes(os.environ);ack_read,ack_write=os.pipe();go_read,go_write=os.pipe();nonce='b'*64;process=None
         try:
             process=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,
-                '--',sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),nonce,
+                '--',sys.executable,'-I',str(GUARD),str(ack_write),str(go_read),nonce,str(time.monotonic()+15),
                 sys.executable,'-c','import time; time.sleep(2)'],
                 pass_fds=(ack_write,go_read),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             os.close(ack_write);ack_write=None;os.close(go_read);go_read=None
@@ -111,7 +111,7 @@ guard,unit,ready,marker=sys.argv[1:]
 ack_read,ack_write=os.pipe();go_read,go_write=os.pipe();nonce='c'*64
 target='from pathlib import Path; Path('+repr(marker)+').touch()'
 process=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,
- '--',sys.executable,'-I',guard,str(ack_write),str(go_read),nonce,sys.executable,'-c',target],
+ '--',sys.executable,'-I',guard,str(ack_write),str(go_read),nonce,str(time.monotonic()+15),sys.executable,'-c',target],
  pass_fds=(ack_write,go_read),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 os.close(ack_write);os.close(go_read)
 if not select.select([ack_read],[],[],10)[0]:sys.exit(2)

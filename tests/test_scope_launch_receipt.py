@@ -76,13 +76,13 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
             finally:other.close()
 
     def test_release_rejects_changed_scope_or_fence(self):
-        for change in ('fence','scope','receipt','audit'):
+        for change in ('fence','scope','receipt','audit','deadline'):
             with self.subTest(change=change),tempfile.TemporaryDirectory() as root:
                 backend,scopes,unit,launch=self.fixture(root);scopes.bind_confirmed('run',unit,launch)
                 if change=='scope':scopes.db.execute("UPDATE local_scopes SET state='stopping' WHERE unit=?",(unit,))
                 if change=='receipt':scopes.db.execute("UPDATE local_scope_launch_receipts SET nonce_hash=? WHERE unit=?",('b'*64,unit))
                 if change=='audit':scopes.db.execute('DELETE FROM local_scope_launch_audit WHERE unit=?',(unit,))
-                with self.assertRaises(ScopeError):scopes.release_confirmed('run',unit,launch,lambda:change!='fence')
+                with self.assertRaises(ScopeError):scopes.release_confirmed('run',unit,launch,lambda:change!='fence',deadline=0 if change=='deadline' else None)
                 launch.close();self.assertEqual(os.read(self.go_read,1),b'')
 
     def add_fence(self,scopes):

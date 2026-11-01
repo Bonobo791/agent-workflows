@@ -1,14 +1,25 @@
 """Private handshake for a scoped process that must not start before binding."""
 import json
+import math
 import os
 from pathlib import Path
 import secrets
 import select
 import subprocess
+import threading
 import time
 
 
 class LaunchError(RuntimeError): pass
+
+
+def reap_after_failure(process):
+    def wait():
+        try:process.wait()
+        except (OSError,ChildProcessError):pass
+    try:process.wait(timeout=1)
+    except subprocess.TimeoutExpired:threading.Thread(target=wait,daemon=True).start()
+    except (OSError,ChildProcessError):pass
 
 
 class GuardedLaunch:
@@ -34,6 +45,7 @@ class GuardedLaunch:
                     or receipt['nonce']!=self.nonce or type(receipt['pid']) is not int
                     or receipt['pid']!=self.process.pid or self.process.poll() is not None):
                 raise LaunchError('launch receipt unavailable')
+            if cancelled() or time.monotonic()>=deadline: raise LaunchError('launch receipt unavailable')
             self.receipt=(receipt['pid'],receipt['nonce'])
             return receipt
         except (OSError,ValueError,TypeError):
@@ -58,9 +70,11 @@ class GuardedLaunch:
                 os.close(fd);setattr(self,name,None)
 
 
-def start_guarded(prefix,target,*,cwd,env):
+def start_guarded(prefix,target,*,cwd,env,deadline=None):
     if not isinstance(prefix,list) or not isinstance(target,list) or not target or any(not isinstance(x,str) or '\x00' in x for x in prefix+target) or not os.path.isabs(target[0]):
         raise LaunchError('invalid launch command')
+    if deadline is None:deadline=time.monotonic()+60
+    if type(deadline) not in (int,float) or not math.isfinite(deadline) or deadline<=time.monotonic(): raise LaunchError('launch deadline unavailable')
     ack_read,ack_write=os.pipe2(os.O_CLOEXEC)
     try:
         go_read,go_write=os.pipe2(os.O_CLOEXEC)
@@ -69,7 +83,7 @@ def start_guarded(prefix,target,*,cwd,env):
     try:
         nonce=secrets.token_hex(32)
         guard=str(Path(__file__).with_name('local_launch_guard.py').resolve(strict=True))
-        command=prefix+['/usr/bin/python3','-I',guard,str(ack_write),str(go_read),nonce]+target
+        command=prefix+['/usr/bin/python3','-I',guard,str(ack_write),str(go_read),nonce,str(deadline)]+target
         process=subprocess.Popen(command,cwd=cwd,env=env,pass_fds=(ack_write,go_read),
                                  stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
     except BaseException:

@@ -1,18 +1,20 @@
 """Hold a scoped command until its parent acknowledges the launch receipt."""
 import fcntl
 import json
+import math
 import os
 import re
 import select
 import stat
 import sys
+import time
 
 
 def main(argv):
-    if len(argv)<5 or any(not value.isascii() or not value.isdecimal() for value in argv[1:3]):
+    if len(argv)<6 or any(not value.isascii() or not value.isdecimal() for value in argv[1:3]):
         raise ValueError('invalid launch handshake')
-    ack_fd,go_fd=map(int,argv[1:3]);nonce=argv[3];target=argv[4]
-    if min(ack_fd,go_fd)<3 or ack_fd==go_fd or not re.fullmatch(r'[0-9a-f]{64}',nonce) or not os.path.isabs(target):
+    ack_fd,go_fd=map(int,argv[1:3]);nonce=argv[3];deadline=float(argv[4]);target=argv[5]
+    if min(ack_fd,go_fd)<3 or ack_fd==go_fd or not re.fullmatch(r'[0-9a-f]{64}',nonce) or not math.isfinite(deadline) or not os.path.isabs(target):
         raise ValueError('invalid launch handshake')
     if not all(stat.S_ISFIFO(os.fstat(fd).st_mode) for fd in (ack_fd,go_fd)):
         raise ValueError('invalid launch handshake')
@@ -21,10 +23,11 @@ def main(argv):
     receipt=json.dumps({'version':1,'nonce':nonce,'pid':os.getpid()},separators=(',',':')).encode()+b'\n'
     if os.write(ack_fd,receipt)!=len(receipt): raise OSError('incomplete launch receipt')
     os.close(ack_fd)
-    if not select.select([go_fd],[],[],10)[0] or os.read(go_fd,1)!=b'G':
+    remaining=deadline-time.monotonic()
+    if remaining<=0 or not select.select([go_fd],[],[],remaining)[0] or time.monotonic()>=deadline or os.read(go_fd,1)!=b'G':
         raise OSError('launch authorization unavailable')
     os.close(go_fd)
-    os.execve(target,argv[4:],os.environ)
+    os.execve(target,argv[5:],os.environ)
 
 
 if __name__=='__main__':

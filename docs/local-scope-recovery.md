@@ -30,12 +30,12 @@ configured sandbox and host retaining descendants in the scope. An empty
 cgroup does not prove that an escaped process never existed. Validate those
 assumptions for the deployed host before relying on this recovery control.
 
-The opt-in systemd tests exercise caller death before authorization and after
-target start, missing and mismatched evidence, concurrent database writes,
-audit rollback, and a signed-in synthetic worker crash followed by an
-explicitly exited scope. They do not establish containment against every host
-configuration, recover an interrupted stop request, or establish the outcome
-of an external mutation.
+Opt-in systemd tests exercise caller death before authorization and after
+target start, a signed-in synthetic worker crash followed by an explicitly
+exited scope, and interrupted stops. Separate unit tests cover missing or
+mismatched evidence, concurrent database writes, and audit rollback. These
+tests do not establish containment against every host configuration or the
+outcome of an external mutation.
 
 An interrupted stop needs separate evidence. An opt-in experiment in
 `tests/test_stop_witness_live.py` keeps a stop client in flight while killing

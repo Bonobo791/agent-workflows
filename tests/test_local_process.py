@@ -38,6 +38,7 @@ class LocalProcessTests(unittest.TestCase):
                 self.assertNotIn('ACCESS_TOKEN',kwargs['env'])
             with patch('runner.local_process.start_guarded',side_effect=self.guarded_launch(backend,process,check)):
                 handle=start_local_process(root+'/state.db','run',str(work),str(binary),{'HOME':root,'ACCESS_TOKEN':'secret'},backend,lambda:True,{'mcp_servers':[],'plugins':[]})
+            self.assertEqual(os.read(self.last_go_read,1),b'G')
             self.assertTrue(Path(handle.output_dir).is_dir()); self.assertFalse(Path(handle.output_dir).is_relative_to(work))
             self.assertTrue(handle.assert_active());self.assertTrue(handle.finish())
             scopes=LocalScopes(root+'/state.db',backend)
@@ -62,6 +63,18 @@ class LocalProcessTests(unittest.TestCase):
                 with self.assertRaises(LocalProcessError):
                     start_local_process(root+'/state.db','run',str(work),str(binary),{'HOME':root},backend,lambda:True,{'mcp_servers':[],'plugins':[]})
             self.assertEqual(os.read(self.last_go_read,1),b'')
+    def test_failed_binding_reaps_real_guard_process(self):
+        from runner.local_launch import start_guarded
+        with tempfile.TemporaryDirectory() as root:
+            binary=Path(root)/'codex';binary.write_text('synthetic');binary.chmod(0o700)
+            work=Path(root)/'work';work.mkdir(mode=0o700);launched=[]
+            def start(prefix,target,**kwargs):
+                result=start_guarded([],target,**kwargs);launched.append(result);return result
+            with patch('runner.local_process.start_guarded',side_effect=start),patch.object(LocalScopes,'bind_confirmed',side_effect=RuntimeError('audit unavailable')):
+                with self.assertRaises(LocalProcessError):
+                    start_local_process(root+'/state.db','run',str(work),str(binary),{'HOME':root},Backend(),lambda:True,{'mcp_servers':[],'plugins':[]})
+            self.assertIsNotNone(launched[0].process.returncode)
+            with self.assertRaises(ChildProcessError):os.waitpid(launched[0].process.pid,os.WNOHANG)
     def test_git_write_permission_is_explicit_and_scoped_to_checkout(self):
         with tempfile.TemporaryDirectory() as root:
             binary=Path(root)/'codex';binary.write_text('synthetic');binary.chmod(0o700)

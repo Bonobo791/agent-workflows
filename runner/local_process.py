@@ -6,7 +6,7 @@ import subprocess
 import time
 from runner.adapter import managed_app_server_spec, verify_managed_workspace
 from runner.local_scope import LocalScopes, reserve_for_execution
-from runner.local_launch import start_guarded
+from runner.local_launch import reap_after_failure, start_guarded
 from runner.process_transport import ProcessTransport
 
 class LocalProcessError(RuntimeError): pass
@@ -69,12 +69,13 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
     command.extend(k+'='+v for k,v in child_env.items())
     launch=None
     try:
-        launch=start_guarded(command,args,cwd=str(path),env=manager_env)
-        launch.receive(time.monotonic()+10,lambda:fence() is not True)
+        deadline=time.monotonic()+10
+        launch=start_guarded(command,args,cwd=str(path),env=manager_env,deadline=deadline)
+        launch.receive(deadline,lambda:fence() is not True)
         scopes=LocalScopes(db,backend)
         try:
             scopes.bind_confirmed(run,unit,launch)
-            scopes.release_confirmed(run,unit,launch,fence)
+            scopes.release_confirmed(run,unit,launch,fence,deadline=deadline)
         finally: scopes.close()
         return LocalProcessHandle(db,run,unit,str(path),str(output_dir),args[0],launch.process,backend,fence,git_dir)
     except Exception:
@@ -82,4 +83,5 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
             launch.close()
             for stream in (launch.process.stdin,launch.process.stdout):
                 if stream is not None:stream.close()
+            reap_after_failure(launch.process)
         raise LocalProcessError('scope launch outcome unresolved') from None

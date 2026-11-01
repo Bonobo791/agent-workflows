@@ -4,10 +4,12 @@ A reserved scope is not proof of launch. Ambiguous starts and stops stay fenced.
 """
 from pathlib import Path, PurePosixPath
 import hashlib
+import math
 import re
 import secrets
 import sqlite3
 import subprocess
+import time
 
 class ScopeError(RuntimeError): pass
 
@@ -189,13 +191,14 @@ class LocalScopes:
         info=self.backend.inspect(unit)
         if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or info.get('invocation')!=row[0] or info.get('cgroup')!=row[1]: raise ScopeError('scope identity changed')
         return True
-    def release_confirmed(self,run,unit,launch,fence):
+    def release_confirmed(self,run,unit,launch,fence,*,deadline=None):
         from runner.local_launch import GuardedLaunch
         if not isinstance(launch,GuardedLaunch) or not callable(fence) or launch.receipt!=(launch.process.pid,launch.nonce): raise ScopeError('launch authorization unavailable')
         self.db.execute('BEGIN IMMEDIATE')
         try:
             row=self.db.execute("SELECT r.pid,r.nonce_hash FROM local_scopes s JOIN local_scope_launch_receipts r ON r.run=s.run AND r.unit=s.unit AND r.invocation=s.invocation AND r.cgroup=s.cgroup JOIN local_scope_launch_audit a ON a.run=r.run AND a.unit=r.unit AND a.invocation=r.invocation AND a.cgroup=r.cgroup AND a.pid=r.pid AND a.nonce_hash=r.nonce_hash AND a.schema_version=1 AND a.status='bound' WHERE s.run=? AND s.unit=? AND s.state='running'",(run,unit)).fetchone()
             if not row or row!=(launch.process.pid,hashlib.sha256(bytes.fromhex(launch.nonce)).hexdigest()) or fence() is not True: raise ScopeError('launch authorization unavailable')
+            if deadline is not None and (type(deadline) not in (int,float) or not math.isfinite(deadline) or time.monotonic()>=deadline): raise ScopeError('launch deadline exceeded')
             launch.release()
             self.db.execute('COMMIT')
         except Exception:
@@ -248,8 +251,9 @@ class LocalScopes:
         if [event[0] for event in events]!=['pending','active','completed']: raise ScopeError('stop audit unavailable')
         return row
     def stop(self,run,unit):
-        self.assert_active(run,unit)
         row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
+        if not row or row[2]!='running': raise ScopeError('running scope unavailable')
+        self.assert_active(run,unit)
         witness=getattr(self.backend,'stop_witnessed',None)
         if callable(witness):
             nonce=self.reserve_stop(run,unit)
@@ -266,7 +270,7 @@ class LocalScopes:
             except Exception:
                 if self.db.in_transaction:self.db.execute('ROLLBACK')
                 raise ScopeError('scope stop uncertain; run remains fenced') from None
-        self._transition(run,unit,'stopping',"UPDATE local_scopes SET state='stopping' WHERE run=? AND unit=? AND state='running'",(run,unit))
+        self._transition(run,unit,'stopping',"UPDATE local_scopes SET state='stopping' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='running'",(run,unit,*row[:2]))
         try:
             if self.backend.stop(unit) is not True: raise ScopeError('scope stop uncertain')
             after=self.backend.inspect(unit)
@@ -275,12 +279,14 @@ class LocalScopes:
             return True
         except Exception: raise ScopeError('scope stop uncertain; run remains fenced') from None
     def reserve_stop(self,run,unit):
+        initial=self.db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='running'",(run,unit)).fetchone()
+        if not initial or not valid_scope_identity(unit,*initial): raise ScopeError('scope identity unavailable')
         self.assert_active(run,unit)
         nonce=secrets.token_hex(32);digest=hashlib.sha256(bytes.fromhex(nonce)).hexdigest()
         self.db.execute('BEGIN IMMEDIATE')
         try:
             row=self.db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='running'",(run,unit)).fetchone()
-            if not row or not valid_scope_identity(unit,*row): raise ScopeError('scope identity unavailable')
+            if row!=initial: raise ScopeError('scope identity changed')
             last=self.db.execute('SELECT COALESCE(MAX(id),0) FROM local_scope_audit').fetchone()[0]
             if self.db.execute("UPDATE local_scopes SET state='stopping' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='running'",(run,unit,*row)).rowcount!=1: raise ScopeError('scope assignment changed')
             if not self.db.execute("SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state='stopping'",(last,run,unit)).fetchone(): raise ScopeError('scope transition audit unavailable')

@@ -42,6 +42,20 @@ class LocalLaunchTests(unittest.TestCase):
                 if launch.process.poll() is None:launch.process.kill();launch.process.wait(timeout=5)
                 launch.process.stdin.close();launch.process.stdout.close()
 
+    def test_environment_prefix_excludes_manager_secrets_from_target(self):
+        with tempfile.TemporaryDirectory() as root:
+            marker=Path(root)/'environment'
+            code='import os; from pathlib import Path; Path('+repr(str(marker))+').write_text(os.environ.get("ACCESS_TOKEN","missing"))'
+            manager=dict(os.environ);manager['ACCESS_TOKEN']='synthetic-secret'
+            launch=start_guarded(['/usr/bin/env','-i','HOME='+root,'PATH=/usr/bin:/bin'],[sys.executable,'-c',code],cwd=root,env=manager)
+            try:
+                launch.receive(time.monotonic()+5,lambda:False);launch.release()
+                self.assertEqual(launch.process.wait(timeout=5),0);self.assertEqual(marker.read_text(),'missing')
+            finally:
+                launch.close()
+                if launch.process.poll() is None:launch.process.kill();launch.process.wait(timeout=5)
+                launch.process.stdin.close();launch.process.stdout.close()
+
     def test_cancellation_closes_go_pipe_and_prevents_target(self):
         with tempfile.TemporaryDirectory() as root:
             marker=Path(root)/'target'
@@ -65,6 +79,21 @@ class LocalLaunchTests(unittest.TestCase):
             finally:
                 launch.close()
                 if launch.process.poll() is None:launch.process.wait(timeout=5)
+                launch.process.stdin.close();launch.process.stdout.close()
+
+    def test_guard_does_not_start_target_after_configured_deadline(self):
+        with tempfile.TemporaryDirectory() as root:
+            marker=Path(root)/'target';code='from pathlib import Path; Path('+repr(str(marker))+').touch()'
+            deadline=time.monotonic()+1
+            launch=start_guarded([], [sys.executable,'-c',code],cwd=root,env=dict(os.environ),deadline=deadline)
+            try:
+                launch.receive(deadline,lambda:False)
+                self.assertNotEqual(launch.process.wait(timeout=5),0)
+                with self.assertRaises(LaunchError):launch.release()
+                self.assertFalse(marker.exists())
+            finally:
+                launch.close()
+                if launch.process.poll() is None:launch.process.kill();launch.process.wait(timeout=5)
                 launch.process.stdin.close();launch.process.stdout.close()
 
     def test_mutated_launch_identity_cannot_release_target(self):
@@ -104,6 +133,31 @@ class LocalLaunchTests(unittest.TestCase):
                 finally:
                     if ack_write is not None:os.close(ack_write)
                     os.close(go_read);launch.close()
+
+    def test_receipt_arriving_at_deadline_cannot_authorize_target(self):
+        from unittest.mock import patch
+        nonce='a'*64;ack_read,ack_write=os.pipe();go_read,go_write=os.pipe()
+        launch=GuardedLaunch(SimpleNamespace(pid=123,poll=lambda:None),ack_read,go_write,nonce)
+        try:
+            os.write(ack_write,('{"version":1,"nonce":"'+nonce+'","pid":123}').encode());os.close(ack_write)
+            with patch('runner.local_launch.time.monotonic',side_effect=[0,0,0,0,1]):
+                with self.assertRaises(LaunchError):launch.receive(1,lambda:False)
+            with self.assertRaises(LaunchError):launch.release()
+            launch.close();self.assertEqual(os.read(go_read,1),b'')
+        finally:
+            os.close(go_read);launch.close()
+
+    def test_failure_cleanup_reaps_child_that_exits_after_short_wait(self):
+        from runner.local_launch import reap_after_failure
+        process=subprocess.Popen([sys.executable,'-c','import time; time.sleep(1.5)'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        try:
+            reap_after_failure(process)
+            deadline=time.monotonic()+5
+            while process.returncode is None and time.monotonic()<deadline:time.sleep(.02)
+            self.assertEqual(process.returncode,0)
+            with self.assertRaises(ChildProcessError):os.waitpid(process.pid,os.WNOHANG)
+        finally:
+            if process.poll() is None:process.kill();process.wait(timeout=5)
 
     @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
     def test_guarded_launch_receipt_matches_real_scope_before_release(self):

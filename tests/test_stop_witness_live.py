@@ -24,6 +24,9 @@ class StopWitnessLiveTests(unittest.TestCase):
     def _exercise_witness(self,kill_witness):
         if not hasattr(os,'pidfd_open') or not hasattr(signal,'pidfd_send_signal'):
             self.skipTest('pidfd required for safe cleanup')
+        try:probe=os.pidfd_open(os.getpid())
+        except OSError:self.skipTest('pidfd unavailable')
+        os.close(probe)
         target='''import signal,sys,time
 from pathlib import Path
 def stop(*_):
@@ -50,7 +53,7 @@ while True:time.sleep(.1)
         root=Path(tempfile.mkdtemp(prefix='workflow-stop-witness-'))
         backend=SystemdScopes(os.environ);scopes=LocalScopes(str(root/'state.db'),backend)
         unit=scopes.reserve('run');ready,received,release,started,done=(root/name for name in ('ready','received','release','started','done'))
-        launcher=None;worker=None;witness_fd=None;client_fd=None;group=None;safe=False;witness_finished=False;client_finished=False
+        launcher=None;worker=None;witness_fd=None;client_fd=None;group=None;safe=False;witness_finished=False;client_finished=False;forced=False
         try:
             launcher=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--',sys.executable,'-c',target,str(received),str(release),str(ready)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             deadline=time.monotonic()+10
@@ -78,13 +81,21 @@ while True:time.sleep(.1)
         finally:
             release.touch()
             if worker is not None and worker.poll() is None:worker.kill();worker.wait(timeout=5)
-            if witness_fd is not None:
-                witness_finished=bool(select.select([witness_fd],[],[],5)[0])
-                os.close(witness_fd)
             if client_fd is not None:
                 client_finished=bool(select.select([client_fd],[],[],5)[0])
+                if not client_finished:
+                    try:signal.pidfd_send_signal(client_fd,signal.SIGKILL)
+                    except ProcessLookupError:pass
+                    forced=True
                 os.close(client_fd)
-            if not safe and (witness_fd is None or witness_finished) and (client_fd is None or client_finished):
+            if witness_fd is not None:
+                witness_finished=bool(select.select([witness_fd],[],[],5)[0])
+                if not witness_finished:
+                    try:signal.pidfd_send_signal(witness_fd,signal.SIGKILL)
+                    except ProcessLookupError:pass
+                    forced=True
+                os.close(witness_fd)
+            if not safe and not forced and (witness_fd is None or witness_finished) and (client_fd is None or client_finished):
                 try:
                     observed=backend.inspect(unit);group=group or observed.get('cgroup')
                     if observed['active']=='active':backend.stop(unit)

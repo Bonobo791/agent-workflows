@@ -13,6 +13,40 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    def test_stop_rejects_identity_change_during_inspection(self):
+        from contextlib import closing
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            backend=Backend();scopes=LocalScopes(root+'/state.db',backend)
+            try:
+                unit=scopes.reserve('run');backend.unit=unit;scopes.bind('run',unit)
+                inspect=backend.inspect
+                def replace(value):
+                    result=inspect(value)
+                    with closing(sqlite3.connect(root+'/state.db',isolation_level=None)) as other:
+                        other.execute("UPDATE local_scopes SET invocation=? WHERE unit=?",('b'*32,unit))
+                    return result
+                with patch.object(backend,'inspect',side_effect=replace):
+                    with self.assertRaises(ScopeError):scopes.stop('run',unit)
+                self.assertEqual(backend.stop_calls,0);self.assertEqual(scopes.state('run',unit),'running')
+            finally:scopes.close()
+    def test_stop_reservation_rejects_identity_change_during_inspection(self):
+        from contextlib import closing
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            backend=Backend();scopes=LocalScopes(root+'/state.db',backend)
+            try:
+                unit=scopes.reserve('run');backend.unit=unit;scopes.bind('run',unit);inspect=backend.inspect
+                def replace(value):
+                    result=inspect(value)
+                    with closing(sqlite3.connect(root+'/state.db',isolation_level=None)) as other:
+                        other.execute("UPDATE local_scopes SET invocation=? WHERE unit=?",('b'*32,unit))
+                    return result
+                with patch.object(backend,'inspect',side_effect=replace):
+                    with self.assertRaises(ScopeError):scopes.reserve_stop('run',unit)
+                self.assertEqual(scopes.state('run',unit),'running')
+                self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scope_stop_operations').fetchone(),(0,))
+            finally:scopes.close()
     def test_pending_job_check_requires_exact_unit_and_empty_job(self):
         from unittest.mock import patch
         from runner.local_scope import SystemdScopes
