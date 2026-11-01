@@ -66,6 +66,19 @@ executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='In
                 config=inspect_config(os.environ['CODEX_TEST_EXECUTABLE'],str(root/'workspace'),os.environ)
                 supervisor=LocalSupervisor(str(root/'state.db'),config['codex_executable'],os.environ,SystemdScopes(os.environ),lambda run:True,lambda run,role:str(root/'workspace'),lambda:True,config['disabled_integrations'])
                 self.assertFalse(supervisor.can_resume('r','canonical_draft',evidence[0],{},evidence[3]))
+                from runner.local_process import start_local_process
+                from runner.protocol import AppServer
+                inspection=start_local_process(str(root/'state.db'),'inspection',str(root/'workspace'),config['codex_executable'],os.environ,SystemdScopes(os.environ),lambda:True,config['disabled_integrations'])
+                try:
+                    server=AppServer(inspection.open_transport(time.monotonic()+90,lambda:False)); server.initialize()
+                    self.assertTrue(inspection.verify_config(server._request))
+                    saved=server._request('thread/read',{'threadId':evidence[0],'includeTurns':True})['thread']
+                    self.assertEqual(saved['id'],evidence[0])
+                    matches=[turn for turn in saved['turns'] if turn.get('id')==evidence[2]]
+                    self.assertLessEqual(len(matches),1)
+                    if matches: self.assertIn(matches[0].get('status'),('completed','interrupted','failed','inProgress'))
+                    self.assertFalse(supervisor.can_resume('r','canonical_draft',evidence[0],{},evidence[3]))
+                finally: inspection.finish()
             finally:
                 if process.poll() is None: process.kill(); process.wait(timeout=10)
                 process.stderr.close()
