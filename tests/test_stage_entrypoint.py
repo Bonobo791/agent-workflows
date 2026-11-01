@@ -91,11 +91,14 @@ class StageEntrypointTests(unittest.TestCase):
                             if stage=='brief':
                                 source_data=json.dumps(REGISTER).encode(); Path(item['mounts']['/output'],'sources.json').write_bytes(source_data); outputs.append(hashlib.sha256(source_data).hexdigest())
                             status='passed'; findings=[]
+                            if stage.endswith('_draft') and stage!='canonical_draft':
+                                assert 'ready for independent review' in msg['params']['input'][0]['text']
                             if stage=='canonical_draft' and Engine.resumed:
                                 assert 'source_review_judgment' in payload['artifacts']
                                 assert 'unregistered material claim' in payload['artifacts']['source_review_judgment']
                             if stage=='canonical_review':
-                                assert 'Independently review editorial quality' in msg['params']['input'][0]['text']
+                                assert 'Independently review the supplied canonical draft' in msg['params']['input'][0]['text']
+                                assert 'do not require rendered media at this stage' in msg['params']['input'][0]['text']
                                 assert 'synthetic brief' in payload['artifacts']['brief_and_sources']
                                 assert len(refs)==(6 if with_snapshots else 5) and 'source_register' in payload['artifacts'] and 'source_verification' in payload['artifacts'] and 'page_rules' in payload['artifacts']
                                 assert ('source_snapshots' in payload['artifacts'])==with_snapshots

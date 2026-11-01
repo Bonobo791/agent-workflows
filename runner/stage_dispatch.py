@@ -255,8 +255,15 @@ class StageDispatcher:
                     refs.append(source_issue)
                 page_issue=feedback_record.get('_page_structure_blocked')
                 if page_issue:
-                    artifacts['page_structure_judgment']=service.artifacts.get(page_issue).decode('utf-8')
+                    from runner.page_structure import policy_bytes
+                    judgment=service.artifacts.get(page_issue).decode('utf-8'); issue=json.loads(judgment)
+                    policy_ref=feedback_record['_page_rules']; admitted=json.loads(service.artifacts.get(row[0]))
+                    policy=service.artifacts.get(policy_ref)
+                    if issue.get('policy_ref')!=policy_ref or policy!=policy_bytes(service.page_rules,admitted['format']): raise ValueError('page policy changed')
+                    artifacts['page_structure_judgment']=judgment
+                    artifacts['page_rules']=json.loads(policy)
                     refs.append(page_issue)
+                    refs.append(policy_ref)
             except Exception: raise StageError('source review feedback unavailable') from None
         try: model=service.model_policy.for_role(stage)['model']
         except Exception:
@@ -308,6 +315,13 @@ class StageDispatcher:
             return parsed
         def gate(name,result):
             if not isinstance(result,dict): return False
+            if name=='canonical_draft' and result.get('status')=='passed':
+                try:
+                    text=service.artifacts.get(result['outputs'][0]).decode('utf-8')
+                    if not text.strip(): raise ValueError('empty draft')
+                except Exception:
+                    result['_blocked_reason']='canonical draft must be nonempty UTF-8 text'
+                    return 'blocked'
             if name=='asset_brief' and result.get('status')=='passed':
                 try:
                     from workflows.marketing.openfilm_brief import validate_brief

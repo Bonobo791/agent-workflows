@@ -6,6 +6,31 @@ from runner.stage_dispatch import StageDispatcher, StageError
 from tests.source_fixture import outputs as fixture_outputs, verifier as fixture_verifier
 
 class StageDispatchTests(unittest.TestCase):
+    def test_binary_canonical_output_is_blocked_before_review(self):
+        from pathlib import Path
+        from runner.manual_lifecycle import ManualLifecycle
+        from runner.skills import SkillResolver
+        class Policy:
+            def for_role(self,role): return {'model':'fixture','effort':'medium'}
+        class Executor:
+            def __init__(self,store): self.store=store
+            def execute(self,**kw):
+                data=b'\x89PNG\r\n\x1a\n' if kw['role']=='canonical_draft' else b'brief'
+                ref=self.store.put(data); outputs=fixture_outputs(self.store,kw['role'],ref)
+                return {'session_id':kw['role']+'-session','outputs':outputs,'output':json.dumps({'stage':kw['role'],'status':'passed','input_versions':kw['input_versions'],'outputs':outputs,'findings':[]})}
+        with tempfile.TemporaryDirectory() as root:
+            skill=Path(root)/'skills'/'role'; skill.mkdir(parents=True); (skill/'SKILL.md').write_text('fixture')
+            service=Service(root); service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc')
+            try:
+                service.create('r','marketing','task'); service.enqueue('r'); queue=service.lifecycle.claim(); claim=service.claim('r')
+                task={'task_id':'task','format':'guide','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[]}
+                ref=service.artifacts.put(json.dumps(task).encode()); service.graph.db.execute('CREATE TABLE task_input_versions(run TEXT PRIMARY KEY,source_version TEXT NOT NULL,artifact_ref TEXT NOT NULL)'); service.graph.db.execute('INSERT INTO task_input_versions VALUES(?,?,?)',('r','v1',ref))
+                service.source_verifier=fixture_verifier; service.docker_executor=Executor(service.artifacts); service.model_policy=Policy(); service.skill_resolver=SkillResolver([skill.parent]); service.required_skills={'brief':['role'],'canonical_draft':['role']}
+                dispatcher=StageDispatcher(service)
+                for _ in range(3): outcome=dispatcher.step('r',queue['token'],claim)
+                self.assertEqual((outcome['stage'],outcome['status']),('canonical_draft','blocked'))
+                self.assertIsNone(service.graph.get('r','canonical_review'))
+            finally: service.lifecycle.close(); service.close()
     def test_source_only_review_block_does_not_request_draft_correction(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)
@@ -293,7 +318,9 @@ class StageDispatchTests(unittest.TestCase):
             def execute(self,**kw):
                 if kw['role']=='canonical_draft':
                     self.writer_calls+=1
-                    if self.writer_calls==2: self.assert_feedback= 'page_structure_judgment' in kw['prompt']
+                    if self.writer_calls==2:
+                        self.assert_feedback= 'page_structure_judgment' in kw['prompt']
+                        self.correction_payload=json.JSONDecoder().raw_decode(kw['prompt'].split('\n',1)[1])[0]
                     data=b'No required heading' if self.writer_calls==1 else b'# Fixture\n\nCorrected text'
                 else: data=b'synthetic brief'
                 ref=self.service.artifacts.put(data); refs=fixture_outputs(self.service.artifacts,kw['role'],ref)
@@ -316,8 +343,15 @@ class StageDispatchTests(unittest.TestCase):
                 for _ in range(4): result=dispatcher.step('r',queue['token'],claim)
                 self.assertEqual((result['stage'],result['status']),('canonical_review','blocked'))
                 record=json.loads(service.artifacts.get(result['artifact_ref'])); self.assertIn('_page_structure_blocked',record)
+                service.page_rules={'guide':{'headings':[{'level':1,'text':'Changed'}]}}
+                with self.assertRaises(StageError): dispatcher._model_stage('r','canonical_draft',queue['token'],claim,feedback_ref=result['artifact_ref'])
+                self.assertEqual(service.docker_executor.writer_calls,1)
+                service.page_rules={'guide':{'headings':[{'level':1,'text':'Fixture'}]}}
                 self.assertEqual(dispatcher.step('r',queue['token'],claim)['stage'],'canonical_draft')
                 self.assertTrue(service.docker_executor.assert_feedback)
+                payload=service.docker_executor.correction_payload
+                self.assertEqual(payload['artifacts']['page_rules'],{'format':'guide','headings':[{'level':1,'text':'Fixture'}]})
+                self.assertIn(record['_page_rules'],payload['input_versions'])
                 self.assertEqual(dispatcher.step('r',queue['token'],claim)['status'],'passed')
                 self.assertEqual(service.docker_executor.reviews,2)
             finally: service.lifecycle.close(); service.close()
