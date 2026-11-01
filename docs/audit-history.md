@@ -239,15 +239,20 @@ The Python environment must have `requirements-observability.txt` installed.
 The collector unit publishes only host loopback port 14318. The timer runs one
 bounded page per currently present audit table once per minute after the prior
 run finishes; nonzero status is recorded by systemd and retried at the next
-interval. New tables are picked up on a later run. It does not alert on exporter
-failure, guarantee that a backlog is drained, or establish durable retention.
-Review these units and the file-exporter limitations above before enabling them.
+interval. New tables are picked up on a later run. To monitor delivery, set `WORKFLOW_AUDIT_HEALTH_DIR` in both `audit.env` and
+`monitor.env` to the same private directory. The command atomically records
+only the last attempt time and success or failure there; the authenticated
+metrics endpoint exposes those values. The alert rules signal a failed attempt
+or stale/missing health after their wait periods. If monitoring is not configured,
+no audit delivery alert is emitted. These checks do not guarantee the backlog is
+drained or establish durable retention. Review the units and file-exporter
+limitations above before enabling them.
 The delivery unit uses `PrivateTmp=yes`: its checkout, database, cursor and key
 must not be under a host `/tmp` path hidden from that unit. On 2026-11-01 the
-delivery command and hardening properties from the example unit passed in a
-temporary user-systemd unit against the authenticated disposable collector;
-the collector example unit and timer were syntax-checked but not installed or
-exercised as persistent services. To repeat the transient delivery test, set
+collector and delivery commands and their hardening properties passed as
+temporary user-systemd units, including collector stop and restart. The timer
+was syntax-checked, but none of these units was installed or exercised as a
+persistent service. To repeat the transient delivery test, set
 `WORKFLOW_TEST_AUDIT_SYSTEMD=1` alongside `WORKFLOW_TEST_OTEL_CONTRIB_IMAGE` in
 the collector integration command above.
 

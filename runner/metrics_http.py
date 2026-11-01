@@ -38,10 +38,19 @@ def build_server(secret,collect=read_metrics,port=0):
     return server
 
 
+def collect_metrics():
+    snapshot=read_metrics()
+    directory=os.environ.get('WORKFLOW_AUDIT_HEALTH_DIR')
+    if directory:
+        from runner.audit_health import read_metrics as read_audit_health
+        snapshot+=read_audit_health(directory)
+    return snapshot
+
+
 def main():
     path=os.environ.get('WORKFLOW_METRICS_HTTP_SECRET_FILE');port=os.environ.get('WORKFLOW_METRICS_HTTP_PORT')
     if not path or not port or not port.isdecimal() or not 1<=int(port)<=65535: raise ConfigurationError('metrics endpoint configuration required')
-    server=build_server(read_secret(path),port=int(port))
+    server=build_server(read_secret(path),collect=collect_metrics,port=int(port))
     try:server.serve_forever()
     finally:server.server_close()
 

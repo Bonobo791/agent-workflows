@@ -72,12 +72,22 @@ def main():
     selection=parser.add_mutually_exclusive_group(required=True)
     selection.add_argument('--table',action='append',choices=sorted(TABLES)); selection.add_argument('--all-present',action='store_true')
     parser.add_argument('--limit',type=int,default=100)
-    parser.add_argument('--token-file')
+    parser.add_argument('--token-file'); parser.add_argument('--health-directory')
     args=parser.parse_args()
-    tables=present_tables(args.source) if args.all_present else args.table
-    results=deliver_tables(args.source,args.cursor,args.key_file,args.endpoint,tables,args.limit,args.token_file)
+    try:
+        tables=present_tables(args.source) if args.all_present else args.table
+        results=deliver_tables(args.source,args.cursor,args.key_file,args.endpoint,tables,args.limit,args.token_file)
+        success=len(results)==len(tables) and all(result['status'] in ('empty','exported','superseded') for result in results.values())
+    except Exception:
+        if args.health_directory:
+            from runner.audit_health import publish
+            publish(args.health_directory,False)
+        raise
+    if args.health_directory:
+        from runner.audit_health import publish
+        publish(args.health_directory,success)
     print(next(iter(results.values()))['status'] if len(tables)==1 else json.dumps(results,sort_keys=True,separators=(',',':')))
-    return 0 if len(results)==len(tables) and all(result['status'] in ('empty','exported','superseded') for result in results.values()) else 1
+    return 0 if success else 1
 
 
 if __name__=='__main__':

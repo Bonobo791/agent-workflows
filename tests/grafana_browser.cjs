@@ -21,6 +21,8 @@ const { chromium } = require('playwright-core');
     await page.getByText('Jobs by state', { exact: true }).first().waitFor({ timeout: 30000 });
     await page.getByText('Evidence gaps', { exact: true }).first().waitFor({ timeout: 30000 });
     await page.getByText('Expired leases and quota pauses', { exact: true }).first().waitFor({ timeout: 30000 });
+    await page.getByText('Audit delivery last attempt', { exact: true }).first().waitFor({ timeout: 30000 });
+    await page.getByText('Audit delivery attempt age', { exact: true }).first().waitFor({ timeout: 30000 });
     const queued = page.getByText('queued', { exact: true }).first();
     await queued.waitFor({ timeout: 30000 });
     await page.waitForTimeout(3000);

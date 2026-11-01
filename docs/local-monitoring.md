@@ -19,11 +19,25 @@ data. A long-running worker control action can make collection time out; a
 failed scrape describes telemetry availability, not proof of process termination.
 The endpoint does not configure a collector, retention, or API protection.
 
+When audit delivery is enabled, set `WORKFLOW_AUDIT_HEALTH_DIR` to the same
+private directory used by the delivery unit. The endpoint adds only the latest
+attempt time and success flag; missing or invalid health data is reported as a
+configured but unavailable status. Alert rules detect a failed or stale attempt,
+not whether a backlog is fully delivered or data is crash durable.
+
+The audit failure and recovery alerts were delivered to a synthetic receiver
+through a disposable Prometheus and Alertmanager stack on 2026-11-01; Grafana's
+audit panels received synthetic samples and were checked in a browser. An
+additional combined run grouped alerts by name and saw no repeated metrics
+notification during an eight-second window after Alertmanager restarted. These
+shortened tests do not establish production-duration deduplication or a human
+notification.
+
 `python -m runner.desktop_alert_receiver` receives Alertmanager webhooks at
 `http://127.0.0.1:PORT/alerts`. Set `WORKFLOW_ALERT_PORT` and
 `WORKFLOW_ALERT_SECRET_FILE`, and configure Alertmanager's webhook
 `http_config.authorization.credentials_file` with the same alert token. Use
-`send_resolved: true`. The receiver accepts only the six alert names in
+`send_resolved: true`. The receiver accepts only the alert names in
 `observability/alerts.yml` and displays fixed messages through `notify-send`;
 it does not display incoming annotations. Delivery is at least once: a retry
 after a partially delivered batch can repeat a notification. A successful

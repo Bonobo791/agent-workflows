@@ -49,3 +49,19 @@ groups:
         annotations:
           summary: Workflow metrics are unavailable
           description: Check collector and scrape configuration; absence is not zero activity.
+      - alert: WorkflowAuditDeliveryFailed
+        expr: workflow_audit_delivery_last_attempt_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow audit delivery is failing
+          description: Inspect the local delivery service and collector before retrying.
+      - alert: WorkflowAuditDeliveryStale
+        expr: (time() - workflow_audit_delivery_last_attempt_timestamp_seconds > 300) or (workflow_audit_delivery_configured == 1 unless workflow_audit_delivery_last_attempt_timestamp_seconds)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Workflow audit delivery status is stale or unavailable
+          description: Inspect the delivery timer and its private health file.
