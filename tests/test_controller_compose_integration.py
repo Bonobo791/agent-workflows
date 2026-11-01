@@ -9,12 +9,22 @@ import unittest
 import uuid
 
 
+def cleanup_compose(command,env,temporary):
+    try:
+        subprocess.run(command+['down','--volumes','--remove-orphans'],env=env,capture_output=True,timeout=30,check=True)
+    except Exception as error:
+        error.add_note('Compose fixture retained at '+temporary.name)
+        raise
+    temporary.cleanup()
+
+
 @unittest.skipUnless(os.environ.get('CONTROLLER_TEST_IMAGE') and os.environ.get('CONTROLLER_TEST_DOCKER_HOST'), 'controller image and Podman Compose socket not configured')
 class ControllerComposeTests(unittest.TestCase):
     def test_private_secret_and_state_survive_stop_and_start(self):
         root=Path(__file__).resolve().parents[1]
         project='workflow-check-'+uuid.uuid4().hex[:12]
-        with tempfile.TemporaryDirectory(prefix='workflow-compose-') as directory:
+        temporary=tempfile.TemporaryDirectory(prefix='workflow-compose-',delete=False)
+        with temporary as directory:
             secret=Path(directory)/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
             image_file=Path(directory)/'image.yaml'
             image_file.write_text(json.dumps({'services':{'workflow':{'image':os.environ['CONTROLLER_TEST_IMAGE']}}}))
@@ -59,4 +69,4 @@ class ControllerComposeTests(unittest.TestCase):
                 container=wait_ready()
                 self.assertEqual(request(container,{'action':'job_status','run':'r'}),expected_job)
             finally:
-                subprocess.run(command+['down','--volumes','--remove-orphans'],env=env,capture_output=True,timeout=30)
+                cleanup_compose(command,env,temporary)

@@ -277,6 +277,9 @@ layers as local image `sha256:809f90f5be088c10fdd308902022be7030a20a784338c5ad23
 (manifest digest `sha256:b28c22c68c1d008bff257ec0e795fd831df8ea801d006aadd00db06803d34a8c`).
 Two disposable-container checks passed: Python 3.12, FFmpeg and private `/data`
 permissions, plus startup and queued synthetic-job persistence after restart.
+A disposable rootless Compose project also preserved the synthetic queued job
+through stop/start, default and explicit-timeout restarts, and a killed-container
+restart. Failed Compose cleanup retains its private fixture for inspection.
 The cached build does not verify fresh dependency downloads or local Codex execution.
 
 On the tested host, startup, stop/start, default restart, restart with
