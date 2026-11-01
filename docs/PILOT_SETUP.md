@@ -272,6 +272,13 @@ before upgrading: a legacy `/data/control.sock` blocks the new socket path and
 requires inspection rather than automatic removal. Do not run mixed versions
 against the same state directory.
 
+On 2026-11-01, main `52640f0` was built without network access using cached
+layers as local image `sha256:809f90f5be088c10fdd308902022be7030a20a784338c5ad2364ae5f49e9b7c8`
+(manifest digest `sha256:b28c22c68c1d008bff257ec0e795fd831df8ea801d006aadd00db06803d34a8c`).
+Two disposable-container checks passed: Python 3.12, FFmpeg and private `/data`
+permissions, plus startup and queued synthetic-job persistence after restart.
+The cached build does not verify fresh dependency downloads or local Codex execution.
+
 On the tested host, startup, stop/start, default restart, restart with
 `--timeout 5`, and explicit start after a killed container preserved a synthetic
 run. These tests used disabled execution; recovery of in-flight work, scopes,
