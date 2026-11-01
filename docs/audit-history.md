@@ -188,6 +188,23 @@ prints only a delivery status and returns nonzero for unavailable or ambiguous
 outcomes. Schedule it only after the destination's authentication, retention and
 access controls have been verified. The local receiver test does not establish
 compatibility with a deployed Opik server.
+
+A disposable compatibility test also sends synthetic events to the official
+OpenTelemetry Collector with its OTLP/HTTP trace path explicitly configured
+([receiver documentation](https://github.com/open-telemetry/opentelemetry-collector/blob/main/receiver/otlpreceiver/README.md)).
+On 2026-11-01 it passed using collector 0.164.0, local image ID
+`sha256:ee8d3ccd0de2384b135504d71fa9b99a2a585572384bcd01e01b509c9f9c4d89`
+and manifest digest `sha256:28b6d41ac51bff6b41ba5e8fe503569ffb9d6a1ea90f7a78419e86f34e44f750`.
+The test stops and restarts the collector, checks retry and cursor persistence,
+and verifies debug output excludes the synthetic raw run and content. Run it
+only with a trusted local image using:
+
+```sh
+WORKFLOW_TEST_OTEL_IMAGE=<image-id> python -m unittest tests.test_audit_collector_integration
+```
+ Its debug exporter and
+loopback listener do not establish durable storage, authentication, retention,
+or Opik compatibility.
  `OpenTelemetryAuditExporter` adapts these events to an explicitly
 provided OpenTelemetry SDK log exporter and acknowledges only SDK success. Its
 optional dependencies are pinned in `requirements-observability.txt`; no
