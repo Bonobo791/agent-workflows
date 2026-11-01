@@ -19,18 +19,22 @@ class GuardedLaunch:
         self.process,self.ack_fd,self.go_fd,self.nonce=process,ack_fd,go_fd,nonce
         self.receipt=None
 
+    def _read_receipt(self,deadline,cancelled):
+        data=b''
+        while True:
+            if cancelled() or time.monotonic()>=deadline: raise LaunchError(RECEIPT_UNAVAILABLE)
+            ready,_,_=select.select([self.ack_fd],[],[],min(.1,deadline-time.monotonic()))
+            if not ready: continue
+            chunk=os.read(self.ack_fd,513-len(data))
+            if not chunk: break
+            data+=chunk
+            if len(data)>512: raise LaunchError(RECEIPT_UNAVAILABLE)
+        return data
+
     def receive(self,deadline,cancelled):
         if self.ack_fd is None or not callable(cancelled): raise LaunchError(RECEIPT_UNAVAILABLE)
-        data=b''
         try:
-            while True:
-                if cancelled() or time.monotonic()>=deadline: raise LaunchError(RECEIPT_UNAVAILABLE)
-                ready,_,_=select.select([self.ack_fd],[],[],min(.1,deadline-time.monotonic()))
-                if not ready: continue
-                chunk=os.read(self.ack_fd,513-len(data))
-                if not chunk: break
-                data+=chunk
-                if len(data)>512: raise LaunchError(RECEIPT_UNAVAILABLE)
+            data=self._read_receipt(deadline,cancelled)
             if cancelled() or time.monotonic()>=deadline:raise LaunchError(RECEIPT_UNAVAILABLE)
             receipt=json.loads(data)
             if (not isinstance(receipt,dict) or set(receipt)!={'version','nonce','pid'}
