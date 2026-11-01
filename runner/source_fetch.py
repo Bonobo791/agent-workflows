@@ -39,10 +39,15 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
             remaining=self.deadline-time.monotonic()
             if remaining<=0: raise TimeoutError('source connection deadline exceeded')
             attempt_deadline=time.monotonic()+remaining/(len(self.addresses)-index)
-            try: sock=socket.create_connection((address,443),min(self.timeout,remaining,attempt_deadline-time.monotonic()))
+            budget=attempt_deadline-time.monotonic()
+            if budget<=0: failure=TimeoutError('source address attempt exceeded'); continue
+            try: sock=socket.create_connection((address,443),min(self.timeout,remaining,budget))
             except OSError as exc: failure=exc; continue
             remaining=min(self.deadline,attempt_deadline)-time.monotonic()
-            if remaining<=0: sock.close(); raise TimeoutError('source connection deadline exceeded')
+            if remaining<=0:
+                sock.close()
+                if self.deadline-time.monotonic()<=0: raise TimeoutError('source connection deadline exceeded')
+                failure=TimeoutError('source address attempt exceeded'); continue
             sock.settimeout(min(self.timeout,remaining))
             try:
                 self.sock=self._context.wrap_socket(sock,server_hostname=self.host)
