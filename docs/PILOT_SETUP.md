@@ -115,6 +115,9 @@ must not contain private skills, credentials, user data or session histories.
   canonical writing and independent review turns against that fixture. These
   calls do not advance the workflow graph or approve a package. Failed runs
   retain their private state for inspection.
+  `tests.test_local_marketing_graph_live`, with the same opt-in variables,
+  runs a synthetic admitted task through the actual dispatcher to the freeze
+  approval gate. It does not approve the gate or verify a campaign.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
