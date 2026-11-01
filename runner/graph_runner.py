@@ -16,6 +16,7 @@ class GraphRunner:
         self.graph, self.artifacts, self.specialist, self.gate = graph, artifacts, specialist, gate
         self.max_attempts=max_attempts
         self.quota_scope=quota_scope
+        self.correction_outcome=None
         self.skill_resolver=skill_resolver
         self.required_skills=required_skills or {}
     def _validate_artifact_graph(self,ref):
@@ -121,6 +122,10 @@ class GraphRunner:
                 raise ExecutionError('stage gate failed')
             output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
             ref=self.artifacts.put(output)
+            if correction_id is not None and status!='passed':
+                self.graph.close_unadopted_correction(run,stage,token,input_hash,correction_id,ref)
+                self.correction_outcome=status
+                return ref
             self.graph.finish(run,stage,snapshot,status,ref,token,completion_input=input_hash,skill_fingerprint=skill_fingerprint,session_record=result.get('session_id') if resumable else None,correction_id=correction_id)
             return ref
         except ExecutionError: raise

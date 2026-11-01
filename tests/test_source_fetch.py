@@ -118,9 +118,73 @@ with patch('runner.source_fetch.socket.getaddrinfo',return_value=[(socket.AF_INE
             result=fetcher._fetch_direct('https://docs.example.com/path?q=1')
         self.assertEqual(result['content'],'primary evidence')
         self.assertEqual(result['sha256'],hashlib.sha256(b'primary evidence').hexdigest())
-        self.assertEqual(factory.call_args.args,('docs.example.com','93.184.216.34'))
+        self.assertEqual(factory.call_args.args,('docs.example.com',['93.184.216.34']))
         self.assertEqual(connection.requests[0][0],('GET','/path?q=1'))
         self.assertTrue(connection.closed)
+    def test_connection_failure_falls_back_to_next_validated_address_only(self):
+        import socket, ssl
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            closed=False
+            def settimeout(self,value): pass
+            def close(self): self.closed=True
+        attempts=[]
+        def create(address,timeout):
+            attempts.append(address[0])
+            if address[0]=='93.184.216.34': raise ConnectionRefusedError()
+            return Sock()
+        connection=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],5)
+        with patch('runner.source_fetch.socket.create_connection',side_effect=create),patch.object(connection._context,'wrap_socket',side_effect=lambda sock,server_hostname: sock):
+            connection.connect()
+        self.assertEqual(attempts,['93.184.216.34','93.184.216.35'])
+        # Certificate verification failures never fall back to another address.
+        attempts.clear(); socks=[]
+        def create_ok(address,timeout):
+            attempts.append(address[0]); socks.append(Sock()); return socks[-1]
+        connection=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],5)
+        with patch('runner.source_fetch.socket.create_connection',side_effect=create_ok),patch.object(connection._context,'wrap_socket',side_effect=ssl.SSLCertVerificationError()):
+            with self.assertRaises(ssl.SSLCertVerificationError): connection.connect()
+        self.assertEqual(attempts,['93.184.216.34']); self.assertTrue(socks[0].closed)
+        # Handshake resets do fall back, and all-address failure surfaces the error.
+        attempts.clear()
+        connection=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],5)
+        with patch('runner.source_fetch.socket.create_connection',side_effect=create_ok),patch.object(connection._context,'wrap_socket',side_effect=ConnectionResetError()):
+            with self.assertRaises(ConnectionResetError): connection.connect()
+        self.assertEqual(attempts,['93.184.216.34','93.184.216.35'])
+
+    def test_fallback_cannot_exceed_total_deadline(self):
+        from runner.source_fetch import _PinnedHTTPS
+        attempts=[]
+        def create(address,timeout):
+            attempts.append(address[0]); connection.deadline=0; raise TimeoutError()
+        connection=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],5)
+        with patch('runner.source_fetch.socket.create_connection',side_effect=create):
+            with self.assertRaises(TimeoutError): connection.connect()
+        self.assertEqual(attempts,['93.184.216.34'])
+
+    def test_slow_connect_leaves_handshake_only_the_remaining_deadline(self):
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            timeouts=[]
+            def settimeout(self,value): self.timeouts.append(value)
+            def close(self): pass
+        connection=_PinnedHTTPS('docs.example.com',['93.184.216.34'],5)
+        def create(address,timeout): connection.deadline-=4.5; return Sock()
+        with patch('runner.source_fetch.socket.create_connection',side_effect=create),patch.object(connection._context,'wrap_socket',side_effect=lambda sock,server_hostname: sock):
+            connection.connect()
+        self.assertLessEqual(Sock.timeouts[0],0.6)
+        connection=_PinnedHTTPS('docs.example.com',['93.184.216.34'],5)
+        def expire(address,timeout): connection.deadline=0; return Sock()
+        with patch('runner.source_fetch.socket.create_connection',side_effect=expire):
+            with self.assertRaises(TimeoutError): connection.connect()
+
+    def test_fetch_forwards_all_validated_addresses(self):
+        fetcher=SourceFetcher(['https://docs.example.com/'])
+        addresses=[(2,1,6,'',('93.184.216.34',443)),(2,1,6,'',('93.184.216.35',443))]
+        with patch('runner.source_fetch.socket.getaddrinfo',return_value=addresses),patch.object(fetcher,'_connection',return_value=Connection(Response())) as factory:
+            fetcher._fetch_direct('https://docs.example.com/')
+        self.assertEqual(factory.call_args.args,('docs.example.com',['93.184.216.34','93.184.216.35']))
+
     def test_rejects_unapproved_urls_and_private_dns_before_connecting(self):
         fetcher=SourceFetcher(['https://docs.example.com/'])
         for url in ('http://docs.example.com/','https://evil.example.com/','https://u:p@docs.example.com/','https://docs.example.com:444/','https://127.0.0.1/','https://docs.example.com/?private=data'):

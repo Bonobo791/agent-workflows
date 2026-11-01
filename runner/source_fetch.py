@@ -26,14 +26,28 @@ def validate_content(content_type,data):
     return text
 
 class _PinnedHTTPS(http.client.HTTPSConnection):
-    def __init__(self,host,address,timeout):
+    """Connect only to pre-validated public addresses; try the next on connection failure, within one total deadline."""
+    def __init__(self,host,addresses,timeout):
         context=ssl.create_default_context();context.check_hostname=True;context.verify_mode=ssl.CERT_REQUIRED
         super().__init__(host,port=443,timeout=timeout,context=context)
-        self.address=address
+        self.addresses=list(addresses)
+        if not self.addresses: raise ValueError('no validated addresses')
+        self.deadline=time.monotonic()+timeout
     def connect(self):
-        sock=socket.create_connection((self.address,443),self.timeout)
-        try: self.sock=self._context.wrap_socket(sock,server_hostname=self.host)
-        except Exception: sock.close(); raise
+        failure=None
+        for address in self.addresses:
+            remaining=self.deadline-time.monotonic()
+            if remaining<=0: raise TimeoutError('source connection deadline exceeded')
+            try: sock=socket.create_connection((address,443),min(self.timeout,remaining))
+            except OSError as exc: failure=exc; continue
+            remaining=self.deadline-time.monotonic()
+            if remaining<=0: sock.close(); raise TimeoutError('source connection deadline exceeded')
+            sock.settimeout(min(self.timeout,remaining))
+            try:
+                self.sock=self._context.wrap_socket(sock,server_hostname=self.host); return
+            except ssl.SSLCertVerificationError: sock.close(); raise
+            except OSError as exc: sock.close(); failure=exc
+        raise failure
 
 class SourceFetcher:
     def __init__(self,urls,*,max_bytes=524288,timeout=10):
@@ -49,7 +63,7 @@ class SourceFetcher:
             except ValueError: hosts.add(host);continue
             raise SourceFetchError('literal IP hosts are forbidden')
         self.urls=frozenset(urls);self.hosts=frozenset(hosts);self.max_bytes=max_bytes;self.timeout=timeout
-    def _connection(self,host,address): return _PinnedHTTPS(host,address,self.timeout)
+    def _connection(self,host,addresses): return _PinnedHTTPS(host,addresses,self.timeout)
     def fetch(self,url,*,cancelled=lambda:False):
         process=None
         try:
@@ -97,7 +111,7 @@ class SourceFetcher:
                 ip=ipaddress.ip_address(address[0]); mapped=getattr(ip,'ipv4_mapped',None)
                 if not ip.is_global or (mapped is not None and not mapped.is_global): raise ValueError('nonpublic DNS result')
                 ips.append(str(ip))
-            connection=self._connection(host,ips[0])
+            connection=self._connection(host,ips)
             path=parsed.path or '/'
             if parsed.query: path+='?'+parsed.query
             connection.request('GET',path,headers={'Accept':'text/html, text/plain, application/xhtml+xml, application/json','Accept-Encoding':'identity','User-Agent':'agent-workflows-source-check/1'})
