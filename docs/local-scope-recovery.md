@@ -12,6 +12,10 @@ observed scope, then commits the scope identity, receipt and audit together.
 The final fence check and authorization hold the state database write lock, so
 cancellation cannot commit between those two operations. If the parent dies
 before authorization, the guard sees the closed pipe and exits.
+The authorization lock transaction changes no durable state: the binding and
+receipt are committed earlier. If that lock transaction fails after the guard
+receives authorization, the target may have started; the recorded scope stays
+unresolved and the caller must fence the run, not infer non-execution.
 The parent passes the same absolute monotonic deadline to the guard and checks
 it again before authorization. Failure closes the authorization pipe. A hung
 parent leaves the guard waiting only until that deadline, cancellation or exit;
