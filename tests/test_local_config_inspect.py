@@ -4,10 +4,37 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from runner.local_config_inspect import inspect_config, InspectionError
+from runner.local_config_inspect import inspect_config, write_config, InspectionError
 
 
 class LocalConfigInspectionTests(unittest.TestCase):
+    def test_write_config_is_private_atomic_and_never_overwrites(self):
+        import json
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            result={'codex_executable':'/synthetic/codex','codex_sha256':'a'*64,'disabled_integrations':{'mcp_servers':[],'plugins':[]}}
+            target=Path(root)/'runtime.json'
+            with patch('runner.local_config_inspect.inspect_config',return_value=result) as inspect:
+                write_config('/synthetic/codex',root,str(target),{'HOME':root})
+                self.assertEqual(json.loads(target.read_text()),result)
+                self.assertEqual(target.stat().st_mode&0o777,0o600)
+                with self.assertRaises(InspectionError): write_config('/synthetic/codex',root,str(target),{'HOME':root})
+                self.assertEqual(json.loads(target.read_text()),result)
+                self.assertEqual(inspect.call_count,1)
+            self.assertEqual(sorted(p.name for p in Path(root).iterdir()),['runtime.json'])
+
+    def test_write_config_rejects_unsafe_parent_and_cleans_failed_staging(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            target=Path(root)/'runtime.json'
+            Path(root).chmod(0o755)
+            with self.assertRaises(InspectionError): write_config('/synthetic/codex',root,str(target),{'HOME':root})
+            Path(root).chmod(0o700)
+            with patch('runner.local_config_inspect.inspect_config',return_value={'synthetic':True}), patch('runner.local_config_inspect.os.link',side_effect=OSError('fixture')):
+                with self.assertRaises(InspectionError): write_config('/synthetic/codex',root,str(target),{'HOME':root})
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(root).iterdir()),[])
+
     def test_npm_launcher_resolves_and_pins_the_native_executable(self):
         import json
         from unittest.mock import patch

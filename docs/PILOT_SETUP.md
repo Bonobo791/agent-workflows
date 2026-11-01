@@ -28,8 +28,13 @@ must not contain private skills, credentials, user data or session histories.
   run `python -m runner.local_config_inspect /absolute/path/to/codex /private/state`.
   The directory must already exist and be owner-only. The command prints the
   binary path and hash and the integration names needed for the JSON; save its
-  output only in an owner-only file outside the repository. It makes no model
-  turn and does not copy credentials. Names and paths can still be private.
+  output only in an owner-only file outside the repository. To create a new
+  owner-only configuration without shell redirection, use
+  `python -m runner.local_config_inspect /absolute/path/to/codex /private/state --write /private/config/local-runtime.json`.
+  The destination directory must already be owner-only and canonical; the
+  command never overwrites an existing destination. If it reports a write
+  failure, inspect the destination before retrying. Both modes make no model
+  turn and do not copy credentials. Names and paths can still be private.
   On Linux, the standard npm `codex` launcher is resolved to its native binary;
   the resulting configuration pins that binary rather than the Node launcher.
   This is a candidate for the inspected directory, not proof of isolation:
@@ -49,8 +54,8 @@ must not contain private skills, credentials, user data or session histories.
   below before starting a replacement or retrying work.
 
   On 2026-11-01, a temporary user unit using the example command and hardening
-  properties started with an inspected local runtime and preserved a synthetic
-  queued job across stop and restart. A separate scoped `account/read` verified
+  properties started with a privately generated runtime configuration and
+  preserved a synthetic queued job across stop and restart. A separate scoped `account/read` verified
   the existing sign-in; no workflow stage or real task was executed by that
   test. To repeat it, set `CODEX_TEST_EXECUTABLE` to the absolute Codex launcher
   and `WORKFLOW_TEST_SYSTEMD=1`, then run

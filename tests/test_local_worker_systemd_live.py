@@ -5,12 +5,12 @@ from pathlib import Path
 import shlex
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 import uuid
 
-from runner.local_config_inspect import inspect_config
 from runner.local_process import start_local_process
 from runner.local_scope import SystemdScopes
 from runner.protocol import AppServer
@@ -25,7 +25,10 @@ class LocalWorkerSystemdLiveTests(unittest.TestCase):
         root=Path(temporary.name); name='workflow-local-unit-'+uuid.uuid4().hex; backend=SystemdScopes(dict(os.environ))
         started=False
         try:
-            config=inspect_config(os.environ['CODEX_TEST_EXECUTABLE'],str(root),os.environ)
+            runtime=root/'runtime.json'
+            result=subprocess.run([sys.executable,'-m','runner.local_config_inspect',os.environ['CODEX_TEST_EXECUTABLE'],str(root),'--write',str(runtime)],capture_output=True,text=True,timeout=45)
+            self.assertEqual(result.returncode,0,result.stderr); self.assertEqual(result.stdout.strip(),'Local runtime configuration created.')
+            self.assertEqual(runtime.stat().st_mode&0o777,0o600); config=json.loads(runtime.read_text())
             service=Service(root); service.close()
             discovery=start_local_process(str(root/'state.db'),'discovery',str(root),config['codex_executable'],os.environ,backend,lambda:True,config['disabled_integrations'])
             try:
@@ -34,7 +37,6 @@ class LocalWorkerSystemdLiveTests(unittest.TestCase):
                 self.assertIsInstance(app._request('account/read',{'refreshToken':False}).get('account'),dict)
             finally: discovery.finish()
             secret=root/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
-            runtime=root/'runtime.json'; runtime.write_text(json.dumps(config)); runtime.chmod(0o600)
             env_file=root/'worker.env'
             values={'PYTHONPATH':str(Path(__file__).resolve().parents[1]),'WORKFLOW_DATA_DIR':str(root),'WORKFLOW_CONTROL_DIR':str(root),
                     'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_EXECUTION_MODE':'local','LOCAL_RUNTIME_CONFIG_FILE':str(runtime),
