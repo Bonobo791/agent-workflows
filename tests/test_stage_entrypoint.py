@@ -273,7 +273,7 @@ class StageEntrypointTests(unittest.TestCase):
                     self.assertEqual(control.handle('x'*40,decision)['decision'],'approved')
                     self.assertEqual(control.handle('x'*40,{'action':'human_review_status','run':'run-1'})['decision']['version'],version)
                     if complete_job:
-                        service.finish_job('run-1',q['token'])
+                        service.finish_job('run-1',q['token'],g)
                         self.assertEqual(service.queue.get('run-1')['status'],'completed')
                         service.request_lifecycle_stop('run-1')
                         self.assertEqual(service.lifecycle.confirm_operator_stop('run-1','inc','terminated_and_fenced')['status'],'stopped')

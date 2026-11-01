@@ -349,7 +349,7 @@ class AutoWorkerTests(unittest.TestCase):
                     def step(self,*args): return {'status':'awaiting_review'}
                 class Human:
                     def current(self,run): return {'decision':'approved'}
-                def finish(run,token):
+                def finish(run,token,graph_token):
                     entered.set(); release.wait(5); service.queue.finish(run,token,verify_completed=lambda _:True)
                 service.task_intake=Intake(); service.stage_dispatcher=Dispatcher(); service.human_review=Human(); service.finish_job=finish
                 return service,None

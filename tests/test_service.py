@@ -233,7 +233,7 @@ class ServiceTests(unittest.TestCase):
         from runner.queue import QueueError
         with tempfile.TemporaryDirectory() as root:
             s=Service(root); s.create('r','marketing','task'); s.enqueue('r'); claim=s.queue.claim('worker',60)
-            with self.assertRaises(QueueError): s.finish_job('r',claim['token'])
+            with self.assertRaises(QueueError): s.finish_job('r',claim['token'],'invalid')
             self.assertEqual(s.queue.get('r')['status'],'running'); s.close()
 
     def test_terminal_check_rejects_changed_required_skill(self):

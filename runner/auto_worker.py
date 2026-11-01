@@ -147,7 +147,7 @@ class AutoWorker:
                     if decision and decision['decision']=='approved':
                         with self.guard:
                             if self.stop_event.is_set(): raise AutoWorkerError('automatic worker stopped; inspection required')
-                            service.finish_job(run,queue['token'])
+                            service.finish_job(run,queue['token'],claim)
                         self._set(status='completed',run=run); return
                     if decision and decision['decision']=='rejected':
                         self._set(status='revision_required',stage=stage,run=run,version=version,reason='human rejected the review package')

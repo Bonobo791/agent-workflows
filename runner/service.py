@@ -6,6 +6,7 @@ remote mutations, authentication and provider access remain disabled.
 import json
 import hashlib
 import re
+import secrets
 import os
 import stat
 import time
@@ -296,7 +297,7 @@ class Service:
                 if (not recorded and names) or (recorded and recorded[0]!=fingerprint): return False
             return True
         except Exception: return False
-    def finish_job(self,run,queue_token):
+    def finish_job(self,run,queue_token,graph_token):
         if self.graph._definition(run).name=='marketing':
             from runner.queue import QueueError
             try: fresh=self.task_intake is not None and self.task_intake.revalidate(run) is True
@@ -312,13 +313,13 @@ class Service:
                 except HumanReviewError: return False
                 if not decision or decision['decision']!='approved': return False
             db=self.queue.db
-            claim=db.execute('SELECT c.task_id,c.expires FROM graph_claims c JOIN graph_runs g ON g.id=c.run AND g.task_id=c.task_id WHERE c.run=?',(run,)).fetchone()
-            if not claim or claim[1]<=self.graph.clock(): return False
+            claim=db.execute('SELECT c.task_id,c.expires,c.token FROM graph_claims c JOIN graph_runs g ON g.id=c.run AND g.task_id=c.task_id WHERE c.run=?',(run,)).fetchone()
+            if not claim or claim[1]<=self.graph.clock() or not isinstance(graph_token,str) or not isinstance(claim[2],str) or not secrets.compare_digest(claim[2],graph_token): return False
             created=time.time()
             inserted=db.execute("INSERT INTO claim_audit(schema_version,run,task_id,status,created) VALUES(1,?,?,'released',?)",(run,claim[0],created))
             if inserted.rowcount!=1 or db.execute('SELECT run,task_id,status,created FROM claim_audit WHERE id=?',(inserted.lastrowid,)).fetchone()!=(run,claim[0],'released',created): return False
             released.append((inserted.lastrowid,claim[0],created))
-            if db.execute('DELETE FROM graph_claims WHERE run=?',(run,)).rowcount!=1: return False
+            if db.execute('DELETE FROM graph_claims WHERE run=? AND token=?',(run,graph_token)).rowcount!=1: return False
             if claim[1]<=self.graph.clock(): return False
             if db.execute("UPDATE graph_runs SET status='completed' WHERE id=? AND status='active'",(run,)).rowcount!=1: return False
             return db.execute("SELECT status FROM graph_runs WHERE id=?",(run,)).fetchone()==('completed',) and not db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone()

@@ -45,14 +45,28 @@ class HumanReviewTransactionTests(unittest.TestCase):
                     if decision=='missing_audit': service.graph.db.execute('DELETE FROM human_review_audit')
                     if decision=='stale_package': service.graph.db.execute("UPDATE graph_stages SET version='new-package' WHERE run='r' AND stage='assembly'")
                     if decision=='approved':
-                        service.finish_job('r',queue['token'])
+                        service.finish_job('r',queue['token'],claim)
                         self.assertEqual(service.queue.get('r')['status'],'completed')
                         self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('completed',))
                         self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
                     else:
-                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'],claim)
                         self.assertEqual(service.queue.get('r')['status'],'running')
                 finally: service.close()
+
+    def test_completion_rejects_another_workers_graph_claim(self):
+        from runner.queue import QueueError
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); claim=service.claim('r')
+                service.verify_terminal=lambda run:True
+                with self.assertRaises(QueueError): service.finish_job('r',queue['token'],'different-token')
+                self.assertEqual(service.queue.get('r')['status'],'running')
+                self.assertIsNotNone(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
+                service.finish_job('r',queue['token'],claim)
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+            finally: service.close()
 
     def test_completion_requires_current_graph_claim(self):
         from runner.queue import QueueError
@@ -61,12 +75,13 @@ class HumanReviewTransactionTests(unittest.TestCase):
                 service=Service(root)
                 try:
                     service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60)
+                    claim='missing'
                     if condition!='missing':
-                        service.claim('r')
+                        claim=service.claim('r')
                         if condition=='expired': service.graph.db.execute("UPDATE graph_claims SET expires=0 WHERE run='r'")
                         else: service.graph.db.execute("UPDATE graph_claims SET task_id='other' WHERE run='r'")
                     service.verify_terminal=lambda run:True
-                    with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                    with self.assertRaises(QueueError): service.finish_job('r',queue['token'],claim)
                     self.assertEqual(service.queue.get('r')['status'],'running')
                 finally: service.close()
 
@@ -75,10 +90,10 @@ class HumanReviewTransactionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)
             try:
-                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); service.claim('r')
+                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); claim=service.claim('r')
                 service.verify_terminal=lambda run:True
                 service.graph.db.execute("CREATE TRIGGER reject_release BEFORE INSERT ON claim_audit WHEN NEW.status='released' BEGIN SELECT RAISE(IGNORE); END")
-                with self.assertRaises((sqlite3.Error,RuntimeError)): service.finish_job('r',queue['token'])
+                with self.assertRaises((sqlite3.Error,RuntimeError)): service.finish_job('r',queue['token'],claim)
                 self.assertEqual(service.queue.get('r')['status'],'running')
                 self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
                 self.assertIsNotNone(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
@@ -89,10 +104,10 @@ class HumanReviewTransactionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)
             try:
-                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); service.claim('r')
+                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); claim=service.claim('r')
                 service.verify_terminal=lambda run:True
                 service.graph.db.execute("CREATE TRIGGER alter_finish AFTER UPDATE OF status ON graph_runs WHEN NEW.status='completed' BEGIN UPDATE graph_runs SET status='cancelled' WHERE id=NEW.id; END")
-                with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                with self.assertRaises(QueueError): service.finish_job('r',queue['token'],claim)
                 self.assertEqual(service.queue.get('r')['status'],'running')
                 self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
                 self.assertIsNotNone(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
@@ -103,10 +118,10 @@ class HumanReviewTransactionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)
             try:
-                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); service.claim('r')
+                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); claim=service.claim('r')
                 service.verify_terminal=lambda run:True
                 service.graph.db.execute("CREATE TRIGGER alter_graph AFTER UPDATE OF status ON jobs WHEN NEW.status='completed' BEGIN UPDATE graph_runs SET status='cancelled' WHERE id=NEW.run; END")
-                with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                with self.assertRaises(QueueError): service.finish_job('r',queue['token'],claim)
                 self.assertEqual(service.queue.get('r')['status'],'running')
                 self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
                 self.assertIsNotNone(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
@@ -117,10 +132,10 @@ class HumanReviewTransactionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)
             try:
-                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); service.claim('r')
+                service.create('r','engineering','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); claim=service.claim('r')
                 service.verify_terminal=lambda run:True
                 service.graph.db.execute("CREATE TRIGGER reject_finish BEFORE INSERT ON job_audit WHEN NEW.status='completed' BEGIN SELECT RAISE(IGNORE); END")
-                with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                with self.assertRaises(QueueError): service.finish_job('r',queue['token'],claim)
                 self.assertEqual(service.queue.get('r')['status'],'running')
                 self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
                 self.assertIsNotNone(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
@@ -143,10 +158,10 @@ class HumanReviewTransactionTests(unittest.TestCase):
                         return freshness
                     service.task_intake.revalidate=revalidate
                     if freshness is True:
-                        service.finish_job('r',queue['token'])
+                        service.finish_job('r',queue['token'],claim)
                         self.assertEqual(service.queue.get('r')['status'],'completed')
                     else:
-                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'],claim)
                         self.assertEqual(service.queue.get('r')['status'],'running')
                 finally: service.close()
 
@@ -156,12 +171,12 @@ class HumanReviewTransactionTests(unittest.TestCase):
             with self.subTest(workflow=workflow), tempfile.TemporaryDirectory() as root:
                 service=Service(root)
                 try:
-                    service.create('r',workflow,'task'); service.enqueue('r'); queue=service.queue.claim('worker',60); service.claim('r')
+                    service.create('r',workflow,'task'); service.enqueue('r'); queue=service.queue.claim('worker',60); claim=service.claim('r')
                     service.verify_terminal=lambda run:True
                     if workflow=='marketing':
-                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'],claim)
                     else:
-                        service.finish_job('r',queue['token'])
+                        service.finish_job('r',queue['token'],claim)
                         self.assertEqual(service.queue.get('r')['status'],'completed')
                 finally: service.close()
 
