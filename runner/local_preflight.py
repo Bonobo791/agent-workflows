@@ -33,6 +33,13 @@ def sandbox_preflight(executable,environment):
             return result.returncode==0 and result.stdout==_EXPECTED and (workspace/'probe-output').read_text()=='synthetic'
     except (OSError,ValueError,TypeError,subprocess.SubprocessError,RuntimeError): return False
 
+def _scope_absent(backend,unit):
+    """True only when systemd itself reports the reserved unit never existed."""
+    try: info=backend.inspect(unit)
+    except Exception: return False
+    return info.get('id')==unit and info.get('load')=='not-found' and info.get('active')=='inactive' and info.get('invocation')==''
+
+
 def scope_preflight(environment):
     """Check a real user scope kills a synthetic detached child."""
     import os, select, sys
@@ -40,7 +47,7 @@ def scope_preflight(environment):
     manager={k:environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in environment}
     manager['PATH']='/usr/bin:/bin'
     backend=SystemdScopes(manager)
-    process=None; scopes=None; unit=None; root=None; clean=False
+    process=None; scopes=None; unit=None; root=None; clean=False; started=False; exited=False
     try:
         root=tempfile.mkdtemp(prefix='agent-workflows-scope-preflight-')
         scopes=LocalScopes(str(Path(root)/'state.db'),backend);unit=scopes.reserve('preflight')
@@ -52,6 +59,7 @@ def scope_preflight(environment):
         if not line.isascii() or not line.isdigit(): return False
         child=int(line)
         if child<=1: return False
+        started=True
         scopes.bind('preflight',unit)
         info=backend.inspect(unit)
         membership=Path('/proc')/str(child)/'cgroup'
@@ -68,6 +76,7 @@ def scope_preflight(environment):
             try:
                 if scopes.state('preflight',unit)=='running': scopes.stop('preflight',unit)
             except Exception: pass
+        exited=process is not None and process.poll() is not None and process.returncode not in (None,0)
         if process is not None and process.poll() is None:
             process.terminate()
             try: process.wait(timeout=5)
@@ -75,7 +84,7 @@ def scope_preflight(environment):
         if scopes is not None: scopes.close()
         if process is not None and process.stdout is not None: process.stdout.close()
         if root is not None:
-            if clean or process is None:
+            if clean or process is None or (exited and not started and _scope_absent(backend,unit)):
                 import shutil
                 shutil.rmtree(root)
             else:
