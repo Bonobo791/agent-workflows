@@ -126,6 +126,7 @@ with patch('runner.source_fetch.socket.getaddrinfo',return_value=[(socket.AF_INE
         from runner.source_fetch import _PinnedHTTPS
         class Sock:
             closed=False
+            def settimeout(self,value): pass
             def close(self): self.closed=True
         attempts=[]
         def create(address,timeout):
@@ -160,6 +161,22 @@ with patch('runner.source_fetch.socket.getaddrinfo',return_value=[(socket.AF_INE
         with patch('runner.source_fetch.socket.create_connection',side_effect=create):
             with self.assertRaises(TimeoutError): connection.connect()
         self.assertEqual(attempts,['93.184.216.34'])
+
+    def test_slow_connect_leaves_handshake_only_the_remaining_deadline(self):
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            timeouts=[]
+            def settimeout(self,value): self.timeouts.append(value)
+            def close(self): pass
+        connection=_PinnedHTTPS('docs.example.com',['93.184.216.34'],5)
+        def create(address,timeout): connection.deadline-=4.5; return Sock()
+        with patch('runner.source_fetch.socket.create_connection',side_effect=create),patch.object(connection._context,'wrap_socket',side_effect=lambda sock,server_hostname: sock):
+            connection.connect()
+        self.assertLessEqual(Sock.timeouts[0],0.6)
+        connection=_PinnedHTTPS('docs.example.com',['93.184.216.34'],5)
+        def expire(address,timeout): connection.deadline=0; return Sock()
+        with patch('runner.source_fetch.socket.create_connection',side_effect=expire):
+            with self.assertRaises(TimeoutError): connection.connect()
 
     def test_rejects_unapproved_urls_and_private_dns_before_connecting(self):
         fetcher=SourceFetcher(['https://docs.example.com/'])

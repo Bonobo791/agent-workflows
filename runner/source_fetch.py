@@ -40,6 +40,9 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
             if remaining<=0: raise TimeoutError('source connection deadline exceeded')
             try: sock=socket.create_connection((address,443),min(self.timeout,remaining))
             except OSError as exc: failure=exc; continue
+            remaining=self.deadline-time.monotonic()
+            if remaining<=0: sock.close(); raise TimeoutError('source connection deadline exceeded')
+            sock.settimeout(min(self.timeout,remaining))
             try:
                 self.sock=self._context.wrap_socket(sock,server_hostname=self.host); return
             except ssl.SSLCertVerificationError: sock.close(); raise

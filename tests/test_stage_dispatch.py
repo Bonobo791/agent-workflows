@@ -266,7 +266,7 @@ class StageDispatchTests(unittest.TestCase):
             def execute(self,**kw):
                 if kw['role']=='canonical_draft': self.writer_sessions.append(kw.get('session_id'))
                 ref=self.service.artifacts.put((('# Fixture\n\n' if kw['role']=='canonical_draft' else '')+'content '+kw['role']+str(len(self.writer_sessions))).encode()); refs=fixture_outputs(self.service.artifacts,kw['role'],ref)
-                return {'session_id':kw.get('session_id') or kw['role']+'-session','outputs':refs,'output':json.dumps({'stage':kw['role'],'status':(self.writer_status if kw['role']=='canonical_draft' and kw.get('session_id') else 'passed'),'input_versions':kw['input_versions'],'outputs':refs,'findings':[]})}
+                return {'session_id':kw.get('session_id') or kw['role']+'-session','outputs':refs,'output':json.dumps({'stage':kw['role'],'status':(self.writer_status if kw['role']=='canonical_draft' and kw.get('session_id') else 'passed'),'input_versions':kw['input_versions'],'outputs':refs,'findings':[],**({'reason':'writer needs input'} if self.writer_status=='blocked' and kw.get('session_id') else {})})}
             def review(self,subject,**kw):
                 self.reviews+=1; session='review-'+str(self.reviews); ref=self.service.artifacts.put(('review '+str(self.reviews)).encode())
                 status='blocked' if self.reviews==1 else 'passed'
@@ -291,19 +291,20 @@ class StageDispatchTests(unittest.TestCase):
         return service,dispatcher,queue,claim
 
     def test_correction_with_nonpassing_writer_status_preserves_evidence_and_runs_once(self):
-        with tempfile.TemporaryDirectory() as root:
-            service,dispatcher,queue,claim=self._blocked_canonical_review_fixture(root)
-            original_writer=service.graph.get('r','canonical_draft'); original_review=service.graph.get('r','canonical_review')
-            service.docker_executor.writer_status='awaiting_review'
-            first=dispatcher.step('r',queue['token'],claim)
-            self.assertEqual((first['status'],first['correction_outcome']),('blocked','awaiting_review'))
-            self.assertEqual(dispatcher.step('r',queue['token'],claim),{'status':'blocked'})
-            self.assertEqual(len(service.docker_executor.writer_sessions),2)
-            self.assertEqual(service.graph.get('r','canonical_draft'),original_writer)
-            self.assertEqual(service.graph.get('r','canonical_review'),original_review)
-            self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_attempts WHERE run='r' AND status='uncertain'").fetchone())
-            self.assertEqual(service.graph.db.execute("SELECT state FROM correction_attempts WHERE run='r'").fetchall(),[('completed',)])
-            service.lifecycle.close(); service.close()
+        for outcome in ('awaiting_review','blocked'):
+            with self.subTest(outcome=outcome),tempfile.TemporaryDirectory() as root:
+                service,dispatcher,queue,claim=self._blocked_canonical_review_fixture(root)
+                original_writer=service.graph.get('r','canonical_draft'); original_review=service.graph.get('r','canonical_review')
+                service.docker_executor.writer_status=outcome
+                first=dispatcher.step('r',queue['token'],claim)
+                self.assertEqual((first['status'],first['correction_outcome']),('blocked',outcome))
+                self.assertEqual(dispatcher.step('r',queue['token'],claim),{'status':'blocked'})
+                self.assertEqual(len(service.docker_executor.writer_sessions),2)
+                self.assertEqual(service.graph.get('r','canonical_draft'),original_writer)
+                self.assertEqual(service.graph.get('r','canonical_review'),original_review)
+                self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_attempts WHERE run='r' AND status='uncertain'").fetchone())
+                self.assertEqual(service.graph.db.execute("SELECT state FROM correction_attempts WHERE run='r'").fetchall(),[('completed',)])
+                service.lifecycle.close(); service.close()
 
     def test_blocked_review_triggers_one_resumed_writer_correction(self):
         with tempfile.TemporaryDirectory() as root:
