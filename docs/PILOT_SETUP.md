@@ -117,7 +117,10 @@ must not contain private skills, credentials, user data or session histories.
   retain their private state for inspection.
   `tests.test_local_marketing_graph_live`, with the same opt-in variables,
   runs a synthetic admitted task through the actual dispatcher to the freeze
-  approval gate. It does not approve the gate or verify a campaign.
+  approval gate. By default it does not approve the gate or verify a campaign.
+  Adding `WORKFLOW_TEST_CHANNELS=1` applies a fixture-only freeze approval and
+  exercises all five channel drafts and a separate LinkedIn review. It neither
+  publishes content nor establishes media or community-context acceptance.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.

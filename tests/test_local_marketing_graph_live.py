@@ -32,6 +32,8 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
             'writer':'Write only the requested note using supplied verified evidence and required heading.',
             'editor':'Review the assigned draft against the supplied source and rules. Report actual material problems only.',
             'source':'Review supplied source snapshots. A page is primary evidence of its own HTML title.',
+            'channel-writer':'Adapt the supplied frozen content for the assigned channel. Do not introduce new claims or publish.',
+            'channel-editor':'Independently review the assigned channel draft against its supplied input. Report actual material problems only.',
         }.items():
             directory=skills/name; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text(content)
         service=Service(str(root)); completed=False
@@ -48,6 +50,9 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
             service.model_executor=CodexExecutor(supervisor,service.provenance,service.artifacts,lambda run:None,model_policy=policy)
             service.skill_resolver=SkillResolver([str(skills)])
             service.required_skills={'brief':['brief'],'canonical_draft':['writer'],'canonical_review':['editor'],'source_review':['source']}
+            if os.environ.get('WORKFLOW_TEST_CHANNELS')=='1':
+                service.required_skills.update({name+'_draft':['channel-writer'] for name in ('linkedin','x','facebook','instagram','reddit')})
+                service.required_skills['linkedin_review']=['channel-editor']
             service.page_rules={'note':{'headings':[{'level':1,'text':'Example Domain'}]}}
             service.source_snapshots=SourceSnapshots(service,SourceFetcher(['https://example.com/'],timeout=15)); service.source_reviewer=SourceReviewer(service)
             task={'task_id':'fixture','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[],'format':'note',
@@ -62,6 +67,18 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 result=dispatcher.step('r',queue['token'],claim); results.append((result.get('stage'),result.get('status')))
                 if result.get('stage')=='freeze' or result.get('status') in ('blocked','failed','uncertain','rate_limited'): break
             self.assertEqual(results,[('intake','passed'),('brief','passed'),('canonical_draft','passed'),('canonical_review','passed'),('freeze','awaiting_approval')])
+            if os.environ.get('WORKFLOW_TEST_CHANNELS')=='1':
+                service.approve('r','freeze',result['version'],'fixture-operator')
+                self.assertEqual(dispatcher.step('r',queue['token'],claim),{'stage':'freeze','status':'passed'})
+                for channel in ('linkedin','x','facebook','instagram','reddit'):
+                    outcome=dispatcher.step('r',queue['token'],claim)
+                    self.assertEqual((outcome['stage'],outcome['status']),(channel+'_draft','passed'))
+                outcome=dispatcher.step('r',queue['token'],claim)
+                self.assertEqual(outcome['stage'],'linkedin_review'); self.assertIn(outcome['status'],('passed','blocked'))
+                self.assertTrue(dispatcher._verify_recorded_review('r','linkedin_review'))
+                draft=json.loads(service.artifacts.get(service.graph.get('r','linkedin_draft')['version']))
+                review=json.loads(service.artifacts.get(service.graph.get('r','linkedin_review')['version']))
+                self.assertNotEqual(draft['session_id'],review['session_id'])
             self.assertFalse(unresolved_scope_rows(service.graph.db,'r')); self.assertFalse(unresolved_scope_rows(service.graph.db,'discovery'))
             completed=True
         finally:
