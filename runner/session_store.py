@@ -16,10 +16,19 @@ class SessionError(RuntimeError): pass
 
 _WRITERS={'implement','canonical_draft','linkedin_draft','x_draft','facebook_draft','instagram_draft','reddit_draft'}
 _FORBIDDEN=re.compile(r'(?i)(?:\.env(?:\..*)?|auth(?:entication)?(?:[._-].*)?|config\.toml|.*(?:token|credential|secret|private[-_]?key).*|.*\.(?:pem|key|p12))$')
+_BACKUP_HOME_CHANGED='backup home changed'
 
 def _name(value):
     return isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}',value) and value not in ('.','..')
 def _digest(value): return isinstance(value,str) and re.fullmatch(r'[0-9a-f]{64}',value)
+
+def _check_entries(path):
+    def scan_error(error): raise error
+    for directory,dirs,files in os.walk(path,followlinks=False,onerror=scan_error):
+        for name in dirs+files:
+            if _FORBIDDEN.fullmatch(name): raise SessionError('forbidden state entry')
+            info=os.lstat(Path(directory)/name)
+            if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or (stat.S_ISREG(info.st_mode) and info.st_nlink!=1): raise SessionError('unsafe state entry')
 
 class SessionStore:
     def __init__(self,root):
@@ -92,12 +101,7 @@ class SessionStore:
             info=path.lstat() if fd is None else os.fstat(fd)
             identity=(info.st_dev,info.st_ino)
             if (fd is None and path.resolve(strict=True)!=path) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise SessionError('unsafe state home')
-            def scan_error(error): raise error
-            for directory,dirs,files in os.walk(path,followlinks=False,onerror=scan_error):
-                for name in dirs+files:
-                    if _FORBIDDEN.fullmatch(name): raise SessionError('forbidden state entry')
-                    info=os.lstat(Path(directory)/name)
-                    if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or (stat.S_ISREG(info.st_mode) and info.st_nlink!=1): raise SessionError('unsafe state entry')
+            _check_entries(path)
             return identity
         except OSError: raise SessionError('state unavailable') from None
     def release(self,job,verify_stopped):
@@ -129,7 +133,7 @@ class SessionStore:
         except OSError: raise SessionError('backup home unavailable') from None
         try:
             info=os.fstat(fd)
-            if (info.st_dev,info.st_ino)!=identity:raise SessionError('backup home changed')
+            if (info.st_dev,info.st_ino)!=identity:raise SessionError(_BACKUP_HOME_CHANGED)
             self._check_home(home,fd)
             path=f'/proc/{os.getpid()}/fd/{fd}'
             try: verified=verify_safe(path) is True
@@ -140,8 +144,8 @@ class SessionStore:
             try: result=exporter(path,generation)
             except Exception: raise SessionError('backup outcome unresolved') from None
             try: current=original.lstat()
-            except OSError: raise SessionError('backup home changed') from None
-            if (current.st_dev,current.st_ino)!=identity:raise SessionError('backup home changed')
+            except OSError: raise SessionError(_BACKUP_HOME_CHANGED) from None
+            if (current.st_dev,current.st_ino)!=identity:raise SessionError(_BACKUP_HOME_CHANGED)
             self._finish_backup(home,generation)
             return result
         finally: os.close(fd)
