@@ -3,6 +3,19 @@ from runner.graph import GraphError
 
 class StageError(RuntimeError): pass
 
+def _channel_review_inputs(service,run):
+    import json
+    freeze=service.graph.get(run,'freeze')
+    if not freeze or freeze['status']!='passed': raise StageError('frozen content unavailable')
+    frozen=json.loads(service.artifacts.get(freeze['version']))
+    outputs=json.loads(service.artifacts.get(frozen['content_ref']))['outputs']
+    if not isinstance(outputs,list) or len(outputs)!=1: raise StageError('frozen content unavailable')
+    content=outputs[0]
+    row=service.graph.db.execute('SELECT artifact_ref FROM task_input_versions WHERE run=?',(run,)).fetchone()
+    if not row: raise StageError('admitted task unavailable')
+    service.artifacts.get(content); service.artifacts.get(row[0])
+    return content,row[0]
+
 def _source_snapshot_inputs(service,run,brief):
     if '_source_review' not in brief: return None
     import json
@@ -77,6 +90,23 @@ class StageDispatcher:
                 return {'status':'blocked','reason':'task changed; readmission required'}
         if self.service.graph.quota_paused('default'):
             return {'status':'rate_limited','reason':'subscription quota paused; explicit resume required'}
+        if self.service.graph._definition(run).name=='marketing':
+            import json
+            from workflows.marketing.gates import CHANNELS
+            legacy={}; freeze=self.service.graph.get(run,'freeze'); bound_task=None
+            for channel in CHANNELS:
+                name=channel+'_review'; state=self.service.graph.get(run,name)
+                if not state or state['status'] not in ('passed','blocked','unsuitable'): continue
+                try:
+                    record=json.loads(self.service.artifacts.get(state['version']))
+                    inputs=record['input_versions']; content,admitted=_channel_review_inputs(self.service,run)
+                    if bound_task is not None and admitted!=bound_task: raise ValueError('task changed')
+                    bound_task=admitted
+                    if not isinstance(inputs,list) or not inputs: raise ValueError('review inputs unavailable')
+                    if inputs[1:3]!=[content,admitted]: legacy[name]=state['version']
+                except Exception: raise StageError('review migration evidence unavailable') from None
+            if legacy:
+                self.service.graph.invalidate_legacy_channel_reviews(run,graph_claim,queue_claim,legacy,freeze['version'],bound_task)
         stage=self.next_stage(run,graph_claim)
         if stage is None:
             if self.service.graph._definition(run).name=='engineering':
@@ -198,6 +228,14 @@ class StageDispatcher:
         except Exception: raise StageError('admitted task artifact unavailable') from None
         refs=[task_ref]
         artifacts={'subject':task}
+        from workflows.marketing.gates import CHANNELS
+        if stage in {channel+'_draft' for channel in CHANNELS}:
+            artifacts['admitted_task']=service.artifacts.get(row[0]).decode('utf-8'); refs.append(row[0])
+        elif stage in {channel+'_review' for channel in CHANNELS}:
+            content,admitted=_channel_review_inputs(service,run)
+            artifacts['frozen_content']=service.artifacts.get(content).decode('utf-8')
+            artifacts['admitted_task']=service.artifacts.get(admitted).decode('utf-8')
+            refs.extend([content,admitted])
         if stage=='canonical_draft':
             try:
                 register=upstream['outputs'][1];proof=upstream['_source_verification']
@@ -527,6 +565,8 @@ class StageDispatcher:
             parsed=parse_marketing_result(service.artifacts.get(proof['review_output_ref']).decode('utf-8'),stage)
             public={key:value for key,value in record.items() if not key.startswith('_') and key!='session_id'}
             expected=[subject]
+            from workflows.marketing.gates import CHANNELS
+            if stage in {channel+'_review' for channel in CHANNELS}: expected.extend(_channel_review_inputs(service,run))
             if stage=='reddit_review':
                 context_ref=record.get('_reddit_context')
                 if context_ref:

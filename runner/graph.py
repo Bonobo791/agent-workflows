@@ -137,6 +137,28 @@ class GraphStore:
             self.db.execute('COMMIT'); return True
         except Exception:
             self.db.execute('ROLLBACK'); raise
+    def invalidate_legacy_channel_reviews(self,run,token,queue_claim,versions,freeze_version,task_ref):
+        if not versions or any(stage not in {channel+'_review' for channel in CHANNELS} for stage in versions): raise GraphError('invalid review migration')
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            self._lease(run,token)
+            job=self.db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
+            if not job or job[0]!='running' or not isinstance(queue_claim,str) or not isinstance(job[1],str) or not secrets.compare_digest(job[1],queue_claim) or job[2] is None or job[2]<=time.time(): raise GraphError('queue claim unavailable')
+            if self._definition(run).name!='marketing' or self.db.execute("SELECT 1 FROM graph_attempts WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved stage attempt')
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_actions'").fetchone() and self.db.execute("SELECT 1 FROM external_actions WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved external action')
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone() and self.db.execute("SELECT 1 FROM local_scopes WHERE run=? AND state IS NOT 'terminated'",(run,)).fetchone(): raise GraphError('unresolved local scope')
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone() and self.db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated')",(run,)).fetchone(): raise GraphError('unresolved worker execution')
+            freeze=self.get(run,'freeze'); task=self.db.execute('SELECT artifact_ref FROM task_input_versions WHERE run=?',(run,)).fetchone()
+            if not freeze or freeze['status']!='passed' or freeze['version']!=freeze_version or not task or task[0]!=task_ref: raise GraphError('review inputs changed')
+            for stage,version in versions.items():
+                current=self.get(run,stage)
+                if not current or current['version']!=version: raise GraphError('review changed')
+            self._invalidate_stages(run,set(versions)|{'assembly'},'review_context_changed')
+            self._lease(run,token)
+            if job[2]<=time.time(): raise GraphError('queue claim unavailable')
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK'); raise
     def session(self,run,role):
         row=self.db.execute('SELECT session FROM graph_sessions WHERE run=? AND role=?',(run,role)).fetchone()
         return row[0] if row else None

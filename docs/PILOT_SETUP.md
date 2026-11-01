@@ -189,6 +189,11 @@ A separate opt-in cancellation test stops a running synthetic renderer and
 checks the container is terminated while the attempt remains uncertain and
 no result is committed. This does not reconcile an interrupted stop or
 establish full marketing workflow acceptance.
+Channel reviews bind the frozen source and admitted task as well as the draft.
+When a running task has older reviews without these inputs, dispatch invalidates
+those reviews and the assembled package only with current claims and no
+unresolved work. The reviews must run again and any new package needs a new
+human decision; decisions on earlier package versions remain in history.
 The standard local worker constructs the renderer when the Podman runtime
 configuration is present. Its policy check verifies the socket owner and
 access, rootless Podman, seccomp, SELinux, the pinned image ID and the renderer

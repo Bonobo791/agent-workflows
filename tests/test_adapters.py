@@ -21,9 +21,9 @@ class AdapterTests(unittest.TestCase):
     def test_selects_only_role_inputs(self):
         self.adapter.run('r','linkedin_review','claim',self.refs,'model')
         stage,inputs,prompt=self.worker.calls[-1]
-        self.assertEqual([self.refs['linkedin_draft']],inputs['input_versions'])
-        self.assertEqual({'linkedin_draft'},set(inputs['artifacts']))
-        self.assertIn('LinkedIn',prompt)
+        self.assertEqual([self.refs['linkedin_draft'],self.refs['freeze'],self.refs['task']],inputs['input_versions'])
+        self.assertEqual({'linkedin_draft','freeze','task'},set(inputs['artifacts']))
+        self.assertIn('linkedin',prompt.lower())
     def test_missing_or_invalid_input_blocks(self):
         with self.assertRaises(AdapterError): self.adapter.run('r','linkedin_review','claim',{},'model')
         with self.assertRaises(AdapterError): self.adapter.run('r','linkedin_review','claim',{'linkedin_draft':'missing'},'model')

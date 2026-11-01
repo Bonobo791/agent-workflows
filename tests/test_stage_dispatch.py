@@ -376,12 +376,14 @@ class StageDispatchTests(unittest.TestCase):
         class Policy:
             def for_role(self,role): return {'model':'synthetic-terra','effort':'medium'}
         class Executor:
-            def __init__(self,service): self.service=service; self.counter=0
+            def __init__(self,service): self.service=service; self.counter=0; self.channel_calls={}
             def execute(self,**kw):
                 if kw['role']=='asset_brief': self.asset_call=kw
+                if kw['role']=='linkedin_draft': self.channel_calls[kw['role']]=kw
                 self.counter+=1; ref=self.service.artifacts.put((('# Fixture\n\n' if kw['role']=='canonical_draft' else '')+'content '+kw['role']).encode()); refs=fixture_outputs(self.service.artifacts,kw['role'],ref)
                 return {'session_id':kw.get('session_id') or 'session-'+str(self.counter),'outputs':refs,'output':json.dumps({'stage':kw['role'],'status':'passed','input_versions':kw['input_versions'],'outputs':refs,'findings':[]})}
             def review(self,subject,**kw):
+                if kw['role']=='linkedin_review': self.channel_calls[kw['role']]=kw
                 self.counter+=1; session='review-'+str(self.counter); ref=self.service.artifacts.put(('review '+kw['role']).encode())
                 output=json.dumps({'stage':kw['role'],'status':'passed','input_versions':kw['input_versions'],'outputs':[ref],'findings':[]})
                 self.service.provenance.bind(kw['run'],kw['role'],session,kw['skills'],kw['claim'],fresh=True,subject=subject)
@@ -431,6 +433,41 @@ class StageDispatchTests(unittest.TestCase):
                 result=dispatcher.step('r',queue['token'],claim)
                 if result.get('status')=='awaiting_review': break
             self.assertEqual(result['status'],'awaiting_review'); self.assertEqual(service.graph.get('r','asset_production')['status'],'blocked')
+            for role in ('linkedin_draft','linkedin_review'):
+                call=service.docker_executor.channel_calls[role]
+                payload=json.loads(call['prompt'].split('\n')[1])
+                self.assertEqual(json.loads(payload['artifacts']['admitted_task']),task)
+                self.assertIn(ref,call['input_versions'])
+                if role.endswith('_review'):
+                    frozen=json.loads(service.artifacts.get(service.graph.get('r','freeze')['version']))
+                    canonical=json.loads(service.artifacts.get(frozen['content_ref']))['outputs'][0]
+                    self.assertEqual(payload['artifacts']['frozen_content'],service.artifacts.get(canonical).decode())
+                    self.assertIn(canonical,call['input_versions'])
+            changed=service.artifacts.put(b'{"task_id":"changed"}')
+            service.graph.db.execute('UPDATE task_input_versions SET artifact_ref=? WHERE run=?',(changed,'r'))
+            with self.assertRaises(StageError): dispatcher._verify_recorded_review('r','linkedin_review')
+            service.graph.db.execute('UPDATE task_input_versions SET artifact_ref=? WHERE run=?',(ref,'r'))
+            old_assembly=service.graph.get('r','assembly')['version']
+            from runner.human_review import HumanReview
+            HumanReview(service)
+            service.graph.db.execute("INSERT INTO human_review_decisions VALUES(?,?,'approved','local-owner',0)",('r',old_assembly))
+            old_review=service.graph.get('r','linkedin_review')
+            legacy=json.loads(service.artifacts.get(old_review['version']))
+            legacy['input_versions']=legacy['input_versions'][:1]
+            legacy_ref=service.artifacts.put(json.dumps(legacy).encode())
+            service.graph.db.execute("UPDATE graph_stages SET version=? WHERE run='r' AND stage='linkedin_review'",(legacy_ref,))
+            freeze_version=service.graph.get('r','freeze')['version']
+            with self.assertRaises(GraphError): service.graph.invalidate_legacy_channel_reviews('r',claim,'wrong',{'linkedin_review':legacy_ref},freeze_version,ref)
+            with self.assertRaises(GraphError): service.graph.invalidate_legacy_channel_reviews('r',claim,queue['token'],{'linkedin_review':legacy_ref},'stale',ref)
+            service.graph.db.execute("INSERT INTO graph_attempts VALUES('r','reddit_draft','uncertain-probe',1,'uncertain')")
+            with self.assertRaises(GraphError): dispatcher.step('r',queue['token'],claim)
+            self.assertEqual(service.graph.get('r','assembly')['version'],old_assembly)
+            service.graph.db.execute("DELETE FROM graph_attempts WHERE version='uncertain-probe'")
+            migrated=dispatcher.step('r',queue['token'],claim)
+            self.assertEqual((migrated['stage'],migrated['status']),('linkedin_review','passed'))
+            self.assertIsNone(service.graph.get('r','assembly'))
+            self.assertTrue(dispatcher._verify_recorded_review('r','linkedin_review'))
+            self.assertEqual(service.graph.db.execute('SELECT version FROM human_review_decisions WHERE run=?',('r',)).fetchone()[0],old_assembly)
             asset_call=service.docker_executor.asset_call
             asset_payload=json.loads(asset_call['prompt'].split('\n')[1])
             self.assertEqual(json.loads(asset_payload['artifacts']['admitted_task']),task)
