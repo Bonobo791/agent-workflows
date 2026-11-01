@@ -405,6 +405,8 @@ class AuditExportTests(unittest.TestCase):
         self.assertNotIn('secret',str(event))
         invalidation=project_event('invalidation_audit',{'id':1,'schema_version':1,'run':'private-run','stage':'brief','status':'invalidated','reason':'gate_changed','created':1},b'x'*32)
         self.assertEqual(invalidation['reason'],'gate_changed')
+        invalidation=project_event('invalidation_audit',{'id':2,'schema_version':1,'run':'private-run','stage':'linkedin_review','status':'invalidated','reason':'review_context_changed','created':1},b'x'*32)
+        self.assertEqual(invalidation['reason'],'review_context_changed')
         self.assertIsNone(project_event('invalidation_audit',{'id':1,'schema_version':1,'run':'private-run','stage':'brief','status':'invalidated','reason':'private reason','created':1},b'x'*32)['reason'])
 
     def test_launch_projection_correlates_requested_and_uncertain(self):

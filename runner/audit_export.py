@@ -12,7 +12,7 @@ ROLES = STAGES | frozenset(('source_review','asset_review','platform_review'))
 TOOL_KINDS = frozenset(('mcpToolCall','webSearch','commandExecution'))
 STATUSES = frozenset(('passed', 'blocked', 'failed', 'skipped', 'untested', 'unsuitable', 'awaiting_review', 'awaiting_approval', 'rate_limited', 'invalidated', 'resumed', 'reused', 'uncertain', 'completed', 'observed', 'bound', 'open', 'resolved', 'not_executed', 'queued', 'starting', 'running', 'active', 'stopping', 'terminated', 'reconciled', 'reconciled_stop', 'cancelling', 'cancelled', 'claimed', 'released', 'pending', 'stopped', 'requested', 'requesting', 'restart_pending', 'restart_requested', 'restart_requesting', 'restart_uncertain', 'restarted', 'checkpointed', 'replacement_registered', 'revoked', 'approved', 'rejected', 'admitted', 'executed', 'desired_state_observed'))
 CONFIRMATIONS = frozenset(('operator-attested', 'independently-verified'))
-INVALIDATION_REASONS = frozenset(('unspecified','cache_miss','gate_changed','artifact_unavailable','skills_unavailable','upstream_unavailable','task_changed','upstream_invalidated','upstream_changed','graph_migration'))
+INVALIDATION_REASONS = frozenset(('unspecified','cache_miss','gate_changed','artifact_unavailable','skills_unavailable','upstream_unavailable','task_changed','upstream_invalidated','upstream_changed','graph_migration','review_context_changed'))
 TABLES = {
     'graph_audit': ('stage', 'status'),
     'attempt_audit': ('stage', 'status'),
