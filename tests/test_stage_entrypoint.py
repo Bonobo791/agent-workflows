@@ -18,9 +18,11 @@ class StageEntrypointTests(unittest.TestCase):
         self._run_marketing(with_asset=False)
     def test_marketing_all_channels_with_synthetic_verified_asset(self):
         self._run_marketing(with_asset=True)
+    def test_marketing_snapshot_policy_change_blocks_review_until_restored(self):
+        self._run_marketing(with_asset=False,with_snapshots=True)
     def test_review_package_includes_verified_blocked_media_findings(self):
         self._run_marketing(with_asset=True,asset_blocked=True)
-    def _run_marketing(self,with_asset,asset_blocked=False):
+    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False):
         class External(http.server.BaseHTTPRequestHandler):
             version='v1'; owner=None; available=True
             def log_message(self,*args): pass
@@ -77,7 +79,7 @@ class StageEntrypointTests(unittest.TestCase):
                             tid=msg['params']['threadId']; payload=json.JSONDecoder().raw_decode(msg['params']['input'][0]['text'].split('\n',1)[1])[0]; stage=payload['stage']; refs=payload['input_versions']
                             if stage=='source_review':
                                 Engine.source_reviews+=1
-                                data=json.dumps({'register_ref':refs[0],'verifier_id':'synthetic-independent-verifier','checks':[{'claim_id':'claim-1','source_id':'source-1','evidence_id':'evidence-1','supported':True,'primary':True}],'draft_ref':refs[1] if len(refs)>1 else None,'omitted_claims':['unregistered material claim'] if Engine.source_reviews==2 else [],'coverage_complete':Engine.source_reviews!=2}).encode()
+                                data=json.dumps({'register_ref':refs[0],'verifier_id':'synthetic-independent-verifier','checks':[{'claim_id':'claim-1','source_id':'source-1','evidence_id':'evidence-1','supported':True,'primary':True}],'draft_ref':refs[1] if payload.get('draft') is not None else None,'omitted_claims':['unregistered material claim'] if Engine.source_reviews==2 else [],'coverage_complete':Engine.source_reviews!=2}).encode()
                                 Path(item['mounts']['/output'],'verification.json').write_bytes(data)
                             elif stage=='asset_brief':
                                 assert 'Select an exact channel, not a generic label' in msg['params']['input'][0]['text']
@@ -95,7 +97,8 @@ class StageEntrypointTests(unittest.TestCase):
                             if stage=='canonical_review':
                                 assert 'Independently review editorial quality' in msg['params']['input'][0]['text']
                                 assert 'synthetic brief' in payload['artifacts']['brief_and_sources']
-                                assert len(refs)==5 and 'source_register' in payload['artifacts'] and 'source_verification' in payload['artifacts'] and 'page_rules' in payload['artifacts']
+                                assert len(refs)==(6 if with_snapshots else 5) and 'source_register' in payload['artifacts'] and 'source_verification' in payload['artifacts'] and 'page_rules' in payload['artifacts']
+                                assert ('source_snapshots' in payload['artifacts'])==with_snapshots
                                 Engine.canonical_reviews+=1
                             result={'stage':stage,'status':status,'input_versions':refs,'outputs':outputs,'findings':findings}
                             if status=='blocked': result['reason']='correction required'
@@ -130,6 +133,10 @@ class StageEntrypointTests(unittest.TestCase):
                 try:
                     service.page_rules={'guide':{'headings':[{'level':1,'text':'Fixture'}]}}
                     service.source_tool_authority=lambda events,register,draft: all(item.get('type')=='mcpToolCall' and item.get('server')=='source-evidence' and item.get('tool')=='fetch_primary' and item.get('status')=='completed' and item.get('arguments',{}).get('url')=='https://example.invalid/evidence' and item.get('result',{}).get('content',[{}])[0].get('text')=='fixture primary source' for item in events['items']); service.docker_supervisor.credential_delivery=Delivery(); service.docker_supervisor.provider_ready=lambda:True
+                    if with_snapshots:
+                        from runner.source_snapshots import SourceSnapshots
+                        from tests.test_source_snapshots import Fetcher
+                        service.source_snapshots=SourceSnapshots(service,Fetcher())
                     class RedditAuthority:
                         def check(self,run,draft_ref):
                             import time
@@ -219,6 +226,15 @@ class StageEntrypointTests(unittest.TestCase):
                     self.assertIn('claim-1',package['stages']['brief']['contents'][1])
                     self.assertIn('synthetic linkedin_draft',package['stages']['linkedin_draft']['contents'][0])
                     self.assertTrue(service.verify_terminal('run-1'))
+                    if with_snapshots:
+                        from runner.control import ControlError
+                        service.source_snapshots.fetcher.max_bytes=512
+                        self.assertFalse(service.verify_terminal('run-1'))
+                        decision={'action':'human_review_decision','run':'run-1','queue_claim':q['token'],'graph_claim':g,'version':service.graph.get('run-1','assembly')['version'],'decision':'approved'}
+                        with self.assertRaises(ControlError): control.handle('x'*40,decision)
+                        self.assertEqual(service.graph.db.execute("SELECT count(*) FROM human_review_decisions WHERE run='run-1'").fetchone()[0],0)
+                        service.source_snapshots.fetcher.max_bytes=1024
+                        self.assertTrue(service.verify_terminal('run-1'))
                     version=service.graph.get('run-1','assembly')['version']
                     from runner.control import ControlError
                     decision={'action':'human_review_decision','run':'run-1','queue_claim':q['token'],'graph_claim':g,'version':'0'*64,'decision':'approved'}
