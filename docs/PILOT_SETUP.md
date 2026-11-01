@@ -310,6 +310,9 @@ associated execution, role, session and observed turn IDs, plus whether a
 completed audit exists. A null execution or turn can also mean the process
 stopped before recording it; it does not prove that no request was sent.
 These identifiers are recovery evidence and do not authorize session reuse.
+The controller SIGKILL regression exercises persistence and the resume fence
+with a synthetic app server and scope backend; it is not a live-provider or
+systemd crash-recovery acceptance test.
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
 engineering workspace claim. Operator stop confirmation still requires the exact
 incarnation and termination attestation.
