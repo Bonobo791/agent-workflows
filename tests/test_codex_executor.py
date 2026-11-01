@@ -1,4 +1,5 @@
 import os
+from contextlib import closing
 from pathlib import Path
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from runner.artifacts import ArtifactStore
 from runner.codex_executor import CodexExecutor
 from runner.graph import GraphStore, marketing_definition
 from runner.provenance import Provenance
+from runner.stdio import StdioError
 
 SCRIPT=str(Path(__file__).parent/'fixtures'/'fake_app_server.py')
 class Handle:
@@ -27,6 +29,186 @@ class Supervisor:
     def can_resume(self,run,role,session): return True  # synthetic app-server fixture
     def start(self,run,role): return Handle(self.root,self.mode,self.thread,self.turn,role)
 class ExecutorTests(unittest.TestCase):
+    def test_failed_scope_link_does_not_leave_active_writer_session(self):
+        import sqlite3
+        from unittest.mock import patch
+        from runner.codex_executor import ExecutorError
+        from runner.local_supervisor import LocalSupervisor, LocalSupervisorError
+        from runner.local_scope import LocalScopes
+        from runner.process_transport import ProcessTransport
+        from tests.test_local_scope import Backend
+        class ScopedHandle(Handle):
+            def __init__(self,root,unit):
+                super().__init__(root,'ok','thread','turn','canonical_draft')
+                self.unit=unit;self.output_path_prefix=root
+            def assert_active(self):return True
+            def verify_config(self,request):return True
+            def open_transport(self,deadline,cancelled):return ProcessTransport(self.process,deadline,cancelled)
+        for failure,error in (('scope',ExecutorError),('insert',sqlite3.IntegrityError),('audit_missing',ExecutorError),('audit_ignored',ExecutorError),('audit_aborted',sqlite3.IntegrityError),('session_ignored',LocalSupervisorError)):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as root:
+                output=Path(root)/'out';output.mkdir(mode=0o700);art=Path(root)/'art';art.mkdir(mode=0o700)
+                binary=Path(root)/'codex';binary.write_text('x');binary.chmod(0o700)
+                graph=GraphStore(root+'/db');graph.register(marketing_definition());graph.create('r','marketing');claim=graph.claim('r',60)
+                backend=Backend();supervisor=LocalSupervisor(root+'/db',str(binary),{'HOME':root},backend,lambda _:True,lambda *_:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+                scopes=LocalScopes(root+'/db',backend);unit=scopes.reserve('r');backend.unit=unit;scopes.bind('r',unit);scopes.close()
+                handle=ScopedHandle(str(output),unit);fenced=[];executor=CodexExecutor(supervisor,Provenance(graph),ArtifactStore(str(art)),fenced.append)
+                if failure=='scope':graph.db.execute("UPDATE local_scopes SET state='stopping'")
+                elif failure=='insert':graph.db.execute("CREATE TRIGGER reject_scope_link BEFORE INSERT ON local_execution_scopes BEGIN SELECT RAISE(ABORT,'unavailable');END")
+                elif failure=='audit_missing':graph.db.execute('DROP TRIGGER local_execution_scope_audit_insert')
+                elif failure=='audit_ignored':graph.db.execute("CREATE TRIGGER ignore_scope_link BEFORE INSERT ON local_execution_scope_audit BEGIN SELECT RAISE(IGNORE);END")
+                elif failure=='session_ignored':graph.db.execute("CREATE TRIGGER ignore_session BEFORE INSERT ON local_sessions BEGIN SELECT RAISE(IGNORE);END")
+                else:graph.db.execute("CREATE TRIGGER reject_scope_audit BEFORE INSERT ON local_execution_scope_audit BEGIN SELECT RAISE(ABORT,'unavailable');END")
+                try:
+                    with patch.object(supervisor,'preflight',return_value=True),patch('runner.local_supervisor.start_local_process',return_value=handle):
+                        with self.assertRaises(error):executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
+                    self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM local_sessions').fetchone(),(0,))
+                    self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM local_execution_scopes').fetchone(),(int(failure=='session_ignored'),))
+                    self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_link_audit').fetchone(),(0,))
+                    self.assertFalse(supervisor.can_resume('r','canonical_draft','thread',{},'m'))
+                    self.assertFalse((output/'draft.txt').exists());self.assertEqual(fenced,['r'])
+                finally:graph.close()
+
+    def test_controller_sigkill_preserves_local_turn_and_fences_resume(self):
+        from contextlib import closing
+        import signal
+        import sqlite3
+        import time
+        code = '''
+import sys
+from pathlib import Path
+from unittest.mock import patch
+from runner.artifacts import ArtifactStore
+from runner.codex_executor import CodexExecutor
+from runner.graph import GraphStore, marketing_definition
+from runner.local_scope import LocalScopes
+from runner.local_supervisor import LocalSupervisor
+from runner.process_transport import ProcessTransport
+from runner.provenance import Provenance
+from tests.test_codex_executor import Handle
+from tests.test_local_scope import Backend
+root=Path(sys.argv[1]); output=root/'out'; art=root/'art'; binary=root/'codex'
+graph=GraphStore(str(root/'db')); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+backend=Backend(); supervisor=LocalSupervisor(str(root/'db'),str(binary),{'HOME':str(root)},backend,lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+scopes=LocalScopes(str(root/'db'),backend); unit=scopes.reserve('r'); backend.unit=unit; scopes.bind('r',unit); scopes.close()
+class ScopedHandle(Handle):
+    def __init__(self):
+        super().__init__(str(output),'turn_hang','local-thread','local-turn','canonical_draft')
+        self.unit=unit; self.output_path_prefix=str(output)
+    def assert_active(self): return True
+    def verify_config(self,request): return True
+    def open_transport(self,deadline,cancelled): return ProcessTransport(self.process,deadline,cancelled)
+handle=ScopedHandle(); executor=CodexExecutor(supervisor,Provenance(graph),ArtifactStore(str(art)),lambda run:None)
+with patch.object(supervisor,'preflight',return_value=True), patch('runner.local_supervisor.start_local_process',return_value=handle):
+    executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='instructions\\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
+'''
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(mode=0o700); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            binary=Path(root)/'codex'; binary.write_text('x'); binary.chmod(0o700)
+            process=subprocess.Popen([sys.executable,'-c',code,root],start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+            try:
+                deadline=time.monotonic()+10
+                while True:
+                    if process.poll() is not None: self.fail('controller exited before turn: '+process.stderr.read().decode())
+                    try:
+                        with closing(sqlite3.connect(root+'/db')) as db:
+                            observed=db.execute("SELECT count(*) FROM execution_link_audit WHERE status='observed'").fetchone()[0]
+                    except sqlite3.OperationalError: observed=0
+                    if observed: break
+                    if time.monotonic()>=deadline: self.fail('turn evidence was not recorded')
+                    time.sleep(.02)
+                process.kill(); process.wait(timeout=5)
+                with closing(sqlite3.connect(root+'/db')) as db:
+                    row=db.execute('SELECT s.session,s.unit,l.turn,l.status FROM local_execution_scopes s JOIN execution_link_audit l ON l.execution=s.execution').fetchone()
+                    self.assertEqual((row[0],row[2],row[3]),('local-thread','local-turn','observed'))
+                    self.assertEqual(db.execute('SELECT state FROM local_sessions').fetchone(),('active',))
+                    self.assertEqual(db.execute('SELECT state FROM local_scopes WHERE unit=?',(row[1],)).fetchone(),('running',))
+                    self.assertEqual(db.execute('SELECT count(*) FROM execution_completions').fetchone()[0],0)
+                from runner.local_supervisor import LocalSupervisor
+                from tests.test_local_scope import Backend
+                supervisor=LocalSupervisor(root+'/db',str(binary),{'HOME':root},Backend(),lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+                self.assertFalse(supervisor.can_resume('r','canonical_draft','local-thread',{},'m'))
+            finally:
+                try: os.killpg(process.pid,signal.SIGKILL)
+                except ProcessLookupError: pass
+                if process.poll() is None: process.wait(timeout=5)
+                process.stderr.close()
+
+    def test_interrupted_local_turn_keeps_scope_link_and_fences_session(self):
+        from unittest.mock import patch
+        from runner.local_supervisor import LocalSupervisor
+        from runner.local_scope import LocalScopes
+        from runner.process_transport import ProcessTransport
+        from tests.test_local_scope import Backend
+        class ScopedHandle(Handle):
+            def __init__(self,root,unit):
+                super().__init__(root,'turn_exit','local-thread','local-turn','canonical_draft')
+                self.unit=unit; self.output_path_prefix=root
+            def assert_active(self): return True
+            def verify_config(self,request): return True
+            def open_transport(self,deadline,cancelled): return ProcessTransport(self.process,deadline,cancelled)
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(mode=0o700); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            binary=Path(root)/'codex'; binary.write_text('x'); binary.chmod(0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            backend=Backend(); supervisor=LocalSupervisor(root+'/db',str(binary),{'HOME':root},backend,lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+            scopes=LocalScopes(root+'/db',backend); unit=scopes.reserve('r'); backend.unit=unit; scopes.bind('r',unit); scopes.close()
+            handle=ScopedHandle(str(output),unit); fenced=[]; executor=CodexExecutor(supervisor,Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with patch.object(supervisor,'preflight',return_value=True), patch('runner.local_supervisor.start_local_process',return_value=handle):
+                    with self.assertRaises(StdioError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
+                row=graph.db.execute('SELECT e.session,e.unit,l.turn,l.status FROM local_execution_scopes e JOIN execution_link_audit l ON l.execution=e.execution').fetchone()
+                self.assertEqual(row,('local-thread',unit,'local-turn','observed'))
+                self.assertEqual(graph.db.execute('SELECT state FROM local_sessions').fetchone(),('active',))
+                self.assertFalse(supervisor.can_resume('r','canonical_draft','local-thread',{},'m'))
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
+
+    def test_session_binding_failure_prevents_turn_and_fences(self):
+        class UnboundHandle(Handle):
+            def bind_session(self,session): raise RuntimeError('binding failed')
+        class UnboundSupervisor(Supervisor):
+            def start(self,run,role): return UnboundHandle(self.root,self.mode,self.thread,self.turn,role)
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            fenced=[]; executor=CodexExecutor(UnboundSupervisor(str(output)),Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with self.assertRaises(RuntimeError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[])
+                self.assertFalse((output/'draft.txt').exists())
+                self.assertEqual(graph.db.execute('SELECT count(*) FROM execution_link_audit').fetchone()[0],0)
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
+
+    def test_missing_turn_observation_fences_without_completion(self):
+        from runner.codex_executor import ExecutorError
+        for trigger in ("BEFORE INSERT ON execution_link_audit WHEN NEW.status='observed' BEGIN SELECT RAISE(IGNORE);END", "AFTER INSERT ON execution_link_audit WHEN NEW.status='observed' BEGIN DELETE FROM execution_link_audit WHERE id=NEW.id;END"):
+            with self.subTest(trigger=trigger),tempfile.TemporaryDirectory() as root:
+                output=Path(root)/'out';output.mkdir();art=Path(root)/'art';art.mkdir(mode=0o700)
+                graph=GraphStore(root+'/db');graph.register(marketing_definition());graph.create('r','marketing');claim=graph.claim('r',60)
+                graph.db.execute('CREATE TRIGGER lose_observation '+trigger)
+                fenced=[];executor=CodexExecutor(Supervisor(str(output)),Provenance(graph),ArtifactStore(str(art)),fenced.append)
+                try:
+                    with self.assertRaises(ExecutorError):executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[])
+                    self.assertFalse(executor.provenance.completed('r','canonical_draft','thread-one'))
+                    self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_link_audit').fetchone(),(0,))
+                    self.assertEqual(fenced,['r'])
+                finally:graph.close()
+
+    def test_turn_identity_survives_exit_without_tool_events(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            fenced=[]; executor=CodexExecutor(Supervisor(str(output),mode='turn_exit'),Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with self.assertRaises(StdioError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='private prompt',model='m',input_versions=[],output_paths=[])
+                self.assertEqual(graph.db.execute('SELECT session,turn,status FROM execution_link_audit').fetchall(),[('thread-one','turn-one','observed')])
+                self.assertFalse(executor.provenance.completed('r','canonical_draft','thread-one'))
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
+            with closing(sqlite3.connect(root+'/db')) as db:
+                self.assertEqual(db.execute('SELECT session,turn,status FROM execution_link_audit').fetchall(),[('thread-one','turn-one','observed')])
+
     def test_local_turn_requires_and_records_terminated_scope(self):
         from unittest.mock import patch
         from runner.local_supervisor import LocalSupervisor
@@ -64,6 +246,8 @@ class ExecutorTests(unittest.TestCase):
                     result=executor.execute(run='r',role='asset_production',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
                 row=graph.db.execute('SELECT unit,binding FROM local_turn_scopes WHERE run=? AND role=? AND session=? AND turn=?',('r','asset_production',result['session_id'],result['turn_id'])).fetchone()
                 self.assertEqual(row,(unit,supervisor._binding('r','asset_production',{},'m')[1]))
+                linked=graph.db.execute('SELECT unit,binding FROM local_execution_scopes WHERE run=? AND role=? AND session=?',('r','asset_production',result['session_id'])).fetchone()
+                self.assertEqual(linked,row)
                 self.assertEqual(graph.db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('terminated',))
                 scopes=LocalScopes(root+'/db',backend);unit2=scopes.reserve('r');backend.unit=unit2;backend.state='active';scopes.bind('r',unit2);scopes.close()
                 broken=ScopedHandle(str(output),root+'/db',backend,unit2,corrupt=True)
@@ -167,7 +351,7 @@ class ExecutorTests(unittest.TestCase):
             result=executor.execute(**args); self.assertEqual(result['output'],'correct'); self.assertEqual(executor.artifacts.get(result['outputs'][0]),b'synthetic output')
             self.assertEqual(graph.db.execute('SELECT status FROM execution_launch_audit ORDER BY id').fetchall(),[('requested',),('completed',)])
             launch=graph.db.execute("SELECT execution FROM execution_launch_audit WHERE status='completed'").fetchone()[0]
-            self.assertEqual(graph.db.execute('SELECT execution,session,turn,status FROM execution_link_audit').fetchone(),(launch,result['session_id'],result['turn_id'],'completed'))
+            self.assertEqual(graph.db.execute('SELECT execution,session,turn,status FROM execution_link_audit ORDER BY id').fetchall(),[(launch,result['session_id'],result['turn_id'],status) for status in ('observed','completed')])
             audit=graph.db.execute('SELECT model,input_versions,output_refs,response_ref,tool_evidence_ref FROM execution_turn_audit WHERE run=? AND session=? AND turn=?',('r',result['session_id'],result['turn_id'])).fetchone()
             self.assertEqual(audit,('synthetic',json.dumps(['input']),json.dumps(result['outputs']),result['response_ref'],result['tool_evidence_ref']))
             graph.bind_session('r','canonical_draft',result['session_id'],claim)
@@ -186,7 +370,7 @@ class ExecutorTests(unittest.TestCase):
             graph.db.execute("CREATE TRIGGER reject_turn_audit BEFORE INSERT ON execution_turn_audit BEGIN SELECT RAISE(ABORT,'failure'); END")
             with self.assertRaises(sqlite3.IntegrityError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=['draft.txt'])
             self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM completed_turn_outputs').fetchone()[0],0)
-            self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_link_audit').fetchone()[0],0)
+            self.assertEqual(graph.db.execute('SELECT status FROM execution_link_audit').fetchall(),[('observed',)])
             self.assertFalse(provenance.completed('r','canonical_draft','thread-one')); graph.close()
     def test_link_audit_failure_rolls_back_completion(self):
         import sqlite3

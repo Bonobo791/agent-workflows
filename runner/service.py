@@ -142,7 +142,18 @@ class Service:
         if not isinstance(self.lifecycle,ManualLifecycle) or self.model_supervisor is None: raise ServiceError('local manual supervisor unavailable')
         if self.lifecycle.status(run)['incarnation']!=self.lifecycle.incarnation: raise ServiceError('scope incarnation unavailable')
         scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
-        try: return scopes.inspect(run,unit)
+        try:
+            result=scopes.inspect(run,unit); result['execution']=None
+            db=self.graph.db
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_execution_scopes'").fetchone():
+                row=db.execute('SELECT execution,role,session FROM local_execution_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
+                if row:
+                    turns=db.execute("SELECT DISTINCT turn FROM execution_link_audit WHERE run=? AND role=? AND execution=? AND session=? AND status='observed' LIMIT 2",(run,row[1],row[0],row[2])).fetchall()
+                    if len(turns)>1: raise ServiceError('scope turn identity ambiguous')
+                    turn=turns[0][0] if turns else None
+                    completed=bool(turn and db.execute("SELECT 1 FROM execution_link_audit WHERE run=? AND role=? AND execution=? AND session=? AND turn=? AND status='completed'",(run,row[1],row[0],row[2],turn)).fetchone())
+                    result['execution']={'execution':row[0],'role':row[1],'session':row[2],'turn':turn,'completed':completed}
+            return result
         finally: scopes.close()
     def _require_fenced_local(self,run):
         from runner.manual_lifecycle import ManualLifecycle

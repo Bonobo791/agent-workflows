@@ -96,6 +96,33 @@ class CodexExecutor:
             def before_turn():
                 if cancelled(): raise ExecutorError('execution cancelled')
                 if callable(getattr(handle,'assert_active',None)): handle.assert_active()
+            def on_thread(session):
+                from runner.local_supervisor import LocalSessionHandle
+                if isinstance(handle,LocalSessionHandle):
+                    from pathlib import Path
+                    from runner.local_scope import valid_scope_identity
+                    if Path(db.execute('PRAGMA database_list').fetchone()[2]).resolve()!=Path(handle.supervisor.db).resolve(): raise ExecutorError('local scope database mismatch')
+                    unit=handle.handle.unit
+                    db.execute('BEGIN IMMEDIATE')
+                    try:
+                        self.provenance.graph._lease(run,claim)
+                        identity=db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='running'",(run,unit)).fetchone()
+                        if cancelled() or (handle.run,handle.role)!=(run,role) or not identity or not valid_scope_identity(unit,*identity) or not self.provenance.verify(run,role,session,skills): raise ExecutorError('local execution scope unavailable')
+                        last=db.execute('SELECT COALESCE(MAX(id),0) FROM local_execution_scope_audit').fetchone()[0]
+                        db.execute('INSERT INTO local_execution_scopes VALUES(?,?,?,?,?,?)',(run,role,execution,session,unit,handle.binding))
+                        if not db.execute("SELECT 1 FROM local_execution_scope_audit WHERE id>? AND schema_version=1 AND run=? AND role=? AND execution=? AND session=? AND unit=? AND status='bound'",(last,run,role,execution,session,unit)).fetchone():raise ExecutorError('local execution scope audit unavailable')
+                        db.execute('COMMIT')
+                    except Exception: db.execute('ROLLBACK'); raise
+                if callable(getattr(handle,'bind_session',None)): handle.bind_session(session)
+            def on_turn(session,turn):
+                db.execute('BEGIN IMMEDIATE')
+                try:
+                    self.provenance.graph._lease(run,claim)
+                    if cancelled() or not self.provenance.verify(run,role,session,skills): raise ExecutorError('turn binding unavailable')
+                    recorded=db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,?,?,?,?,?,'observed',?)",(run,role,execution,session,turn,time.time()))
+                    if recorded.rowcount!=1 or not db.execute("SELECT 1 FROM execution_link_audit WHERE id=? AND schema_version=1 AND run=? AND role=? AND execution=? AND session=? AND turn=? AND status='observed'",(recorded.lastrowid,run,role,execution,session,turn)).fetchone():raise ExecutorError('turn observation unavailable')
+                    db.execute('COMMIT')
+                except Exception: db.execute('ROLLBACK'); raise
             def on_tool(session,turn,item):
                 evidence=self.artifacts.put(json.dumps({'run':run,'role':role,'session':session,'turn':turn,'items':[item]},sort_keys=True,separators=(',',':')).encode())
                 state=item.get('status'); state='observed' if item['type']=='commandExecution' else state if state in ('completed','failed') else 'unavailable'
@@ -110,9 +137,8 @@ class CodexExecutor:
             local_output=getattr(handle,'output_path_prefix',None)
             if local_output is not None:
                 prompt=_local_prompt(prompt,local_output,output_paths,instruction_length)
-            result=run_codex(transport,self.provenance,run,role,claim,skills,prompt,model,session_id=session_id,review_subject=review_subject,record_completion=False,before_turn=before_turn,on_tool=on_tool,before_thread=getattr(handle,'verify_config',None),images=image_paths or None)
+            result=run_codex(transport,self.provenance,run,role,claim,skills,prompt,model,session_id=session_id,review_subject=review_subject,record_completion=False,before_turn=before_turn,on_tool=on_tool,before_thread=getattr(handle,'verify_config',None),images=image_paths or None,on_thread=on_thread,on_turn=on_turn)
             if cancelled(): raise ExecutorError('execution cancelled')
-            if callable(getattr(handle,'bind_session',None)): handle.bind_session(result['session_id'])
             # The supervisor, not exit of a single process, must confirm the output tree is quiescent.
             if _bounded(handle.finish,deadline,cancelled) is not True: raise ExecutorError('worker termination uncertain')
             finished=True

@@ -5,7 +5,7 @@ import hashlib
 
 MAX_OUTPUT=1048576
 
-def run_codex(transport,provenance,run,role,claim,skills,prompt,model,session_id=None,review_subject=None,record_completion=True,before_turn=None,effort='medium',on_tool=None,before_thread=None,images=None):
+def run_codex(transport,provenance,run,role,claim,skills,prompt,model,session_id=None,review_subject=None,record_completion=True,before_turn=None,effort='medium',on_tool=None,before_thread=None,images=None,on_thread=None,on_turn=None):
     workflow=provenance.graph._definition(run).name
     resumable=(workflow=='engineering' and role=='implement') or (workflow=='marketing' and role in {'canonical_draft', *(c+'_draft' for c in CHANNELS)})
     if session_id:
@@ -19,6 +19,7 @@ def run_codex(transport,provenance,run,role,claim,skills,prompt,model,session_id
         provenance.bind(run,role,actual,skills,claim,fresh=(session_id is None),subject=review_subject)
         if role == 'implement': provenance.graph.bind_session(run,role,actual,claim)
         thread[0]=actual
+        if on_thread is not None: on_thread(actual)
     def event(message):
         method=message.get('method'); params=message.get('params',{})
         if method not in ('item/agentMessage/delta','item/completed') or not isinstance(params,dict) or params.get('threadId')!=thread[0]: return
@@ -47,6 +48,8 @@ def run_codex(transport,provenance,run,role,claim,skills,prompt,model,session_id
         if size[0]>MAX_OUTPUT: raise ProtocolError('model output too large')
         chunks.append(text)
     def bind_turn(actual):
+        if not isinstance(actual,str) or not actual:raise ProtocolError('invalid turn ID')
+        if on_turn is not None: on_turn(thread[0],actual)
         turn[0]=actual
         for message in early: event(message)
         early.clear()
