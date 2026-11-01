@@ -39,6 +39,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
         }.items():
             directory=skills/name; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text(content)
         render=os.environ.get('WORKFLOW_TEST_RENDER')=='1'
+        if os.environ.get('WORKFLOW_TEST_DECISION')=='1': self.assertEqual(os.environ.get('WORKFLOW_TEST_CHANNELS'),'1','decision probe requires the channel workflow')
         if render:
             self.assertEqual(os.environ.get('WORKFLOW_TEST_CHANNELS'),'1','render probe requires the channel workflow')
             manual=Path(os.environ['OPENFILM_TEST_MANUAL']).read_text()
@@ -144,6 +145,19 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 if not render:
                     self.assertEqual(package['stages']['asset_production']['status'],'blocked')
                     self.assertEqual(package['stages']['instagram_review']['status'],'blocked')
+                if os.environ.get('WORKFLOW_TEST_DECISION')=='1':
+                    from types import SimpleNamespace
+                    from runner.human_review import HumanReview, HumanReviewError
+                    service.task_intake=SimpleNamespace(revalidate=lambda run:run=='r')
+                    review=HumanReview(service); version=service.graph.get('r','assembly')['version']
+                    self.assertTrue(service.verify_terminal('r'))
+                    with self.assertRaises(HumanReviewError): review.decide('r',queue['token'],claim,'0'*64,'approved')
+                    service.source_snapshots.fetcher.max_bytes-=1
+                    with self.assertRaises(HumanReviewError): review.decide('r',queue['token'],claim,version,'approved')
+                    self.assertEqual(service.graph.db.execute('SELECT count(*) FROM human_review_decisions').fetchone()[0],0)
+                    service.source_snapshots.fetcher.max_bytes+=1
+                    self.assertEqual(review.decide('r',queue['token'],claim,version,'approved')['version'],version)
+                    self.assertEqual(review.current('r')['decision'],'approved')
             self.assertFalse(unresolved_scope_rows(service.graph.db,'r')); self.assertFalse(unresolved_scope_rows(service.graph.db,'discovery'))
             completed=True
         finally:

@@ -128,6 +128,9 @@ must not contain private skills, credentials, user data or session histories.
   `OPENFILM_PODMAN_IMAGE` and `OPENFILM_PODMAN_SOCKET` runs an offline still
   render and independent image review in that fixture. Its platform authority
   is synthetic; the probe does not establish actual platform compliance.
+  `WORKFLOW_TEST_DECISION=1` additionally exercises a fixture-only decision on
+  the exact assembled version, with synthetic task freshness. It is not a
+  human decision on a real package.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
