@@ -205,7 +205,13 @@ The home must remain an owner-only directory owned by the worker, and any direct
 an incomplete scan is not evidence that the home is safe.
 Recovery is bound to the exact backup generation; legacy interrupted backups
 without a generation remain fenced for inspection. The trusted exporter receives
-`(home_path, generation)`, and the quiescence verifier receives
+`(pinned_home_path, generation)`, where the path is a descriptor-backed alias
+valid only while the synchronous exporter runs. Verification and export use
+the same opened directory even if its original name is replaced; replacement
+leaves the backup fenced. The exporter must finish all readers before returning.
+This pins the directory, not an immutable snapshot of its entries: trusted
+termination and credential verifiers must exclude concurrent writers.
+The quiescence verifier receives
 `(job, home_path, generation)`; it must verify that exact operation. Older
 callback signatures cannot recover a backup.
 No production verifier or control endpoint for that recovery is configured.

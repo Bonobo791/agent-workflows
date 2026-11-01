@@ -13,12 +13,14 @@ class SessionStoreTests(unittest.TestCase):
                 store.bind('job-1','thread-1'); store.release('job-1',lambda _:True)
                 observed=[]
                 def interrupted(path,generation):
-                    observed.append((path,generation))
+                    self.assertTrue(Path(path).samefile(entry['home']))
+                    observed.append((entry['home'],generation))
                     raise OSError('interrupted')
                 with self.assertRaises(SessionError): store.backup('job-1',interrupted,lambda _:True)
                 self.assertEqual(len(observed),1)
                 path,generation=observed[0]
                 self.assertEqual(path,entry['home']); self.assertRegex(generation,r'^[0-9a-f]{48}$')
+                with self.assertRaises(SessionError):store.recover_backup('job-1',lambda job,path:True,lambda _:True)
                 calls=[]
                 self.assertTrue(store.recover_backup('job-1',lambda job,p,g:calls.append((job,p,g)) or g==generation,lambda _:True))
                 self.assertEqual(calls,[('job-1',path,generation)])
@@ -27,6 +29,34 @@ class SessionStoreTests(unittest.TestCase):
                 with self.assertRaises(SessionError): store.recover_backup('job-1',lambda job,p,g:g==generation,lambda _:True)
                 self.assertFalse(store.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
             finally: store.close()
+    def test_backup_pins_verified_home_when_its_name_is_replaced(self):
+        import os
+        from unittest.mock import patch
+        for stage in ('open','verify','export'):
+            with self.subTest(stage=stage),tempfile.TemporaryDirectory() as root:
+                store=SessionStore(root);entry=store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
+                home=Path(entry['home']);(home/'state').write_text('verified')
+                observed=[];real_open=os.open
+                def replace():
+                    home.rename(home.with_name('saved-home'));home.mkdir(mode=0o700)
+                    (home/'state').write_text('unchecked')
+                def open_home(path,*args,**kwargs):
+                    if stage=='open' and Path(path)==home:replace()
+                    return real_open(path,*args,**kwargs)
+                def verify(path):
+                    if stage=='verify':replace()
+                    return (Path(path)/'state').read_text()=='verified'
+                def export(path,generation):
+                    if stage=='export':replace()
+                    observed.append((Path(path)/'state').read_text())
+                try:
+                    store.bind('job-1','thread-1');store.release('job-1',lambda _:True)
+                    with patch('runner.session_store.os.open',side_effect=open_home):
+                        with self.assertRaisesRegex(SessionError,'backup home changed'):store.backup('job-1',export,verify)
+                    self.assertEqual(observed,[] if stage=='open' else ['verified'])
+                    self.assertEqual(store.db.execute('SELECT state FROM homes').fetchone(),('backup',))
+                finally:store.close()
+
     def test_home_that_is_no_longer_private_cannot_resume_or_back_up(self):
         with tempfile.TemporaryDirectory() as root:
             store=SessionStore(root); entry=store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
@@ -143,7 +173,7 @@ class SessionStoreTests(unittest.TestCase):
                     second.recover_backup('job-1',lambda *_:True,lambda _:True)
                     with self.assertRaises(SessionError): second.backup('job-1',lambda *_:(_ for _ in ()).throw(OSError('interrupted')),lambda _:True)
                     return 'old-result'
-                with self.assertRaises(SessionError): first.backup('job-1',race,lambda _:True)
+                with self.assertRaisesRegex(SessionError,'backup generation changed'): first.backup('job-1',race,lambda _:True)
                 self.assertFalse(second.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
             finally: second.close(); first.close()
     def test_deletion_fences_uncertain_outcome_and_prevents_resume(self):

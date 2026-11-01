@@ -86,17 +86,19 @@ class SessionStore:
             except sqlite3.IntegrityError: raise SessionError('session belongs to another home') from None
             db.execute('COMMIT')
         except Exception: db.execute('ROLLBACK'); raise
-    def _check_home(self,home):
-        path=self.homes/home
+    def _check_home(self,home,fd=None):
+        path=self.homes/home if fd is None else Path(f'/proc/{os.getpid()}/fd/{fd}')
         try:
-            info=path.lstat()
-            if path.resolve(strict=True)!=path or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise SessionError('unsafe state home')
+            info=path.lstat() if fd is None else os.fstat(fd)
+            identity=(info.st_dev,info.st_ino)
+            if (fd is None and path.resolve(strict=True)!=path) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise SessionError('unsafe state home')
             def scan_error(error): raise error
             for directory,dirs,files in os.walk(path,followlinks=False,onerror=scan_error):
                 for name in dirs+files:
                     if _FORBIDDEN.fullmatch(name): raise SessionError('forbidden state entry')
                     info=os.lstat(Path(directory)/name)
                     if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or (stat.S_ISREG(info.st_mode) and info.st_nlink!=1): raise SessionError('unsafe state entry')
+            return identity
         except OSError: raise SessionError('state unavailable') from None
     def release(self,job,verify_stopped):
         if not callable(verify_stopped) or verify_stopped(job) is not True: raise SessionError('writer termination unverified')
@@ -113,26 +115,36 @@ class SessionStore:
         try:
             row=db.execute("SELECT h.id FROM homes h JOIN home_claims c ON c.home=h.id WHERE c.job=? AND c.state='released' AND h.state='idle'",(job,)).fetchone()
             if not row: raise SessionError('idle state unavailable')
-            self._check_home(row[0])
+            identity=self._check_home(row[0])
             db.execute("UPDATE homes SET state=? WHERE id=? AND state='idle'",(state,row[0]))
             generation=secrets.token_hex(24) if state=='backup' else None
             if generation is not None: db.execute('INSERT OR REPLACE INTO backup_generations VALUES(?,?)',(row[0],generation))
-            db.execute('COMMIT'); return (row[0],generation) if generation is not None else row[0]
+            db.execute('COMMIT'); return (row[0],generation,identity) if generation is not None else row[0]
         except Exception: db.execute('ROLLBACK'); raise
     def backup(self,job,exporter,verify_safe=None):
         if not callable(exporter) or not callable(verify_safe): raise SessionError('trusted export and credential verification required')
-        home,generation=self._reserve_idle(job,'backup')
-        path=str(self.homes/home)
-        try: verified=verify_safe(path) is True
-        except Exception: verified=False
-        if not verified:
-            self._finish_backup(home,generation)
-            raise SessionError('credential boundary unverified')
+        home,generation,identity=self._reserve_idle(job,'backup')
+        original=self.homes/home
+        try: fd=os.open(original,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        except OSError: raise SessionError('backup home unavailable') from None
         try:
-            result=exporter(path,generation)
+            info=os.fstat(fd)
+            if (info.st_dev,info.st_ino)!=identity:raise SessionError('backup home changed')
+            self._check_home(home,fd)
+            path=f'/proc/{os.getpid()}/fd/{fd}'
+            try: verified=verify_safe(path) is True
+            except Exception: verified=False
+            if not verified:
+                self._finish_backup(home,generation)
+                raise SessionError('credential boundary unverified')
+            try: result=exporter(path,generation)
+            except Exception: raise SessionError('backup outcome unresolved') from None
+            try: current=original.lstat()
+            except OSError: raise SessionError('backup home changed') from None
+            if (current.st_dev,current.st_ino)!=identity:raise SessionError('backup home changed')
             self._finish_backup(home,generation)
             return result
-        except Exception: raise SessionError('backup outcome unresolved') from None
+        finally: os.close(fd)
     def _finish_backup(self,home,generation):
         changed=self.db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM backup_generations WHERE home=? AND generation=?)",(home,home,generation)).rowcount
         if changed!=1: raise SessionError('backup generation changed')
