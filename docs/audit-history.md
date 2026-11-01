@@ -164,7 +164,24 @@ possible alterations to earlier history, so stop delivery while restoring the
 source and explicitly reconcile cursors before resuming. A restore racing with
 an export is not atomic across the two databases and may cause duplicate or
 missed delivery. No background dispatcher or cursor database is configured, so delivery is not
-called by the worker. `OpenTelemetryAuditExporter` adapts these events to an explicitly
+called by the worker. An operator can explicitly deliver one bounded page:
+
+```sh
+python -m runner.audit_delivery --source /private/state.db --cursor /private/audit-cursors.db \
+  --key-file /private/audit-key --endpoint http://127.0.0.1:5173/api/v1/private/otel/v1/traces \
+  --table graph_audit
+```
+
+The database directories and files must be owned by the current user and private;
+the source must already exist. The key is an owner-only file with at least 32
+characters and must remain stable for replay. An optional `--token-file` supplies
+an owner-only bearer token. Install `requirements-observability.txt` separately.
+The endpoint must be explicit; HTTP is allowed only on loopback. The command
+prints only a delivery status and returns nonzero for unavailable or ambiguous
+outcomes. Schedule it only after the destination's authentication, retention and
+access controls have been verified. The local receiver test does not establish
+compatibility with a deployed Opik server.
+ `OpenTelemetryAuditExporter` adapts these events to an explicitly
 provided OpenTelemetry SDK log exporter and acknowledges only SDK success. Its
 optional dependencies are pinned in `requirements-observability.txt`; no
 endpoint or exporter is enabled automatically. The caller must bound exporter
