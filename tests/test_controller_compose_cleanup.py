@@ -21,3 +21,19 @@ class ControllerComposeCleanupTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0],['compose','down','--volumes','--remove-orphans'])
         self.assertTrue(run.call_args.kwargs['check'])
         temporary.cleanup.assert_called_once()
+
+    def test_failed_fixture_setup_runs_cleanup(self):
+        from tests.test_controller_compose_integration import ControllerComposeTests
+        import tempfile
+        from pathlib import Path
+        created=[];real_temporary=tempfile.TemporaryDirectory
+        def temporary(*args,**kwargs):
+            item=real_temporary(*args,**kwargs);created.append(item);return item
+        try:
+            with patch.dict('os.environ',{'CONTROLLER_TEST_IMAGE':'synthetic','CONTROLLER_TEST_DOCKER_HOST':'unix:///synthetic'}),patch('tests.test_controller_compose_integration.tempfile.TemporaryDirectory',side_effect=temporary),patch('pathlib.Path.write_text',side_effect=OSError('setup failed')),patch('tests.test_controller_compose_integration.subprocess.run') as run:
+                with self.assertRaisesRegex(OSError,'setup failed'):
+                    ControllerComposeTests().test_private_secret_and_state_survive_stop_and_start()
+                run.assert_called_once()
+                self.assertFalse(Path(created[0].name).exists())
+        finally:
+            for item in created:item.cleanup()

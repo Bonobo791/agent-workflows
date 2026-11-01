@@ -42,26 +42,26 @@ def scope_preflight(environment):
     backend=SystemdScopes(manager)
     process=None; scopes=None; unit=None; root=None; clean=False
     try:
-        with tempfile.TemporaryDirectory(prefix='agent-workflows-scope-preflight-',delete=False) as root:
-            scopes=LocalScopes(str(Path(root)/'state.db'),backend);unit=scopes.reserve('preflight')
-            code='import subprocess,time; p=subprocess.Popen(["/usr/bin/sleep","60"],start_new_session=True); print(p.pid,flush=True); time.sleep(60)'
-            process=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/python3','-c',code],env=manager,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
-            ready,_,_=select.select([process.stdout],[],[],10)
-            if not ready: return False
-            line=process.stdout.readline().strip()
-            if not line.isascii() or not line.isdigit(): return False
-            child=int(line)
-            if child<=1: return False
-            scopes.bind('preflight',unit)
-            info=backend.inspect(unit)
-            membership=Path('/proc')/str(child)/'cgroup'
-            if '0::'+info['cgroup'] not in membership.read_text().splitlines(): return False
-            if scopes.stop('preflight',unit) is not True: return False
-            process.wait(timeout=10)
-            try: os.kill(child,0); return False
-            except ProcessLookupError:
-                clean=True
-                return True
+        root=tempfile.mkdtemp(prefix='agent-workflows-scope-preflight-')
+        scopes=LocalScopes(str(Path(root)/'state.db'),backend);unit=scopes.reserve('preflight')
+        code='import subprocess,time; p=subprocess.Popen(["/usr/bin/sleep","60"],start_new_session=True); print(p.pid,flush=True); time.sleep(60)'
+        process=subprocess.Popen(['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/python3','-c',code],env=manager,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
+        ready,_,_=select.select([process.stdout],[],[],10)
+        if not ready: return False
+        line=process.stdout.readline().strip()
+        if not line.isascii() or not line.isdigit(): return False
+        child=int(line)
+        if child<=1: return False
+        scopes.bind('preflight',unit)
+        info=backend.inspect(unit)
+        membership=Path('/proc')/str(child)/'cgroup'
+        if '0::'+info['cgroup'] not in membership.read_text().splitlines(): return False
+        if scopes.stop('preflight',unit) is not True: return False
+        process.wait(timeout=10)
+        try: os.kill(child,0); return False
+        except ProcessLookupError:
+            clean=True
+            return True
     except (OSError,ValueError,TypeError,subprocess.SubprocessError,RuntimeError): return False
     finally:
         if scopes is not None and unit is not None:

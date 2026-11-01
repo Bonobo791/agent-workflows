@@ -29,21 +29,28 @@ class SandboxPreflightTests(unittest.TestCase):
         from unittest.mock import Mock
         from runner.local_preflight import scope_preflight
         created=[]
-        real_temporary=tempfile.TemporaryDirectory
+        real_temporary=tempfile.mkdtemp
         def temporary(*args,**kwargs):
             item=real_temporary(*args,**kwargs); created.append(item); return item
         process=Mock(); process.stdout=io.StringIO('not-a-pid\n'); process.poll.return_value=None
         try:
-            with patch('runner.local_preflight.tempfile.TemporaryDirectory',side_effect=temporary), \
+            with patch('runner.local_preflight.tempfile.mkdtemp',side_effect=temporary), \
                  patch('runner.local_preflight.subprocess.Popen',return_value=process), \
                  patch('select.select',return_value=([process.stdout],[],[])), \
                  patch('runner.local_scope.SystemdScopes.stop') as stop:
                 self.assertFalse(scope_preflight({'HOME':'/tmp'}))
                 self.assertEqual(len(created),1)
-                self.assertTrue(Path(created[0].name,'state.db').exists())
+                self.assertTrue(Path(created[0],'state.db').exists())
                 stop.assert_not_called()
         finally:
-            for item in created: item.cleanup()
+            for item in created:
+                import shutil
+                shutil.rmtree(item)
+
+    def test_scope_preflight_reaches_launch_without_python312_temp_api(self):
+        with patch('runner.local_preflight.tempfile.TemporaryDirectory',side_effect=TypeError('delete not supported')), patch('runner.local_preflight.subprocess.Popen',side_effect=OSError('unavailable')) as launch:
+            self.assertFalse(scope_preflight({'HOME':'/tmp'}))
+            launch.assert_called_once()
 
     def test_scope_launch_failure_is_not_ready(self):
         with patch('runner.local_preflight.subprocess.Popen',side_effect=OSError('unavailable')), patch('runner.local_scope.SystemdScopes.stop'):

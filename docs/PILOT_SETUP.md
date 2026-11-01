@@ -34,7 +34,8 @@ must not contain private skills, credentials, user data or session histories.
   owner-only configuration without shell redirection, use
   `python -m runner.local_config_inspect /absolute/path/to/codex /private/state --write /private/config/local-runtime.json`.
   The destination directory must already be owner-only and canonical; the
-  command never overwrites an existing destination. If it reports a write
+  command never overwrites an existing destination and rejects configurations
+  larger than the worker's 16 KB limit before creating the file. If it reports a write
   failure, inspect the destination before retrying. Both modes make no model
   turn and do not copy credentials. Names and paths can still be private.
   On Linux, the standard npm `codex` launcher is resolved to its native binary;
@@ -42,12 +43,15 @@ must not contain private skills, credentials, user data or session histories.
   This is a candidate for the inspected directory, not proof of isolation:
   each actual workspace is checked separately at runtime, and changed binaries
   or inherited integrations fail closed.
+- The local host requires Python 3.11 or newer.
 - Optional host unit: `deploy/systemd/agent-workflows-local.service` reads
   `~/.config/agent-workflows/worker.env`; use `deploy/local/worker.env.example`
   as a private path-only template. Set the control directory to the same
   owner-only state directory, use the inspected native runtime configuration,
   and add the task, role and other configuration paths needed by the intended
-  workflow. The service uses the user's existing Codex sign-in and must have
+  workflow. The unit invokes `/usr/bin/python3`; install any optional workflow
+  dependencies for that interpreter or change the unit to the absolute path of
+  the intended environment's Python. The service uses the user's existing Codex sign-in and must have
   access to the user systemd bus. Review the user manager's inherited environment
   and `PATH`; do not place credentials in the environment file. It is not
   installed or enabled by this repository. `Restart=no` prevents automatic

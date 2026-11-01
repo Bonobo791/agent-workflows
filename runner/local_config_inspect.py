@@ -90,11 +90,13 @@ def write_config(executable,workspace,destination,environment):
         except FileNotFoundError: pass
         else: raise ValueError()
         config=inspect_config(executable,workspace,environment)
+        payload=(json.dumps(config,sort_keys=True,indent=2)+'\n').encode('utf-8')
+        if len(payload)>16384:raise ValueError('runtime configuration exceeds worker limit')
         temporary='.runtime-'+secrets.token_hex(16)+'.tmp'
         fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory_fd)
-        with os.fdopen(fd,'w',encoding='utf-8') as stream:
+        with os.fdopen(fd,'wb') as stream:
             os.fchmod(stream.fileno(),0o600)
-            json.dump(config,stream,sort_keys=True,indent=2); stream.write('\n')
+            stream.write(payload)
             stream.flush(); os.fsync(stream.fileno())
         os.link(temporary,path.name,src_dir_fd=directory_fd,dst_dir_fd=directory_fd,follow_symlinks=False)
         os.unlink(temporary,dir_fd=directory_fd); temporary=None

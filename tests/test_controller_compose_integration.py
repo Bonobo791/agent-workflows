@@ -25,9 +25,8 @@ class ControllerComposeTests(unittest.TestCase):
         project='workflow-check-'+uuid.uuid4().hex[:12]
         temporary=tempfile.TemporaryDirectory(prefix='workflow-compose-',delete=False)
         with temporary as directory:
-            secret=Path(directory)/'secret'; secret.write_text('x'*40); secret.chmod(0o600)
+            secret=Path(directory)/'secret'
             image_file=Path(directory)/'image.yaml'
-            image_file.write_text(json.dumps({'services':{'workflow':{'image':os.environ['CONTROLLER_TEST_IMAGE']}}}))
             env={**os.environ,'CONTROL_SECRET_PATH':str(secret),'DOCKER_HOST':os.environ['CONTROLLER_TEST_DOCKER_HOST']}
             command=['docker-compose','-p',project,'-f',str(root/'compose.yaml'),'-f',str(root/'compose.podman.yaml'),'-f',str(image_file)]
             def compose(*args):
@@ -48,6 +47,8 @@ class ControllerComposeTests(unittest.TestCase):
                     except (subprocess.SubprocessError,ValueError,KeyError): time.sleep(.2)
                 self.fail('controller socket unavailable')
             try:
+                secret.write_text('x'*40); secret.chmod(0o600)
+                image_file.write_text(json.dumps({'services':{'workflow':{'image':os.environ['CONTROLLER_TEST_IMAGE']}}}))
                 compose('up','-d','--no-build')
                 container=wait_ready()
                 self.assertTrue(request(container,{'action':'create','run':'r','workflow':'marketing','task':'t'})['ok'])
