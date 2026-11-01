@@ -161,3 +161,11 @@ Alertmanager test substitutes a callback for actual desktop notifications.
 If integration cleanup fails, it still attempts the remaining resources and
 retains its private temporary fixture directory for inspection; the failure
 identifies that directory. Successful cleanup removes it.
+
+On 2026-11-01, the combined systemd, Grafana and browser integration passed
+on the local host against commit `471240c` with the cached images listed above.
+It verified synthetic outage firing and resolution, API authentication,
+dashboard data and restart persistence. The browser signed in, found a queued
+job series, and checked the evidence explanation at desktop and mobile sizes.
+The receiver used a synthetic callback; this run does not establish that a
+person saw a notification or that the production monitoring stack is deployed.
