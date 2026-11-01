@@ -15,6 +15,17 @@ class Connection:
     def close(self): self.closed=True
 
 class SourceFetchTests(unittest.TestCase):
+    def test_successful_connection_restores_remaining_response_timeout(self):
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            def __init__(self): self.timeouts=[]
+            def settimeout(self,value): self.timeouts.append(value)
+            def close(self): pass
+        sock=Sock()
+        with patch('runner.source_fetch.time.monotonic',return_value=0):
+            c=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],10)
+            with patch('runner.source_fetch.socket.create_connection',return_value=sock),patch.object(c._context,'wrap_socket',return_value=sock):c.connect()
+        self.assertEqual(sock.timeouts,[5,10])
     def test_unresponsive_first_address_leaves_time_for_fallback(self):
         from runner.source_fetch import _PinnedHTTPS
         class Sock:
