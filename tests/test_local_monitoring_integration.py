@@ -22,6 +22,36 @@ from runner.desktop_alert_receiver import build_server
 from tests.monitoring_cleanup import cleanup_monitoring
 
 
+def assert_no_firing(events, seconds, message):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            title, body = events.get(timeout=max(0.01, deadline-time.monotonic()))
+        except queue.Empty:
+            return
+        if 'metrics are unavailable' in body and 'resolved' not in title:
+            raise AssertionError(message)
+
+
+class AlertDedupAssertionTests(unittest.TestCase):
+    def test_queued_firing_is_rejected_even_after_unrelated_notifications(self):
+        for preceding in ([], [('other', 'unrelated')], [('resolved', 'metrics are unavailable')]):
+            with self.subTest(preceding=preceding):
+                events = queue.Queue()
+                for event in preceding:
+                    events.put(event)
+                events.put(('firing', 'metrics are unavailable'))
+                with self.assertRaisesRegex(AssertionError, 'duplicate firing'):
+                    assert_no_firing(events, .02, 'duplicate firing')
+
+    def test_empty_or_nonfiring_queue_passes(self):
+        events = queue.Queue()
+        events.put(('other', 'unrelated'))
+        events.put(('resolved', 'metrics are unavailable'))
+        assert_no_firing(events, .01, 'duplicate firing')
+        assert_no_firing(events, .01, 'duplicate firing')
+
+
 @unittest.skipUnless(os.environ.get('WORKFLOW_LOCAL_MONITORING_TEST') == '1',
                      'local monitoring test not configured')
 class LocalMonitoringIntegrationTests(unittest.TestCase):
@@ -275,17 +305,56 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 401)
                 caught.exception.close()
                 self.assertTrue(request(url, True))
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                try: events.get(timeout=max(0.01,deadline-time.monotonic()))
+                except queue.Empty: break
+            wait_up('1')
+            def notifications():
+                metrics = request(f'http://127.0.0.1:{alert_port}/metrics', True).decode()
+                return sum(float(line.rsplit('}',1)[1].split()[0]) for line in metrics.splitlines()
+                           if line.startswith('alertmanager_notifications_total{') and 'integration="webhook"' in line)
+            prior_notifications = notifications()
             worker.terminate()
             self.assertEqual(worker.wait(timeout=10), 0)
             worker = None
             wait_up('0')
             expect(False)
-            for name in (alert_name, prom_name):
-                if systemd_mode:
-                    subprocess.run(['systemctl', '--user', 'restart', name], check=True, capture_output=True, timeout=30)
-                else:
-                    subprocess.run(['podman', 'stop', name], check=True, capture_output=True, timeout=30)
-                    subprocess.run(['podman', 'start', name], check=True, capture_output=True, timeout=30)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if notifications() > prior_notifications: break
+                time.sleep(.1)
+            else:
+                self.fail('Alertmanager did not acknowledge the firing notification')
+            assert_no_firing(events, 2, 'duplicate before Alertmanager restart')
+            if systemd_mode:
+                subprocess.run(['systemctl', '--user', 'restart', alert_name], check=True, capture_output=True, timeout=30)
+            else:
+                subprocess.run(['podman', 'stop', alert_name], check=True, capture_output=True, timeout=30)
+                self.assertTrue((alert_store / 'nflog').is_file() and (alert_store / 'nflog').stat().st_size > 0,
+                                'Alertmanager did not persist notification history on shutdown')
+                subprocess.run(['podman', 'start', alert_name], check=True, capture_output=True, timeout=30)
+            wait_up('0')
+            deadline = time.monotonic() + 100
+            while time.monotonic() < deadline:
+                try:
+                    alerts = json.loads(request(f'http://127.0.0.1:{alert_port}/api/v2/alerts', True))
+                    if any(alert.get('labels', {}).get('alertname') == 'WorkflowMetricsMissing' for alert in alerts):
+                        break
+                except urllib.error.HTTPError as error:
+                    error.close()
+                    raise
+                except urllib.error.URLError:
+                    pass
+                time.sleep(.2)
+            else:
+                self.fail('Alertmanager did not receive the still-active alert after restart')
+            assert_no_firing(events, 8, 'Alertmanager repeated an active alert after restart')
+            if systemd_mode:
+                subprocess.run(['systemctl', '--user', 'restart', prom_name], check=True, capture_output=True, timeout=30)
+            else:
+                subprocess.run(['podman', 'stop', prom_name], check=True, capture_output=True, timeout=30)
+                subprocess.run(['podman', 'start', prom_name], check=True, capture_output=True, timeout=30)
             wait_up('0')
             query = urllib.parse.urlencode({'query': 'count_over_time(workflow_snapshot_timestamp_seconds[5m])'})
             history = json.loads(request(f'http://127.0.0.1:{prom_port}/api/v1/query?{query}', True))['data']['result']
