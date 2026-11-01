@@ -111,8 +111,10 @@ must not contain private skills, credentials, user data or session histories.
   checks a disposable snapshot against `https://example.com/` and confirms a
   changed fetch policy invalidates it. It does not validate marketing claims.
   With `WORKFLOW_TEST_SYSTEMD=1` and `CODEX_TEST_EXECUTABLE` set, the opt-in
-  `tests.test_source_reviewer_live` also performs a signed-in source-review turn
-  against that fixture. Failed runs retain their private state for inspection.
+  `tests.test_source_reviewer_live` also performs signed-in source review,
+  canonical writing and independent review turns against that fixture. These
+  calls do not advance the workflow graph or approve a package. Failed runs
+  retain their private state for inspection.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
