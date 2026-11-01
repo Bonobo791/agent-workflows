@@ -112,19 +112,41 @@ tests:
       - eval_time: 6m
         alertname: WorkflowAuditDeliveryFailed
         exp_alerts: []
-  - name: configured audit delivery without a health snapshot alerts
+  - name: configured audit delivery never reporting alerts only after startup grace
     interval: 1m
     input_series:
       - series: 'workflow_audit_delivery_configured'
-        values: '1+0x10'
+        values: '1+0x20'
     alert_rule_test:
       - eval_time: 5m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+      - eval_time: 16m
         alertname: WorkflowAuditDeliveryStale
         exp_alerts:
           - exp_labels: {severity: warning}
             exp_annotations:
               summary: Workflow audit delivery status is stale or unavailable
               description: Inspect the delivery timer and its private health file.
+  - name: first health snapshot after startup does not alert
+    interval: 1m
+    input_series:
+      - series: 'workflow_audit_delivery_configured'
+        values: '1+0x10'
+      - series: 'workflow_audit_delivery_last_attempt_timestamp_seconds'
+        values: '_ _ _ 180+60x7'
+      - series: 'workflow_audit_delivery_last_attempt_success'
+        values: '_ _ _ 1+0x7'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: WorkflowAuditDeliveryStale
+        exp_alerts: []
   - name: optional audit delivery does not alert when unconfigured
     interval: 1m
     alert_rule_test:
