@@ -28,6 +28,11 @@ The endpoint does not configure a collector, retention, or API protection.
 it does not display incoming annotations. Delivery is at least once: a retry
 after a partially delivered batch can repeat a notification. A successful
 `notify-send` invocation does not establish that a person saw the notification.
+On one local KDE Plasma host, a clearly labeled synthetic call to the same
+`desktop_notify` function returned successfully. A temporary user-systemd unit
+with the example receiver's hardening settings could also query the desktop
+notification service. These separate checks do not establish display, human
+acknowledgment, or delivery from an installed receiver service.
 
 Each token must be a distinct 32–128 character string containing only ASCII
 letters, digits, underscore, or hyphen, stored in an owner-only regular file.
@@ -126,7 +131,7 @@ Prometheus retains an earlier snapshot. After Alertmanager restarts, it waits
 for the still-firing outage alert to return and checks that no duplicate firing
 arrives during an eight-second window. This covers a graceful restart with a
 synthetic receiver and shortened alert timing; it does not cover hard crashes,
-production-duration deduplication, a real desktop notification, or production
+production-duration deduplication, a displayed desktop notification, or production
 alert wait times.
 With `WORKFLOW_GRAFANA_TEST=1`, it also starts the pinned Grafana service,
 provisions the dashboard and authenticated datasource with synthetic secrets,
