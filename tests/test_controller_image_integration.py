@@ -9,6 +9,17 @@ import uuid
 
 @unittest.skipUnless(os.environ.get('CONTROLLER_TEST_IMAGE'), 'controller image not configured')
 class ControllerImageTests(unittest.TestCase):
+    def test_image_has_expected_runtime_and_private_data_directory(self):
+        code=("import json,os,stat,subprocess,sys; s=os.stat('/data'); "
+              "print(json.dumps({'python':list(sys.version_info[:2]),'uid':s.st_uid,'gid':s.st_gid,"
+              "'mode':stat.S_IMODE(s.st_mode),'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]}))")
+        result=subprocess.run(['podman','run','--rm','--network=none','--read-only','--cap-drop=ALL',
+                               '--security-opt=no-new-privileges','--tmpfs','/tmp',os.environ['CONTROLLER_TEST_IMAGE'],
+                               'python','-c',code],check=True,capture_output=True,text=True,timeout=30)
+        info=json.loads(result.stdout)
+        self.assertEqual(info['python'],[3,12]); self.assertEqual((info['uid'],info['gid'],info['mode']),(10001,10001,0o700))
+        self.assertTrue(info['ffmpeg'].startswith('ffmpeg version '))
+
     def test_fresh_private_volume_persists_across_restart(self):
         image=os.environ['CONTROLLER_TEST_IMAGE']
         name='workflow-test-'+uuid.uuid4().hex

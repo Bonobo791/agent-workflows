@@ -24,6 +24,64 @@ class SandboxPreflightTests(unittest.TestCase):
             binary=Path(root)/'codex';binary.write_text('synthetic');binary.chmod(0o700)
             with patch('runner.local_preflight.subprocess.run',side_effect=OSError('unavailable')):
                 self.assertFalse(sandbox_preflight(str(binary),{'HOME':root}))
+    def test_ambiguous_scope_launch_retains_state_without_unverified_stop(self):
+        import io
+        from unittest.mock import Mock
+        from runner.local_preflight import scope_preflight
+        created=[]
+        real_temporary=tempfile.mkdtemp
+        def temporary(*args,**kwargs):
+            item=real_temporary(*args,**kwargs); created.append(item); return item
+        process=Mock(); process.stdout=io.StringIO('not-a-pid\n'); process.poll.return_value=None
+        try:
+            with patch('runner.local_preflight.tempfile.mkdtemp',side_effect=temporary), \
+                 patch('runner.local_preflight.subprocess.Popen',return_value=process), \
+                 patch('select.select',return_value=([process.stdout],[],[])), \
+                 patch('runner.local_scope.SystemdScopes.stop') as stop:
+                self.assertFalse(scope_preflight({'HOME':'/tmp'}))
+                self.assertEqual(len(created),1)
+                self.assertTrue(Path(created[0],'state.db').exists())
+                stop.assert_not_called()
+        finally:
+            for item in created:
+                import shutil
+                shutil.rmtree(item)
+
+    def _failed_launch(self,absent):
+        import io
+        from unittest.mock import Mock
+        created=[]; real=tempfile.mkdtemp
+        def temporary(*args,**kwargs):
+            item=real(*args,**kwargs); created.append(item); return item
+        process=Mock(); process.stdout=io.StringIO(''); process.poll.return_value=1; process.returncode=1
+        observed={'id':'','load':'not-found','active':'inactive','invocation':'','cgroup':''}
+        def inspect(self_,unit):
+            if absent is None: raise __import__('runner.local_scope',fromlist=['ScopeError']).ScopeError('unavailable')
+            return dict(observed,id=unit)
+        try:
+            with patch('runner.local_preflight.tempfile.mkdtemp',side_effect=temporary), patch('runner.local_preflight.subprocess.Popen',return_value=process), \
+                 patch('select.select',return_value=([process.stdout],[],[])), patch('runner.local_scope.SystemdScopes.inspect',inspect), \
+                 patch('sys.stderr',new_callable=io.StringIO) as err:
+                self.assertFalse(scope_preflight({'HOME':'/tmp'}))
+            self.assertEqual(len(created),1)
+            return Path(created[0]).exists(),err.getvalue()
+        finally:
+            import shutil
+            for item in created: shutil.rmtree(item,ignore_errors=True)
+
+    def test_launch_that_systemd_reports_never_existed_is_cleaned_up(self):
+        retained,message=self._failed_launch(True)
+        self.assertFalse(retained); self.assertEqual(message,'')
+
+    def test_failed_launch_with_unverifiable_scope_state_retains_evidence(self):
+        retained,message=self._failed_launch(None)
+        self.assertTrue(retained); self.assertIn('requires inspection',message)
+
+    def test_scope_preflight_reaches_launch_without_python312_temp_api(self):
+        with patch('runner.local_preflight.tempfile.TemporaryDirectory',side_effect=TypeError('delete not supported')), patch('runner.local_preflight.subprocess.Popen',side_effect=OSError('unavailable')) as launch:
+            self.assertFalse(scope_preflight({'HOME':'/tmp'}))
+            launch.assert_called_once()
+
     def test_scope_launch_failure_is_not_ready(self):
         with patch('runner.local_preflight.subprocess.Popen',side_effect=OSError('unavailable')), patch('runner.local_scope.SystemdScopes.stop'):
             self.assertFalse(scope_preflight({'HOME':'/tmp'}))

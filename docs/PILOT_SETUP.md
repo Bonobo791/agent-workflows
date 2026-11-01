@@ -24,17 +24,48 @@ must not contain private skills, credentials, user data or session histories.
   under the private state directory. Local engineering uses the separately
   provisioned and explicitly bound checkout described below. Never put
   credentials in this JSON file.
+  If the scope preflight reports an inspection path, retain its state database
+  and inspect the recorded unit and systemd scope before retrying or cleanup.
   To inspect the current launch inputs without printing configuration values,
   run `python -m runner.local_config_inspect /absolute/path/to/codex /private/state`.
   The directory must already exist and be owner-only. The command prints the
   binary path and hash and the integration names needed for the JSON; save its
-  output only in an owner-only file outside the repository. It makes no model
-  turn and does not copy credentials. Names and paths can still be private.
+  output only in an owner-only file outside the repository. To create a new
+  owner-only configuration without shell redirection, use
+  `python -m runner.local_config_inspect /absolute/path/to/codex /private/state --write /private/config/local-runtime.json`.
+  The destination directory must already be owner-only and canonical; the
+  command never overwrites an existing destination and rejects configurations
+  larger than the worker's 16 KB limit before creating the file. If it reports a write
+  failure, inspect the destination before retrying. Both modes make no model
+  turn and do not copy credentials. Names and paths can still be private.
   On Linux, the standard npm `codex` launcher is resolved to its native binary;
   the resulting configuration pins that binary rather than the Node launcher.
   This is a candidate for the inspected directory, not proof of isolation:
   each actual workspace is checked separately at runtime, and changed binaries
   or inherited integrations fail closed.
+- The local host requires Python 3.11 or newer.
+- Optional host unit: `deploy/systemd/agent-workflows-local.service` reads
+  `~/.config/agent-workflows/worker.env`; use `deploy/local/worker.env.example`
+  as a private path-only template. Set the control directory to the same
+  owner-only state directory, use the inspected native runtime configuration,
+  and add the task, role and other configuration paths needed by the intended
+  workflow. The unit invokes `/usr/bin/python3`; install any optional workflow
+  dependencies for that interpreter or change the unit to the absolute path of
+  the intended environment's Python. The service uses the user's existing Codex sign-in and must have
+  access to the user systemd bus. Review the user manager's inherited environment
+  and `PATH`; do not place credentials in the environment file. It is not
+  installed or enabled by this repository. `Restart=no` prevents automatic
+  service restart after failure; it does not prove that a separate execution scope
+  stopped. After interruption, use the exact manual stop and recovery procedure
+  below before starting a replacement or retrying work.
+
+  On 2026-11-01, a temporary user unit using the example command and hardening
+  properties started with a privately generated runtime configuration and
+  preserved a synthetic queued job across stop and restart. A separate scoped `account/read` verified
+  the existing sign-in; no workflow stage or real task was executed by that
+  test. To repeat it, set `CODEX_TEST_EXECUTABLE` to the absolute Codex launcher
+  and `WORKFLOW_TEST_SYSTEMD=1`, then run
+  `python -m unittest tests.test_local_worker_systemd_live`.
 - `WORKFLOW_TASK_CONFIG_FILE`: an owner-only JSON object with `run`, `workflow`,
   `project`, `number`, `ready_columns`, `completed_columns`,
   `blocker_direction`, `plan_endpoint`, `github_owner`, `github_repo` and
@@ -301,6 +332,16 @@ prevents two current-version workers sharing a volume. Stop any older worker
 before upgrading: a legacy `/data/control.sock` blocks the new socket path and
 requires inspection rather than automatic removal. Do not run mixed versions
 against the same state directory.
+
+On 2026-11-01, main `52640f0` was built without network access using cached
+layers as local image `sha256:809f90f5be088c10fdd308902022be7030a20a784338c5ad2364ae5f49e9b7c8`
+(manifest digest `sha256:b28c22c68c1d008bff257ec0e795fd831df8ea801d006aadd00db06803d34a8c`).
+Two disposable-container checks passed: Python 3.12, FFmpeg and private `/data`
+permissions, plus startup and queued synthetic-job persistence after restart.
+A disposable rootless Compose project also preserved the synthetic queued job
+through stop/start, default and explicit-timeout restarts, and a killed-container
+restart. Failed Compose cleanup retains its private fixture for inspection.
+The cached build does not verify fresh dependency downloads or local Codex execution.
 
 On the tested host, startup, stop/start, default restart, restart with
 `--timeout 5`, and explicit start after a killed container preserved a synthetic

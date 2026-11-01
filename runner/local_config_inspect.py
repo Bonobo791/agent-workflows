@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import secrets
 import signal
 import stat
 import subprocess
@@ -16,6 +17,9 @@ from runner.protocol import AppServer
 
 
 class InspectionError(RuntimeError): pass
+
+
+class ConfigTooLarge(InspectionError): pass
 
 
 def _native_executable(executable):
@@ -76,12 +80,53 @@ def inspect_config(executable,workspace,environment):
                 if stream is not None:stream.close()
 
 
+def write_config(executable,workspace,destination,environment):
+    """Create an owner-only runtime config without replacing an existing file."""
+    directory_fd=None; temporary=None
+    try:
+        path=Path(destination)
+        if not path.is_absolute() or path.parent.resolve(strict=True)!=path.parent or path.name in ('','.','..'): raise ValueError()
+        directory_fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        info=os.fstat(directory_fd)
+        if info.st_uid!=os.geteuid() or info.st_mode&0o077: raise ValueError()
+        try: os.stat(path.name,dir_fd=directory_fd,follow_symlinks=False)
+        except FileNotFoundError: pass
+        else: raise ValueError()
+        config=inspect_config(executable,workspace,environment)
+        payload=(json.dumps(config,sort_keys=True,indent=2)+'\n').encode('utf-8')
+        if len(payload)>16384:raise ConfigTooLarge('runtime configuration exceeds worker limit')
+        temporary='.runtime-'+secrets.token_hex(16)+'.tmp'
+        fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory_fd)
+        with os.fdopen(fd,'wb') as stream:
+            os.fchmod(stream.fileno(),0o600)
+            stream.write(payload)
+            stream.flush(); os.fsync(stream.fileno())
+        os.link(temporary,path.name,src_dir_fd=directory_fd,dst_dir_fd=directory_fd,follow_symlinks=False)
+        os.unlink(temporary,dir_fd=directory_fd); temporary=None
+        os.fsync(directory_fd)
+    except ConfigTooLarge: raise
+    except Exception: raise InspectionError('local runtime configuration could not be created; inspect the destination before retrying') from None
+    finally:
+        if directory_fd is not None:
+            if temporary is not None:
+                try: os.unlink(temporary,dir_fd=directory_fd)
+                except FileNotFoundError: pass
+            os.close(directory_fd)
+
+
 def main():
-    if len(sys.argv)!=3: raise InspectionError('expected an absolute Codex executable and private workspace')
-    print(json.dumps(inspect_config(sys.argv[1],sys.argv[2],os.environ),sort_keys=True,indent=2))
+    if len(sys.argv)==3:
+        print(json.dumps(inspect_config(sys.argv[1],sys.argv[2],os.environ),sort_keys=True,indent=2))
+    elif len(sys.argv)==5 and sys.argv[3]=='--write':
+        write_config(sys.argv[1],sys.argv[2],sys.argv[4],os.environ)
+        print('Local runtime configuration created.')
+    else: raise InspectionError('expected an absolute Codex executable and private workspace')
 
 
 if __name__=='__main__':
     try:main()
+    except ConfigTooLarge:
+        print('Local runtime configuration exceeds the worker size limit; nothing was written.',file=sys.stderr);sys.exit(1)
     except InspectionError:
-        print('Local runtime inspection failed.',file=sys.stderr);sys.exit(1)
+        message='Local runtime configuration was not confirmed; inspect the destination before retrying.' if len(sys.argv)==5 and sys.argv[3]=='--write' else 'Local runtime inspection failed.'
+        print(message,file=sys.stderr);sys.exit(1)
