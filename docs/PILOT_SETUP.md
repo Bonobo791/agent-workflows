@@ -120,8 +120,10 @@ must not contain private skills, credentials, user data or session histories.
   approval gate. By default it does not approve the gate or verify a campaign.
   Adding `WORKFLOW_TEST_CHANNELS=1` applies a fixture-only freeze approval and
   exercises five channel drafts and separate LinkedIn, X, Facebook and Reddit
-  reviews. Reddit is blocked without community context. The test neither
-  publishes content nor establishes media or community-context acceptance.
+  reviews. With no render adapter or community context, it also checks blocked
+  asset production, Instagram and Reddit before assembling a human-review
+  package. The test does not publish or establish media, community-context or
+  human acceptance.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
