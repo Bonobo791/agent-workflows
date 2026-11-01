@@ -122,9 +122,12 @@ shortened timing, isolated temporary storage, and synthetic credentials. It
 checks that both APIs reject unauthenticated requests, and that a worker outage
 and recovery produce firing and resolved alerts through the full path. It also
 restarts both containers with temporary persistent directories and verifies
-Prometheus retains an earlier snapshot. It does not verify Alertmanager's
-deduplication history, a real desktop notification, or production alert wait
-times.
+Prometheus retains an earlier snapshot. After Alertmanager restarts, it waits
+for the still-firing outage alert to return and checks that no duplicate firing
+arrives during an eight-second window. This covers a graceful restart with a
+synthetic receiver and shortened alert timing; it does not cover hard crashes,
+production-duration deduplication, a real desktop notification, or production
+alert wait times.
 With `WORKFLOW_GRAFANA_TEST=1`, it also starts the pinned Grafana service,
 provisions the dashboard and authenticated datasource with synthetic secrets,
 queries every panel expression, and checks the dashboard after restart. This

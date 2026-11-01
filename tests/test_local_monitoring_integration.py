@@ -275,17 +275,67 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 401)
                 caught.exception.close()
                 self.assertTrue(request(url, True))
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                try: events.get(timeout=max(0.01,deadline-time.monotonic()))
+                except queue.Empty: break
+            wait_up('1')
+            def notifications():
+                metrics = request(f'http://127.0.0.1:{alert_port}/metrics', True).decode()
+                return sum(float(line.rsplit(' ',1)[1]) for line in metrics.splitlines()
+                           if line.startswith('alertmanager_notifications_total{') and 'integration="webhook"' in line)
+            prior_notifications = notifications()
             worker.terminate()
             self.assertEqual(worker.wait(timeout=10), 0)
             worker = None
             wait_up('0')
             expect(False)
-            for name in (alert_name, prom_name):
-                if systemd_mode:
-                    subprocess.run(['systemctl', '--user', 'restart', name], check=True, capture_output=True, timeout=30)
-                else:
-                    subprocess.run(['podman', 'stop', name], check=True, capture_output=True, timeout=30)
-                    subprocess.run(['podman', 'start', name], check=True, capture_output=True, timeout=30)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if notifications() > prior_notifications: break
+                time.sleep(.1)
+            else:
+                self.fail('Alertmanager did not acknowledge the firing notification')
+            while not events.empty():
+                events.get_nowait()
+            try:
+                title, body = events.get(timeout=2)
+                self.assertFalse('metrics are unavailable' in body and 'resolved' not in title,
+                                 'duplicate before Alertmanager restart')
+            except queue.Empty:
+                pass
+            if systemd_mode:
+                subprocess.run(['systemctl', '--user', 'restart', alert_name], check=True, capture_output=True, timeout=30)
+            else:
+                subprocess.run(['podman', 'stop', alert_name], check=True, capture_output=True, timeout=30)
+                self.assertTrue((alert_store / 'nflog').is_file() and (alert_store / 'nflog').stat().st_size > 0,
+                                'Alertmanager did not persist notification history on shutdown')
+                subprocess.run(['podman', 'start', alert_name], check=True, capture_output=True, timeout=30)
+            wait_up('0')
+            deadline = time.monotonic() + 100
+            while time.monotonic() < deadline:
+                try:
+                    alerts = json.loads(request(f'http://127.0.0.1:{alert_port}/api/v2/alerts', True))
+                    if any(alert.get('labels', {}).get('alertname') == 'WorkflowMetricsMissing' for alert in alerts):
+                        break
+                except urllib.error.URLError:
+                    pass
+                time.sleep(.2)
+            else:
+                self.fail('Alertmanager did not receive the still-active alert after restart')
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                try:
+                    title, body = events.get(timeout=max(0.01, deadline-time.monotonic()))
+                except queue.Empty:
+                    break
+                self.assertFalse('metrics are unavailable' in body and 'resolved' not in title,
+                                 'Alertmanager repeated an active alert after restart')
+            if systemd_mode:
+                subprocess.run(['systemctl', '--user', 'restart', prom_name], check=True, capture_output=True, timeout=30)
+            else:
+                subprocess.run(['podman', 'stop', prom_name], check=True, capture_output=True, timeout=30)
+                subprocess.run(['podman', 'start', prom_name], check=True, capture_output=True, timeout=30)
             wait_up('0')
             query = urllib.parse.urlencode({'query': 'count_over_time(workflow_snapshot_timestamp_seconds[5m])'})
             history = json.loads(request(f'http://127.0.0.1:{prom_port}/api/v1/query?{query}', True))['data']['result']
