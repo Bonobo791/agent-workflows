@@ -66,3 +66,12 @@ exact scope identity. The owner can reconcile a fenced `stopping` scope after
 that record, its ordered audit and inactive, empty scope are verified.
 Timeouts, witness death, legacy stops without a receipt, and missing audit
 evidence remain unresolved.
+
+On 2026-11-01, the signed-in local worker tests at commit `471240c` passed
+both the in-flight SIGTERM probe and the guarded-scope SIGKILL/restart probe.
+The SIGTERM probe used a synthetic dispatcher to start a real Codex turn; after
+worker exit, its scope was still active. The owner control stopped the recorded
+scope and the test verified its terminated state before confirming the manual
+stop. The crash probe covered the case where the guarded scope had already
+exited before restart. These results do not establish automatic termination,
+recovery of external requests, or a complete production workflow.
