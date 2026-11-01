@@ -149,6 +149,9 @@ must not contain private skills, credentials, user data or session histories.
   evaluates the requested asset against the fetched source; missing, ambiguous
   or unsupported requirements block production. These judgments are not a
   guarantee that a platform will accept the final media.
+  Recording a platform review rechecks the source snapshot, policy, and both
+  task claims in the same transaction; stale or missing source evidence leaves
+  no committed platform-review record.
   The opt-in `tests.test_platform_reviewer_live` positive control uses LinkedIn's
   public profile-photo guidance for a synthetic 400×400 PNG and checks that
   changed dimensions or surface invalidate the proof. Set

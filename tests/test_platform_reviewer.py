@@ -76,7 +76,7 @@ class PlatformReviewerTests(unittest.TestCase):
                 with patch.object(authority.fetcher,'fetch') as network:
                     with self.assertRaises(ValueError): authority.check_for_claim('run',unknown_ref,unknown,claim,job['token'])
                     network.assert_not_called()
-                for mutation in ("UPDATE jobs SET status='cancelling' WHERE run=NEW.run", "UPDATE graph_claims SET expires=0 WHERE run=NEW.run", "UPDATE platform_reviews SET policy_hash='altered' WHERE proof=NEW.proof"):
+                for mutation in ("UPDATE jobs SET status='cancelling' WHERE run=NEW.run", "UPDATE graph_claims SET expires=0 WHERE run=NEW.run", "UPDATE platform_reviews SET policy_hash='altered' WHERE proof=NEW.proof", "DELETE FROM source_snapshots WHERE bundle=NEW.bundle_ref", "UPDATE source_snapshots SET created=0 WHERE bundle=NEW.bundle_ref"):
                     service.graph.db.execute(f'CREATE TRIGGER corrupt_platform AFTER INSERT ON platform_reviews BEGIN {mutation}; END')
                     try:
                         for is_blocked in (False,True):
