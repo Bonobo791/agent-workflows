@@ -15,6 +15,75 @@ class Connection:
     def close(self): self.closed=True
 
 class SourceFetchTests(unittest.TestCase):
+    def test_successful_connection_restores_remaining_response_timeout(self):
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            def __init__(self): self.timeouts=[]
+            def settimeout(self,value): self.timeouts.append(value)
+            def close(self): pass
+        sock=Sock(); now=[0]
+        def handshake(sock,server_hostname):
+            now[0]=4
+            return sock
+        with patch('runner.source_fetch.time.monotonic',side_effect=lambda:now[0]):
+            c=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],10)
+            with patch('runner.source_fetch.socket.create_connection',return_value=sock),patch.object(c._context,'wrap_socket',side_effect=handshake):c.connect()
+        self.assertEqual(sock.timeouts,[5,6])
+    def test_connect_returning_after_its_slice_falls_back_while_overall_time_remains(self):
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            def settimeout(self,value): pass
+            def close(self): self.closed=True
+        now=[0.0]; attempts=[]; socks=[]
+        def connect(address,timeout):
+            attempts.append(address[0]); sock=Sock(); socks.append(sock)
+            if len(attempts)==1: now[0]=6.0
+            return sock
+        with patch('runner.source_fetch.time.monotonic',side_effect=lambda:now[0]):
+            c=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],10)
+            with patch('runner.source_fetch.socket.create_connection',side_effect=connect),patch.object(c._context,'wrap_socket',side_effect=lambda sock,server_hostname:sock):
+                c.connect()
+        self.assertEqual(attempts,['93.184.216.34','93.184.216.35']); self.assertTrue(socks[0].closed)
+        now[0]=0.0; attempts.clear()
+        def expired(address,timeout):
+            attempts.append(address[0]); now[0]=11.0; return Sock()
+        with patch('runner.source_fetch.time.monotonic',side_effect=lambda:now[0]):
+            c=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],10)
+            with patch('runner.source_fetch.socket.create_connection',side_effect=expired),self.assertRaises(TimeoutError): c.connect()
+        self.assertEqual(attempts,['93.184.216.34'])
+    def test_stall_past_a_slice_before_connecting_skips_that_address_instead_of_raising_value_error(self):
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            def settimeout(self,value): pass
+            def close(self): pass
+        ticks=iter([0,0,0,6]); last=[6]; attempts=[]
+        def clock():
+            last[0]=next(ticks,last[0]); return last[0]
+        def connect(address,timeout):
+            attempts.append((address[0],timeout)); return Sock()
+        with patch('runner.source_fetch.time.monotonic',side_effect=clock):
+            c=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],10)
+            with patch('runner.source_fetch.socket.create_connection',side_effect=connect),patch.object(c._context,'wrap_socket',side_effect=lambda sock,server_hostname:sock):
+                c.connect()
+        self.assertEqual(attempts,[('93.184.216.35',4)])
+    def test_unresponsive_first_address_leaves_time_for_fallback(self):
+        from runner.source_fetch import _PinnedHTTPS
+        class Sock:
+            def settimeout(self,value): pass
+            def close(self): pass
+        now=[0.0]; attempts=[]
+        def connect(address,timeout):
+            attempts.append((address[0],timeout))
+            if len(attempts)==1:
+                now[0]+=timeout
+                raise TimeoutError('first address unresponsive')
+            return Sock()
+        with patch('runner.source_fetch.time.monotonic',side_effect=lambda:now[0]):
+            c=_PinnedHTTPS('docs.example.com',['93.184.216.34','93.184.216.35'],10)
+            with patch('runner.source_fetch.socket.create_connection',side_effect=connect),patch.object(c._context,'wrap_socket',side_effect=lambda sock,server_hostname:sock):
+                c.connect()
+        self.assertEqual([a[0] for a in attempts],['93.184.216.34','93.184.216.35'])
+        self.assertLess(attempts[0][1],10)
     def test_already_cancelled_fetch_does_not_launch(self):
         fetcher=SourceFetcher(['https://docs.example.com/'])
         with patch('runner.source_fetch.subprocess.Popen') as launch:

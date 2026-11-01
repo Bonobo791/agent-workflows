@@ -35,16 +35,27 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
         self.deadline=time.monotonic()+timeout
     def connect(self):
         failure=None
-        for address in self.addresses:
+        for index,address in enumerate(self.addresses):
             remaining=self.deadline-time.monotonic()
             if remaining<=0: raise TimeoutError('source connection deadline exceeded')
-            try: sock=socket.create_connection((address,443),min(self.timeout,remaining))
+            attempt_deadline=time.monotonic()+remaining/(len(self.addresses)-index)
+            budget=attempt_deadline-time.monotonic()
+            if budget<=0: failure=TimeoutError('source address attempt exceeded'); continue
+            try: sock=socket.create_connection((address,443),min(self.timeout,remaining,budget))
             except OSError as exc: failure=exc; continue
-            remaining=self.deadline-time.monotonic()
-            if remaining<=0: sock.close(); raise TimeoutError('source connection deadline exceeded')
+            remaining=min(self.deadline,attempt_deadline)-time.monotonic()
+            if remaining<=0:
+                sock.close()
+                if self.deadline-time.monotonic()<=0: raise TimeoutError('source connection deadline exceeded')
+                failure=TimeoutError('source address attempt exceeded'); continue
             sock.settimeout(min(self.timeout,remaining))
             try:
-                self.sock=self._context.wrap_socket(sock,server_hostname=self.host); return
+                self.sock=self._context.wrap_socket(sock,server_hostname=self.host)
+                remaining=self.deadline-time.monotonic()
+                if remaining<=0:
+                    self.sock.close(); self.sock=None
+                    raise TimeoutError('source connection deadline exceeded')
+                self.sock.settimeout(min(self.timeout,remaining)); return
             except ssl.SSLCertVerificationError: sock.close(); raise
             except OSError as exc: sock.close(); failure=exc
         raise failure
