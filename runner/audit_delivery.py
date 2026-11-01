@@ -1,5 +1,6 @@
 """Explicit one-page audit delivery; no background service or default endpoint."""
 import argparse
+import json
 from contextlib import ExitStack
 import os
 from pathlib import Path
@@ -31,8 +32,8 @@ def _private_database(path,create):
     return str(path)
 
 
-def deliver_once(source,cursor,key_file,endpoint,table,limit=100,token_file=None):
-    if table not in TABLES or type(limit) is not int or not 1<=limit<=500: raise ValueError('invalid audit selection')
+def deliver_tables(source,cursor,key_file,endpoint,tables,limit=100,token_file=None):
+    if not isinstance(tables,(list,tuple)) or not 1<=len(tables)<=8 or any(not isinstance(table,str) or table not in TABLES for table in tables) or len(set(tables))!=len(tables) or type(limit) is not int or not 1<=limit<=500: raise ValueError('invalid audit selection')
     source=_private_database(source,False); cursor=_private_database(cursor,True)
     key=read_secret(key_file).encode('utf-8')
     import requests
@@ -41,20 +42,31 @@ def deliver_once(source,cursor,key_file,endpoint,table,limit=100,token_file=None
         if token_file is not None: session.headers['Authorization']='Bearer '+read_secret(token_file)
         adapter=create_opik_trace_exporter(endpoint,session); cleanup.callback(adapter.exporter.shutdown)
         audit=sqlite3.connect('file:'+quote(source,safe='/')+'?mode=ro',uri=True,isolation_level=None); cleanup.callback(audit.close)
+        present={row[0] for row in audit.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not set(tables)<=present: raise ValueError('selected audit table unavailable')
         progress=sqlite3.connect(cursor,isolation_level=None); cleanup.callback(progress.close)
-        return deliver_page(audit,progress,endpoint,table,limit,key,adapter)
+        results={}
+        for table in tables:
+            result=deliver_page(audit,progress,endpoint,table,limit,key,adapter)
+            results[table]=result
+            if result['status'] not in ('empty','exported','superseded'): break
+        return results
+
+
+def deliver_once(source,cursor,key_file,endpoint,table,limit=100,token_file=None):
+    return deliver_tables(source,cursor,key_file,endpoint,[table],limit,token_file)[table]
 
 
 def main():
     parser=argparse.ArgumentParser(description='Deliver one page of private workflow audit events.')
     parser.add_argument('--source',required=True); parser.add_argument('--cursor',required=True)
     parser.add_argument('--key-file',required=True); parser.add_argument('--endpoint',required=True)
-    parser.add_argument('--table',required=True,choices=sorted(TABLES)); parser.add_argument('--limit',type=int,default=100)
+    parser.add_argument('--table',required=True,action='append',choices=sorted(TABLES)); parser.add_argument('--limit',type=int,default=100)
     parser.add_argument('--token-file')
     args=parser.parse_args()
-    result=deliver_once(args.source,args.cursor,args.key_file,args.endpoint,args.table,args.limit,args.token_file)
-    print(result['status'])
-    return 0 if result['status'] in ('empty','exported','superseded') else 1
+    results=deliver_tables(args.source,args.cursor,args.key_file,args.endpoint,args.table,args.limit,args.token_file)
+    print(next(iter(results.values()))['status'] if len(args.table)==1 else json.dumps(results,sort_keys=True,separators=(',',':')))
+    return 0 if len(results)==len(args.table) and all(result['status'] in ('empty','exported','superseded') for result in results.values()) else 1
 
 
 if __name__=='__main__':

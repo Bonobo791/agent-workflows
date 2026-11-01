@@ -164,13 +164,20 @@ possible alterations to earlier history, so stop delivery while restoring the
 source and explicitly reconcile cursors before resuming. A restore racing with
 an export is not atomic across the two databases and may cause duplicate or
 missed delivery. No background dispatcher or cursor database is configured, so delivery is not
-called by the worker. An operator can explicitly deliver one bounded page:
+called by the worker. An operator can explicitly deliver one bounded page per selected table:
 
 ```sh
 python -m runner.audit_delivery --source /private/state.db --cursor /private/audit-cursors.db \
   --key-file /private/audit-key --endpoint http://127.0.0.1:5173/api/v1/private/otel/v1/traces \
-  --table graph_audit
+  --table graph_audit --table claim_audit
 ```
+
+Select one to eight distinct existing tables. The command checks that every
+selected table exists before sending, processes them in the supplied order, and
+stops at the first unavailable or ambiguous result. Each table has its own
+cursor; repeat the command to drain additional pages. Multiple tables produce a
+JSON object of per-table results. A nonzero exit can follow successful earlier
+tables, whose cursors remain committed.
 
 The database directories and files must be owned by the current user and private;
 the source must already exist. The key is an owner-only file with at least 32
