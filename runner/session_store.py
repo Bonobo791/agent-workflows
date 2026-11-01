@@ -89,7 +89,8 @@ class SessionStore:
     def _check_home(self,home):
         path=self.homes/home
         try:
-            if path.resolve(strict=True)!=path or not stat.S_ISDIR(path.lstat().st_mode): raise SessionError('state path escaped')
+            info=path.lstat()
+            if path.resolve(strict=True)!=path or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise SessionError('unsafe state home')
             def scan_error(error): raise error
             for directory,dirs,files in os.walk(path,followlinks=False,onerror=scan_error):
                 for name in dirs+files:

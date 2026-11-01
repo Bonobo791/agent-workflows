@@ -6,6 +6,19 @@ from runner.session_store import SessionStore, SessionError
 CONFIG='a'*64
 SKILLS='b'*64
 class SessionStoreTests(unittest.TestCase):
+    def test_home_that_is_no_longer_private_cannot_resume_or_back_up(self):
+        with tempfile.TemporaryDirectory() as root:
+            store=SessionStore(root); entry=store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
+            try:
+                store.bind('job-1','thread-1'); store.release('job-1',lambda _:True)
+                Path(entry['home']).chmod(0o755)
+                self.assertFalse(store.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
+                with self.assertRaises(SessionError): store.backup('job-1',lambda _:'backup',lambda _:True)
+                Path(entry['home']).chmod(0o700)
+                from unittest.mock import patch
+                with patch('runner.session_store.os.geteuid',return_value=-1):
+                    self.assertFalse(store.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
+            finally: store.close()
     def test_replaced_home_file_cannot_be_released(self):
         with tempfile.TemporaryDirectory() as root:
             store=SessionStore(root); entry=store.acquire('run-1','implement','job-1',CONFIG,SKILLS)

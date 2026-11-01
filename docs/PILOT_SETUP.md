@@ -201,7 +201,7 @@ proof. No legacy personal Codex home should be copied.
 An interrupted session backup stays fenced. `SessionStore.recover_backup`
 requires trusted checks that the exact backup operation is quiescent and fenced
 and that the home is safe, then rechecks its private files before making it idle.
-The home must remain a directory and any directory scan error blocks recovery;
+The home must remain an owner-only directory owned by the worker, and any directory scan error blocks recovery;
 an incomplete scan is not evidence that the home is safe.
 Recovery is bound to the exact backup generation; legacy interrupted backups
 without a generation remain fenced for inspection.
