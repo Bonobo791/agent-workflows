@@ -107,6 +107,9 @@ must not contain private skills, credentials, user data or session histories.
   Approved JSON sources are size-limited and must parse as valid JSON. Changing
   the fetcher changes its snapshot policy, so older snapshots require a fresh
   fetch and review.
+  `WORKFLOW_TEST_PUBLIC_SOURCE=1 python -m unittest tests.test_source_snapshot_live`
+  checks a disposable snapshot against `https://example.com/` and confirms a
+  changed fetch policy invalidates it. It does not validate marketing claims.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
