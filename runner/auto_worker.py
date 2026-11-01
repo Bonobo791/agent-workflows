@@ -140,14 +140,19 @@ class AutoWorker:
                 if state=='awaiting_review' and service.human_review is not None:
                     with self.guard:
                         pending=self.pending_decision; self.pending_decision=None
+                        if pending is not None:self.state={**self.state,'status':'deciding'}
                     if pending is not None:
                         try: service.human_review.decide(run,queue['token'],claim,pending['version'],pending['decision'])
                         except Exception: self._set(status=state,stage=stage,run=run,version=version,reason='human decision rejected; review package changed or evidence unavailable')
                     decision=service.human_review.current(run)
                     if decision and decision['decision']=='approved':
                         with self.guard:
+                            if self.pending_decision is not None or self.pending_action is not None:continue
+                            self.state={**self.state,'status':'completing'}
+                        complete=service._prepare_job_completion(run,queue['token'],claim)
+                        with self.guard:
                             if self.stop_event.is_set(): raise AutoWorkerError('automatic worker stopped; inspection required')
-                            service.finish_job(run,queue['token'])
+                            complete()
                         self._set(status='completed',run=run); return
                     if decision and decision['decision']=='rejected':
                         self._set(status='revision_required',stage=stage,run=run,version=version,reason='human rejected the review package')

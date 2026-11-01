@@ -39,6 +39,17 @@ class PlatformReviewer:
     def _cancelled(self,graph,run,queue_claim):
         row=graph.db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
         return not row or row[0]!='running' or row[1]!=queue_claim or row[2]<=time.time()
+    def _record(self,graph,run,graph_claim,queue_claim,values,snapshots):
+        graph.db.execute('BEGIN IMMEDIATE')
+        try:
+            graph._lease(run,graph_claim)
+            if self._cancelled(graph,run,queue_claim) or self._policy()!=self.policy_hash or not snapshots.verify(run,values[3],values[2],values[4]): raise ValueError('platform claim or source unavailable')
+            if graph.db.execute('INSERT INTO platform_reviews VALUES(?,?,?,?,?,?,?,?,?,?,?)',values).rowcount!=1 or graph.db.execute('SELECT * FROM platform_reviews WHERE proof=?',(values[0],)).fetchone()!=values: raise ValueError('platform review unavailable')
+            graph._lease(run,graph_claim)
+            if self._cancelled(graph,run,queue_claim) or self._policy()!=self.policy_hash or not snapshots.verify(run,values[3],values[2],values[4]): raise ValueError('platform claim or source unavailable')
+            graph.db.execute('COMMIT')
+        except Exception:
+            graph.db.execute('ROLLBACK'); raise
     def check_for_claim(self,run,brief_ref,brief,graph_claim,queue_claim):
         if self._policy()!=self.policy_hash or json.loads(self.service.artifacts.get(brief_ref))!=brief: raise ValueError('platform brief unavailable')
         graph=self._graph()
@@ -71,8 +82,7 @@ class PlatformReviewer:
                 if not any(f['severity']=='blocking' and f['resolution']=='open' and f['evidence'] in inputs for f in parsed['findings']) or any(f['evidence'] not in inputs for f in parsed['findings']) or cancelled() or not snapshots.verify(run,register_ref,brief_ref,bundle): raise ValueError('platform block unavailable')
                 evidence={'brief_ref':brief_ref,'response_ref':result['response_ref'],'report_ref':result['outputs'][0],'reason':parsed['reason'],'findings':parsed['findings']}
                 proof_ref=store.put(json.dumps(evidence,sort_keys=True,separators=(',',':')).encode())
-                graph._lease(run,graph_claim)
-                graph.db.execute('INSERT INTO platform_reviews VALUES(?,?,?,?,?,?,?,?,?,?,?)',(proof_ref,run,brief_ref,register_ref,bundle,result['session_id'],result['turn_id'],json.dumps(skills,sort_keys=True,separators=(',',':')),result['response_ref'],result['outputs'][0],self.policy_hash))
+                self._record(graph,run,graph_claim,queue_claim,(proof_ref,run,brief_ref,register_ref,bundle,result['session_id'],result['turn_id'],json.dumps(skills,sort_keys=True,separators=(',',':')),result['response_ref'],result['outputs'][0],self.policy_hash),snapshots)
                 if not self.verify_blocked(run,brief_ref,brief,proof_ref): raise ValueError('platform block unverified')
                 return {'blocked_ref':proof_ref}
             assets=report.get('assets') if isinstance(report,dict) and set(report)=={'assets'} else None
@@ -82,8 +92,7 @@ class PlatformReviewer:
             if cancelled() or not snapshots.verify(run,register_ref,brief_ref,bundle): raise ValueError('platform source stale')
             now=time.time();source_time=bundle_data['created'];proof={'brief_ref':brief_ref,'checked_at':now,'expires_at':min(now+86400,source_time+86400),'assets':assets}
             proof_ref=store.put(json.dumps(proof,sort_keys=True,separators=(',',':')).encode())
-            graph._lease(run,graph_claim)
-            graph.db.execute('INSERT INTO platform_reviews VALUES(?,?,?,?,?,?,?,?,?,?,?)',(proof_ref,run,brief_ref,register_ref,bundle,result['session_id'],result['turn_id'],json.dumps(skills,sort_keys=True,separators=(',',':')),result['response_ref'],result['outputs'][0],self.policy_hash))
+            self._record(graph,run,graph_claim,queue_claim,(proof_ref,run,brief_ref,register_ref,bundle,result['session_id'],result['turn_id'],json.dumps(skills,sort_keys=True,separators=(',',':')),result['response_ref'],result['outputs'][0],self.policy_hash),snapshots)
             return proof_ref
         finally: graph.close()
     def verify(self,run,brief_ref,brief,proof_ref):

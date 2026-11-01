@@ -8,6 +8,7 @@ import re
 import sqlite3
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 class WorkspaceError(RuntimeError): pass
@@ -126,18 +127,24 @@ class EngineeringWorkspace:
             if not row: raise WorkspaceError('active local scope binding required')
             bind_scope_with_audit(self.db,run,assignment,unit); self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
+    def _record_recovery(self,run,assignment,unit):
+        created=time.time()
+        audit=self.db.execute("INSERT INTO workspace_recovery_audit(schema_version,run,assignment,unit,status,created) VALUES(1,?,?,?,'released',?)",(run,assignment,unit,created))
+        if audit.rowcount!=1 or self.db.execute('SELECT schema_version,run,assignment,unit,status,created FROM workspace_recovery_audit WHERE id=?',(audit.lastrowid,)).fetchone()!=(1,run,assignment,unit,'released',created):raise WorkspaceError('workspace recovery audit unavailable')
     def release_local(self,run,assignment,unit,*,fenced=None):
         self.db.execute('BEGIN IMMEDIATE')
         try:
             if fenced is not None:
                 if not isinstance(fenced,tuple) or len(fenced)!=2 or any(not isinstance(x,str) or not x for x in fenced): raise WorkspaceError('invalid recovery fence')
-                fence=self.db.execute("SELECT 1 FROM manual_assignments a JOIN manual_workers w ON w.target=a.target JOIN jobs j ON j.run=a.run JOIN graph_runs g ON g.id=a.run WHERE a.run=? AND a.target=? AND a.incarnation=? AND a.state='pending' AND w.incarnation=a.incarnation AND w.state='assigned' AND j.status IN ('cancelling','uncertain') AND g.status='cancelled'",(run,*fenced)).fetchone()
+                fence=self.db.execute("SELECT 1 FROM manual_assignments a JOIN manual_workers w ON w.target=a.target JOIN jobs j ON j.run=a.run JOIN graph_runs g ON g.id=a.run WHERE a.run=? AND a.target=? AND a.incarnation=? AND a.state='pending' AND w.incarnation=a.incarnation AND w.state='assigned' AND ((j.status IN ('cancelling','uncertain') AND g.status='cancelled') OR (j.status='completed' AND g.status='completed'))",(run,*fenced)).fetchone()
                 if not fence: raise WorkspaceError('recovery fence changed')
+                if self.db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone():raise WorkspaceError('graph claim remains active')
             from runner.local_scope import valid_scope_identity
             row=self.db.execute("SELECT s.invocation,s.cgroup FROM engineering_local_scopes m JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE m.run=? AND m.assignment=? AND m.unit=? AND s.state='terminated'",(run,assignment,unit)).fetchone()
             if not row or not valid_scope_identity(unit,*row): raise WorkspaceError('terminal local scope evidence required')
             if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')
             if fenced is not None:
-                self.db.execute("INSERT INTO workspace_recovery_audit(schema_version,run,assignment,unit,status,created) VALUES(1,?,?,?,'released',(julianday('now')-2440587.5)*86400.0)",(run,assignment,unit))
+                self._record_recovery(run,assignment,unit)
+            if self.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()!=(None,):raise WorkspaceError('workspace release changed')
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise

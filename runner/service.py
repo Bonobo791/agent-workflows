@@ -6,6 +6,7 @@ remote mutations, authentication and provider access remain disabled.
 import json
 import hashlib
 import re
+import secrets
 import os
 import stat
 import time
@@ -19,6 +20,8 @@ from runner.provenance import Provenance
 from runner.structured import parse_marketing_result
 from workflows.engineering.intake import readiness
 from workflows.marketing.gates import CHANNELS, intake_issues, canonical_issues, channel_issues
+
+_JOB_STATUS='SELECT status FROM jobs WHERE run=?'
 
 class ServiceError(RuntimeError): pass
 
@@ -96,7 +99,11 @@ class Service:
             if state['incarnation']!=self.lifecycle.incarnation or state['status'] not in ('running','pending'): raise ServiceError('manual assignment unavailable')
         row=self.graph.db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()
         if not row: raise ServiceError('run unavailable')
-        if row[0]=='active': self._cancel(run)
+        if row[0]=='active':
+            job=self.graph.db.execute(_JOB_STATUS,(run,)).fetchone()
+            self._cancel(run,completed=job==('completed',))
+        elif row[0]=='completed':
+            if self.graph.db.execute(_JOB_STATUS,(run,)).fetchone()!=('completed',): raise ServiceError('run unavailable')
         elif row[0]!='cancelled': raise ServiceError('run unavailable')
         if automatic:
             self.lifecycle.automatic_stop(run)
@@ -128,9 +135,11 @@ class Service:
         try:
             row=db.execute('SELECT status,target_hash FROM worker_lifecycle WHERE run=?',(run,)).fetchone()
             if not row or row[0]!='stopped' or db.execute('SELECT 1 FROM lifecycle_operations WHERE target_hash=?',(row[1],)).fetchone(): raise ServiceError('worker termination not fenced')
-            job=db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()
+            job=db.execute(_JOB_STATUS,(run,)).fetchone()
             if job and job[0] in ('cancelling','uncertain'):
                 db.execute("UPDATE jobs SET status='cancelled',token=NULL,expires=NULL WHERE run=?",(run,))
+            elif job==('completed',):
+                if db.execute("SELECT status FROM graph_runs WHERE id=?",(run,)).fetchone()!=('completed',) or db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone():raise ServiceError('completed run not fenced')
             elif job and job[0]!='cancelled': raise ServiceError('job state incompatible with cancellation')
             db.execute('COMMIT')
         except Exception:
@@ -163,8 +172,8 @@ class Service:
         if not lifecycle_db or not graph_db or Path(lifecycle_db).resolve()!=Path(graph_db).resolve(): raise ServiceError('lifecycle and queue must share durable state')
         state=self.lifecycle.status(run)
         graph=self.graph.db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()
-        job=self.graph.db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()
-        if state['incarnation']!=self.lifecycle.incarnation or state['status']!='pending' or graph!=('cancelled',) or not job or job[0] not in ('cancelling','uncertain'): raise ServiceError('run must be fenced for local recovery')
+        job=self.graph.db.execute(_JOB_STATUS,(run,)).fetchone()
+        if state['incarnation']!=self.lifecycle.incarnation or state['status']!='pending' or not graph or not job or (graph[0],job[0]) not in (('cancelled','cancelling'),('cancelled','uncertain'),('completed','completed')): raise ServiceError('run must be fenced for local recovery')
     def release_local_workspace(self,run,assignment,unit):
         from runner.engineering_workspace import EngineeringWorkspace
         self._require_fenced_local(run)
@@ -195,18 +204,23 @@ class Service:
             else:scopes.reconcile_confirmed(run,unit,fenced)
             return {'unit':unit,'state':'terminated'}
         finally:scopes.close()
-    def _cancel(self,run,token=None,require_job=False):
+    def _cancel(self,run,token=None,require_job=False,completed=False):
+        if completed:self._require_completion_input(run)
         db=self.graph.db; db.execute('BEGIN IMMEDIATE')
         try:
             if token is not None: self.graph._lease(run,token)
             row=db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()
             if not row or row[0]!='active': raise ServiceError('run unavailable')
-            job=db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()
+            job=db.execute(_JOB_STATUS,(run,)).fetchone()
             if require_job and (not job or job[0] not in ('queued','running')): raise ServiceError('job unavailable')
-            if job and job[0] in ('queued','running'):
-                db.execute('UPDATE jobs SET status=? WHERE run=?',('cancelled' if job[0]=='queued' else 'cancelling',run))
-            db.execute("UPDATE graph_runs SET status='cancelled' WHERE id=?",(run,))
-            db.execute('DELETE FROM graph_claims WHERE run=?',(run,))
+            if completed:
+                self._complete_legacy_graph(db,run,job)
+            else:
+                if job==('completed',):raise ServiceError('completed job cannot be cancelled')
+                if job in (('queued',),('running',)):
+                    db.execute('UPDATE jobs SET status=? WHERE run=?',({'queued':'cancelled','running':'cancelling'}[job[0]],run))
+                db.execute("UPDATE graph_runs SET status='cancelled' WHERE id=?",(run,))
+                db.execute('DELETE FROM graph_claims WHERE run=?',(run,))
             db.execute('COMMIT')
         except Exception:
             db.execute('ROLLBACK'); raise
@@ -262,6 +276,8 @@ class Service:
                     for review_stage in ('canonical_review',*[channel+'_review' for channel in CHANNELS]): dispatcher._verify_recorded_review(run,review_stage)
                     asset=self.graph.get(run,'asset_production')
                     asset_record=json.loads(self.artifacts.get(asset['version']))
+                    from runner.openfilm_platform import verify_platform_block
+                    if not verify_platform_block(self,run,asset_record): return False
                     if asset['status']=='passed' and 'manifest_ref' not in asset_record: return False
                     if 'manifest_ref' in asset_record:
                         from runner.openfilm_review import verify_evidence
@@ -290,7 +306,63 @@ class Service:
                 if (not recorded and names) or (recorded and recorded[0]!=fingerprint): return False
             return True
         except Exception: return False
-    def finish_job(self,run,queue_token): self.queue.finish(run,queue_token,verify_completed=self.verify_terminal)
+    def _complete_legacy_graph(self,db,run,job):
+        if job!=('completed',) or not self.verify_terminal(run) or not self._completion_approval(run,db):raise ServiceError('completed job evidence unavailable')
+        claim=db.execute('SELECT task_id FROM graph_claims WHERE run=?',(run,)).fetchone()
+        if claim and claim!=db.execute('SELECT task_id FROM graph_runs WHERE id=?',(run,)).fetchone():raise ServiceError('graph task changed')
+        release=self._record_claim_release(db,run,claim[0]) if claim else None
+        if claim and release is None:raise ServiceError('claim release audit unavailable')
+        if db.execute("UPDATE graph_runs SET status='completed' WHERE id=? AND status='active'",(run,)).rowcount!=1:raise ServiceError('graph completion unavailable')
+        db.execute('DELETE FROM graph_claims WHERE run=?',(run,))
+        if not self._completed_graph(db,run,release):raise ServiceError('graph completion evidence unavailable')
+    def _require_completion_input(self,run):
+        from runner.queue import QueueError
+        if not self.verify_terminal(run):raise QueueError('verified workflow completion required')
+        if self.graph._definition(run).name=='marketing':
+            try: fresh=self.task_intake is not None and self.task_intake.revalidate(run) is True
+            except Exception: fresh=False
+            if not fresh:raise QueueError('task freshness unavailable or changed')
+    def _prepare_job_completion(self,run,queue_token,graph_token):
+        self._require_completion_input(run)
+        return lambda:self._finish_job(run,queue_token,graph_token)
+    def finish_job(self,run,queue_token,graph_token):
+        return self._prepare_job_completion(run,queue_token,graph_token)()
+    def _completion_approval(self,run,db):
+        if self.graph._definition(run).name!='marketing':return True
+        if self.human_review is None:return False
+        from runner.human_review import HumanReviewError
+        try: decision=self.human_review.current(run,db=db)
+        except HumanReviewError:return False
+        return decision if decision and decision['decision']=='approved' else False
+    def _record_claim_release(self,db,run,task):
+        created=time.time()
+        inserted=db.execute("INSERT INTO claim_audit(schema_version,run,task_id,status,created) VALUES(1,?,?,'released',?)",(run,task,created))
+        if inserted.rowcount!=1 or db.execute('SELECT run,task_id,status,created FROM claim_audit WHERE id=?',(inserted.lastrowid,)).fetchone()!=(run,task,'released',created):return None
+        return inserted.lastrowid,task,created
+    def _completed_graph(self,db,run,release):
+        return db.execute("SELECT status FROM graph_runs WHERE id=?",(run,)).fetchone()==('completed',) and not db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone() and (release is None or db.execute('SELECT run,task_id,status,created FROM claim_audit WHERE id=?',(release[0],)).fetchone()==(run,release[1],'released',release[2]))
+    def _release_completion_claim(self,run,graph_token):
+        db=self.queue.db
+        claim=db.execute('SELECT c.task_id,c.expires,c.token FROM graph_claims c JOIN graph_runs g ON g.id=c.run AND g.task_id=c.task_id WHERE c.run=?',(run,)).fetchone()
+        if not claim or claim[1]<=self.graph.clock() or not isinstance(graph_token,str) or not isinstance(claim[2],str) or not secrets.compare_digest(claim[2],graph_token):return None
+        release=self._record_claim_release(db,run,claim[0])
+        if release is None:return None
+        if db.execute('DELETE FROM graph_claims WHERE run=? AND token=?',(run,graph_token)).rowcount!=1 or claim[1]<=self.graph.clock():return None
+        if db.execute("UPDATE graph_runs SET status='completed' WHERE id=? AND status='active'",(run,)).rowcount!=1:return None
+        return release if self._completed_graph(db,run,release) else None
+    def _finish_job(self,run,queue_token,graph_token):
+        state={}
+        def verified(run):
+            if not self.verify_terminal(run):return False
+            approval=self._completion_approval(run,self.queue.db)
+            if not approval:return False
+            release=self._release_completion_claim(run,graph_token)
+            if release is None:return False
+            state.update(approval=approval,release=release)
+            return True
+        def final(run):
+            return bool(state) and self._completed_graph(self.queue.db,run,state['release']) and self._completion_approval(run,self.queue.db)==state['approval']
+        self.queue.finish(run,queue_token,verify_completed=verified,verify_final=final)
     def claim(self,run): return self.graph.claim(run,60)
     def release(self,run,token): self.graph.release(run,token)
     def approve(self,run,action,version,actor):
@@ -384,6 +456,9 @@ class Service:
                             for output in artifact.get('outputs',[]): contents.append(self.artifacts.get(output).decode('utf-8'))
                         except Exception: raise ServiceError('review content unavailable') from None
                         summary[name]={**entry,'artifact':artifact,'contents':contents}
+                        if name=='asset_production':
+                            from runner.openfilm_platform import verify_platform_block
+                            if not verify_platform_block(self,run,artifact): raise ServiceError('platform block evidence unavailable')
                         if name=='asset_production' and 'manifest_ref' in artifact:
                             from runner.openfilm_review import verify_evidence
                             if entry['status']!=artifact.get('status') or not verify_evidence(self,run,artifact): raise ServiceError('asset review evidence unavailable')

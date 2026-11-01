@@ -72,6 +72,16 @@ class ManualLifecycle:
             db.execute("UPDATE manual_assignments SET state='pending' WHERE run=?",(run,)); db.execute('COMMIT')
             return {'target':self.target['manual_target'],'incarnation':self.incarnation,'evidence_required':'Operator must stop this exact incarnation and confirm termination and restart fencing; confirmation is operator-attested, not machine-observed.'}
         except Exception: db.execute('ROLLBACK'); raise
+    def _require_stopped_resources(self,db,run):
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone():
+            unresolved=db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated' OR e.run IS NULL) LIMIT 1",(run,)).fetchone()
+            if unresolved: raise ManualLifecycleError('Docker termination or launch remains unresolved')
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone():
+            from runner.local_scope import unresolved_scope_rows
+            columns={row[1] for row in db.execute('PRAGMA table_info(local_scopes)')}
+            if not {'run','unit','invocation','cgroup','state'}<=columns: raise ManualLifecycleError('local scope termination or launch remains unresolved')
+            if unresolved_scope_rows(db,run): raise ManualLifecycleError('local scope termination or launch remains unresolved')
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engineering_workspaces'").fetchone() and db.execute('SELECT 1 FROM engineering_workspaces WHERE run=? AND assignment IS NOT NULL',(run,)).fetchone(): raise ManualLifecycleError('engineering workspace claim remains unresolved')
     def confirm_operator_stop(self,run,incarnation,attestation):
         if incarnation!=self.incarnation or attestation!='terminated_and_fenced': raise ManualLifecycleError('exact incarnation and explicit attestation required')
         db=self.db; db.execute('BEGIN IMMEDIATE')
@@ -79,19 +89,12 @@ class ManualLifecycle:
             state=self.status(run)
             worker=db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(self.target['manual_target'],)).fetchone()
             job=db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()
-            if state['incarnation']!=incarnation or state['status']!='pending' or worker!=(incarnation,'assigned') or not job or job[0] not in ('cancelling','uncertain'): raise ManualLifecycleError('confirmation stale, duplicate, or conflicting')
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone():
-                unresolved=db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated' OR e.run IS NULL) LIMIT 1",(run,)).fetchone()
-                if unresolved: raise ManualLifecycleError('Docker termination or launch remains unresolved')
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone():
-                from runner.local_scope import unresolved_scope_rows
-                columns={row[1] for row in db.execute('PRAGMA table_info(local_scopes)')}
-                if not {'run','unit','invocation','cgroup','state'}<=columns: raise ManualLifecycleError('local scope termination or launch remains unresolved')
-                if unresolved_scope_rows(db,run): raise ManualLifecycleError('local scope termination or launch remains unresolved')
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engineering_workspaces'").fetchone() and db.execute('SELECT 1 FROM engineering_workspaces WHERE run=? AND assignment IS NOT NULL',(run,)).fetchone(): raise ManualLifecycleError('engineering workspace claim remains unresolved')
+            if state['incarnation']!=incarnation or state['status']!='pending' or worker!=(incarnation,'assigned') or not job or job[0] not in ('cancelling','uncertain','completed'): raise ManualLifecycleError('confirmation stale, duplicate, or conflicting')
+            if job[0]=='completed' and (db.execute("SELECT status FROM graph_runs WHERE id=?",(run,)).fetchone()!=('completed',) or db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone()): raise ManualLifecycleError('completed run not fenced')
+            self._require_stopped_resources(db,run)
             db.execute("UPDATE manual_assignments SET state='stopped',attestation=? WHERE run=?",(attestation,run))
             db.execute("UPDATE manual_workers SET state='stopped' WHERE target=?",(self.target['manual_target'],))
-            db.execute("UPDATE jobs SET status='cancelled',token=NULL,expires=NULL WHERE run=?",(run,))
+            if job[0]!='completed': db.execute("UPDATE jobs SET status='cancelled',token=NULL,expires=NULL WHERE run=?",(run,))
             db.execute('COMMIT'); return self.status(run)
         except Exception: db.execute('ROLLBACK'); raise
     def register_replacement(self,old,new,attestation):

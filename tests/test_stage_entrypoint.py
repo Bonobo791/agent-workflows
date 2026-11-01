@@ -22,7 +22,11 @@ class StageEntrypointTests(unittest.TestCase):
         self._run_marketing(with_asset=False,with_snapshots=True)
     def test_review_package_includes_verified_blocked_media_findings(self):
         self._run_marketing(with_asset=True,asset_blocked=True)
-    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False):
+    def test_platform_block_evidence_must_remain_verified(self):
+        self._run_marketing(with_asset=True,platform_blocked=True)
+    def test_approved_package_completes_with_current_platform_block(self):
+        self._run_marketing(with_asset=True,platform_blocked=True,complete_job=True)
+    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False,platform_blocked=False,complete_job=False):
         class External(http.server.BaseHTTPRequestHandler):
             version='v1'; owner=None; available=True
             def log_message(self,*args): pass
@@ -159,11 +163,16 @@ class StageEntrypointTests(unittest.TestCase):
                         with zipfile.ZipFile(project,'w') as archive: archive.writestr('film.html','<html>synthetic project</html>')
                         project_ref=service.artifacts.put(project.getvalue()); terminal=service.artifacts.put(b'synthetic terminal evidence')
                         class Platform:
+                            valid=True
                             def check(self,run,brief_ref,brief):
+                                if platform_blocked:
+                                    self.proof=service.artifacts.put(json.dumps({'brief_ref':brief_ref,'reason':'Exact image requirements unavailable.','findings':[]}).encode())
+                                    return {'blocked_ref':self.proof}
                                 now=time.time(); source=service.artifacts.put(b'synthetic platform requirements')
                                 assets=[{**{key:item[key] for key in ('channel','kind','width','height','duration_seconds')},'source_ref':source,'supported':True} for item in brief['assets']]
                                 return service.artifacts.put(json.dumps({'brief_ref':brief_ref,'checked_at':now,'expires_at':now+300,'assets':assets}).encode())
                             def verify(self,*args): return True
+                            def verify_blocked(self,run,brief_ref,brief,proof): return self.valid and proof==self.proof and json.loads(service.artifacts.get(proof))['brief_ref']==brief_ref
                         class Backend:
                             timeout_seconds=10
                             def ready(self): return True
@@ -212,12 +221,17 @@ class StageEntrypointTests(unittest.TestCase):
                     for _ in range(30):
                         result=control.handle('x'*40,req)
                         if result.get('status')=='awaiting_approval': control.handle('x'*40,{'action':'approve','run':'run-1','approval':'freeze','version':result['version']})
+                        if platform_blocked and result.get('stage')=='instagram_review':
+                            from runner.control import ControlError
+                            service.openfilm_platform_authority.valid=False
+                            with self.assertRaises(ControlError): control.handle('x'*40,req)
+                            service.openfilm_platform_authority.valid=True
                         if result.get('stage')=='assembly' and result.get('status')=='awaiting_review': break
                     self.assertEqual(result['status'],'awaiting_review'); self.assertEqual(Engine.canonical_reviews,2); self.assertEqual(Engine.source_reviews,3); self.assertEqual(len(Engine.resumed),1)
-                    self.assertEqual(service.graph.get('run-1','asset_production')['status'],'passed' if with_asset and not asset_blocked else 'blocked')
+                    self.assertEqual(service.graph.get('run-1','asset_production')['status'],'passed' if with_asset and not asset_blocked and not platform_blocked else 'blocked')
                     self.assertEqual(service.graph.get('run-1','reddit_review')['status'],'passed')
                     package=json.loads(service.artifacts.get(service.graph.get('run-1','assembly')['version']))
-                    if with_asset and not asset_blocked:
+                    if with_asset and not asset_blocked and not platform_blocked:
                         for channel in ('linkedin','x','facebook','instagram','reddit'): self.assertEqual(package['stages'][channel+'_review']['status'],'passed')
                     if asset_blocked:
                         self.assertEqual(package['stages']['instagram_review']['status'],'blocked')
@@ -229,6 +243,15 @@ class StageEntrypointTests(unittest.TestCase):
                     self.assertIn('claim-1',package['stages']['brief']['contents'][1])
                     self.assertIn('synthetic linkedin_draft',package['stages']['linkedin_draft']['contents'][0])
                     self.assertTrue(service.verify_terminal('run-1'))
+                    if platform_blocked:
+                        from runner.control import ControlError
+                        service.openfilm_platform_authority.valid=False
+                        self.assertFalse(service.verify_terminal('run-1'))
+                        decision={'action':'human_review_decision','run':'run-1','queue_claim':q['token'],'graph_claim':g,'version':service.graph.get('run-1','assembly')['version'],'decision':'approved'}
+                        with self.assertRaises(ControlError): control.handle('x'*40,decision)
+                        self.assertEqual(service.graph.db.execute('SELECT count(*) FROM human_review_decisions').fetchone()[0],0)
+                        service.openfilm_platform_authority.valid=True
+                        self.assertTrue(service.verify_terminal('run-1'))
                     if with_snapshots:
                         from runner.control import ControlError
                         service.source_snapshots.fetcher.max_bytes=512
@@ -249,40 +272,48 @@ class StageEntrypointTests(unittest.TestCase):
                     service.graph.db.execute('DROP TRIGGER reject_human_audit')
                     self.assertEqual(control.handle('x'*40,decision)['decision'],'approved')
                     self.assertEqual(control.handle('x'*40,{'action':'human_review_status','run':'run-1'})['decision']['version'],version)
-                    with self.assertRaises(ControlError): control.handle('x'*40,decision)
-                    brief=package['stages']['brief']['artifact']; review=package['stages']['canonical_review']['artifact']; channel=package['stages']['linkedin_review']['artifact']
-                    proof=json.loads(service.artifacts.get(review['_review_evidence']))
-                    source_review=json.loads(service.artifacts.get(brief['_source_review'])); coverage=json.loads(service.artifacts.get(review['_source_coverage']))
-                    self.assertIsNone(source_review['draft_ref']); self.assertIsNotNone(coverage['draft_ref'])
-                    self.assertNotEqual(source_review['review_session'],coverage['review_session'])
-                    self.assertNotEqual(coverage['review_session'],package['stages']['canonical_draft']['artifact']['session_id'])
-                    refs=[brief['outputs'][1],brief['_source_verification'],brief['_source_review'],source_review['tool_evidence_ref'],review['_source_coverage'],coverage['review_result_ref'],review['_review_evidence'],proof['review_output_ref'],channel['_review_evidence']]
-                    if with_asset:
-                        asset=json.loads(service.artifacts.get(service.graph.get('run-1','asset_production')['version']))
-                        manifest=json.loads(service.artifacts.get(asset['manifest_ref']))
-                        self.assertEqual(service.artifacts.get(manifest['assets'][0]['artifact_ref']),image)
-                        refs.extend([asset['manifest_ref'],asset['access_ref'],asset['report_ref'],asset['response_ref'],manifest['platform_ref'],manifest['assets'][0]['artifact_ref']])
-                    for ref in refs:
-                        path=Path(service.artifacts.directory)/ref; original=path.read_bytes()
-                        path.unlink(); self.assertFalse(service.verify_terminal('run-1'))
-                        path.write_bytes(original); path.chmod(0o400); self.assertTrue(service.verify_terminal('run-1'))
-                        path.chmod(0o600); path.write_bytes(b'tampered'); path.chmod(0o400)
-                        self.assertFalse(service.verify_terminal('run-1'))
-                        path.chmod(0o600); path.write_bytes(original); path.chmod(0o400); self.assertTrue(service.verify_terminal('run-1'))
-                    External.available=False
-                    unavailable=control.handle('x'*40,req)
-                    self.assertEqual(unavailable['reason'],'task freshness unavailable')
-                    self.assertIsNotNone(service.graph.get('run-1','assembly'))
-                    External.available=True
-                    service.graph.invalidate('run-1','asset_brief',service.graph.prepare('run-1','asset_brief',g),g)
-                    Engine.bad_asset_brief=True
-                    invalid=control.handle('x'*40,req)
-                    self.assertEqual((invalid['stage'],invalid['status']),('asset_brief','blocked'))
-                    External.owner='another-owner'
-                    stale=control.handle('x'*40,req)
-                    self.assertEqual(stale['reason'],'task changed; readmission required')
-                    self.assertIsNone(service.graph.get('run-1','assembly'))
-                    self.assertIsNone(control.handle('x'*40,{'action':'human_review_status','run':'run-1'})['decision'])
+                    brief=package['stages']['brief']['artifact']
+                    if complete_job:
+                        service.finish_job('run-1',q['token'],g)
+                        self.assertEqual(service.queue.get('run-1')['status'],'completed')
+                        service.request_lifecycle_stop('run-1')
+                        self.assertEqual(service.lifecycle.confirm_operator_stop('run-1','inc','terminated_and_fenced')['status'],'stopped')
+                        self.assertEqual(service.queue.get('run-1')['status'],'completed')
+                    else:
+                        with self.assertRaises(ControlError): control.handle('x'*40,decision)
+                        brief=package['stages']['brief']['artifact']; review=package['stages']['canonical_review']['artifact']; channel=package['stages']['linkedin_review']['artifact']
+                        proof=json.loads(service.artifacts.get(review['_review_evidence']))
+                        source_review=json.loads(service.artifacts.get(brief['_source_review'])); coverage=json.loads(service.artifacts.get(review['_source_coverage']))
+                        self.assertIsNone(source_review['draft_ref']); self.assertIsNotNone(coverage['draft_ref'])
+                        self.assertNotEqual(source_review['review_session'],coverage['review_session'])
+                        self.assertNotEqual(coverage['review_session'],package['stages']['canonical_draft']['artifact']['session_id'])
+                        refs=[brief['outputs'][1],brief['_source_verification'],brief['_source_review'],source_review['tool_evidence_ref'],review['_source_coverage'],coverage['review_result_ref'],review['_review_evidence'],proof['review_output_ref'],channel['_review_evidence']]
+                        if with_asset and not platform_blocked:
+                            asset=json.loads(service.artifacts.get(service.graph.get('run-1','asset_production')['version']))
+                            manifest=json.loads(service.artifacts.get(asset['manifest_ref']))
+                            self.assertEqual(service.artifacts.get(manifest['assets'][0]['artifact_ref']),image)
+                            refs.extend([asset['manifest_ref'],asset['access_ref'],asset['report_ref'],asset['response_ref'],manifest['platform_ref'],manifest['assets'][0]['artifact_ref']])
+                        for ref in refs:
+                            path=Path(service.artifacts.directory)/ref; original=path.read_bytes()
+                            path.unlink(); self.assertFalse(service.verify_terminal('run-1'))
+                            path.write_bytes(original); path.chmod(0o400); self.assertTrue(service.verify_terminal('run-1'))
+                            path.chmod(0o600); path.write_bytes(b'tampered'); path.chmod(0o400)
+                            self.assertFalse(service.verify_terminal('run-1'))
+                            path.chmod(0o600); path.write_bytes(original); path.chmod(0o400); self.assertTrue(service.verify_terminal('run-1'))
+                        External.available=False
+                        unavailable=control.handle('x'*40,req)
+                        self.assertEqual(unavailable['reason'],'task freshness unavailable')
+                        self.assertIsNotNone(service.graph.get('run-1','assembly'))
+                        External.available=True
+                        service.graph.invalidate('run-1','asset_brief',service.graph.prepare('run-1','asset_brief',g),g)
+                        Engine.bad_asset_brief=True
+                        invalid=control.handle('x'*40,req)
+                        self.assertEqual((invalid['stage'],invalid['status']),('asset_brief','blocked'))
+                        External.owner='another-owner'
+                        stale=control.handle('x'*40,req)
+                        self.assertEqual(stale['reason'],'task changed; readmission required')
+                        self.assertIsNone(service.graph.get('run-1','assembly'))
+                        self.assertIsNone(control.handle('x'*40,{'action':'human_review_status','run':'run-1'})['decision'])
                 finally: service.lifecycle.close(); service.close(); engine.shutdown(); engine_thread.join(); engine.server_close()
                 import sqlite3
                 from contextlib import closing
@@ -294,6 +325,11 @@ class StageEntrypointTests(unittest.TestCase):
                     tools=reopened.execute("SELECT role,tool_kind,status,input_present,output_present FROM tool_audit WHERE run='run-1' ORDER BY id").fetchall()
                     self.assertTrue(tools)
                     self.assertTrue(all(row==('source_review','mcpToolCall','completed',1,1) for row in tools))
-                    self.assertTrue(reopened.execute("SELECT 1 FROM graph_audit WHERE run='run-1' AND status='invalidated'").fetchone())
+                    if complete_job:
+                        self.assertEqual(reopened.execute("SELECT status FROM jobs WHERE run='run-1'").fetchone(),('completed',))
+                        self.assertEqual(reopened.execute("SELECT status FROM graph_runs WHERE id='run-1'").fetchone(),('completed',))
+                        self.assertFalse(reopened.execute("SELECT 1 FROM graph_claims WHERE run='run-1'").fetchone())
+                        self.assertTrue(reopened.execute("SELECT 1 FROM claim_audit WHERE run='run-1' AND status='released'").fetchone())
+                    else:self.assertTrue(reopened.execute("SELECT 1 FROM graph_audit WHERE run='run-1' AND status='invalidated'").fetchone())
                 restored=json.loads(ArtifactStore(root+'/artifacts').get(version))
                 self.assertEqual(restored['stages']['brief']['artifact']['_source_review'],brief['_source_review'])

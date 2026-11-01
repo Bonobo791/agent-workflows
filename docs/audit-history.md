@@ -126,7 +126,9 @@ exact head and review-evidence reference; its export only includes the keyed run
 and allowlisted state. It does not backfill prior blockers.
 `human_review_audit` similarly retains marketing package decisions in the same
 transaction as the decision, with the exact package version and actor kept
-private. Its projection exports only keyed run and approved/rejected status.
+private. Decision recording verifies the exact row, matching audit and current
+claims before commit; a stored decision without its matching audit requires
+inspection. Its projection exports only keyed run and approved/rejected status.
 
 The tables are limited to the fields above, but those fields are not redacted or
 validated as non-sensitive. They remain private. `runner.audit_export` offers a

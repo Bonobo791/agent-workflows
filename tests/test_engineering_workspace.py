@@ -2,6 +2,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+import time
 from pathlib import Path
 from runner.engineering_workspace import EngineeringWorkspace, WorkspaceError
 from runner.worker import build_control
@@ -218,6 +219,49 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.registry.release_local('run-1',assignment,unit)
             self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(None,))
         finally:scopes.close()
+    def test_completed_run_releases_only_a_terminated_bound_workspace(self):
+        from types import SimpleNamespace
+        from runner.control import ControlError
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        service=self.service; service.create('run-1','engineering','task'); service.enqueue('run-1')
+        queue=service.lifecycle.claim(); service.claim('run-1')
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args)); assignment='job-'+'a'*48
+        self.registry.claim('run-1',assignment,self.policy)
+        backend=Backend(); service.model_supervisor=SimpleNamespace(backend=backend,engineering_root=str(self.root))
+        scopes=LocalScopes(str(self.root/'state.db'),backend)
+        try:
+            unit=scopes.reserve('run-1'); backend.unit=unit; scopes.bind('run-1',unit)
+            self.registry.bind_local_scope('run-1',assignment,unit)
+            service.verify_terminal=lambda _:True
+            service.queue.finish('run-1',queue['token'],verify_completed=lambda _:True)
+            self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
+            release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
+            with self.assertRaises(ControlError): self.control.handle('x'*40,release)
+            self.control.handle('x'*40,{'action':'stop_local_scope','run':'run-1','unit':unit})
+            for table,field,value in (('graph_runs','id','cancelled'),('jobs','run','uncertain')):
+                self.registry.db.execute('UPDATE '+table+' SET status=? WHERE '+field+'=?',(value,'run-1'))
+                with self.subTest(table=table), self.assertRaises(ControlError): self.control.handle('x'*40,release)
+                self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+                self.registry.db.execute('UPDATE '+table+' SET status=? WHERE '+field+'=?',('completed','run-1'))
+            self.registry.db.execute("INSERT INTO graph_claims(run,task_id,token,expires) SELECT id,task_id,'unexpected',? FROM graph_runs WHERE id='run-1'",(time.time()+60,))
+            with self.assertRaisesRegex(WorkspaceError,'graph claim'):
+                self.registry.release_local('run-1',assignment,unit,fenced=('worker','inc'))
+            self.registry.db.execute("DELETE FROM graph_claims WHERE run='run-1'")
+            for trigger in ("CREATE TRIGGER corrupt_recovery BEFORE INSERT ON workspace_recovery_audit BEGIN SELECT RAISE(IGNORE);END",
+                            "CREATE TRIGGER corrupt_recovery AFTER INSERT ON workspace_recovery_audit BEGIN UPDATE workspace_recovery_audit SET created=0 WHERE id=NEW.id;END",
+                            "CREATE TRIGGER corrupt_recovery AFTER INSERT ON workspace_recovery_audit BEGIN DELETE FROM workspace_recovery_audit WHERE id=NEW.id;END"):
+                self.registry.db.execute(trigger)
+                with self.subTest(trigger=trigger),self.assertRaisesRegex(WorkspaceError,'recovery audit'):
+                    self.registry.release_local('run-1',assignment,unit,fenced=('worker','inc'))
+                self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+                self.assertEqual(self.registry.db.execute('SELECT count(*) FROM workspace_recovery_audit').fetchone(),(0,))
+                self.registry.db.execute('DROP TRIGGER corrupt_recovery')
+            self.assertEqual(self.control.handle('x'*40,release),{'released':True})
+            self.assertEqual(service.lifecycle.confirm_operator_stop('run-1','inc','terminated_and_fenced')['status'],'stopped')
+            self.assertEqual(service.queue.get('run-1')['status'],'completed')
+        finally: scopes.close()
+
     def test_fenced_control_releases_only_exact_terminated_local_workspace(self):
         from types import SimpleNamespace
         from unittest.mock import patch
@@ -316,12 +360,19 @@ class EngineeringWorkspaceTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
     def test_fenced_workspace_recovery_with_real_scope(self):
+        self._real_scope_workspace_recovery(False)
+
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_completed_workspace_recovery_with_real_scope(self):
+        self._real_scope_workspace_recovery(True)
+
+    def _real_scope_workspace_recovery(self,completed):
         import time
         from types import SimpleNamespace
         from runner.control import ControlError
         from runner.local_scope import LocalScopes, SystemdScopes, ScopeError
         service=self.service;service.create('run-1','engineering','task');service.enqueue('run-1')
-        self.control.handle('x'*40,{'action':'manual_claim'})
+        queue=self.control.handle('x'*40,{'action':'manual_claim'})['claim']
         self.registry.register(*self.args,self.registry.binding_hash(*self.args));assignment='job-'+'a'*48
         self.registry.claim('run-1',assignment,self.policy)
         backend=SystemdScopes(os.environ);service.model_supervisor=SimpleNamespace(backend=backend,engineering_root=str(self.root))
@@ -335,6 +386,9 @@ class EngineeringWorkspaceTests(unittest.TestCase):
                     if launcher.poll() is not None or time.monotonic()>=deadline: raise
                     time.sleep(.05)
             group=backend.inspect(unit)['cgroup'];self.registry.bind_local_scope('run-1',assignment,unit)
+            if completed:
+                service.verify_terminal=lambda _:True
+                service.queue.finish('run-1',queue['token'],verify_completed=lambda _:True)
             stop=self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
             self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
             release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
@@ -345,6 +399,7 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             with self.assertRaises(ControlError): self.control.handle('x'*40,confirm)
             self.assertEqual(self.control.handle('x'*40,release),{'released':True})
             self.assertEqual(self.control.handle('x'*40,confirm)['status'],'stopped')
+            self.assertEqual(service.queue.get('run-1')['status'],'completed' if completed else 'cancelled')
         finally:
             subprocess.run(['/usr/bin/systemctl','--user','stop',unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
             try: launcher.wait(timeout=5)

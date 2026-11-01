@@ -233,7 +233,11 @@ class ServiceTests(unittest.TestCase):
         from runner.queue import QueueError
         with tempfile.TemporaryDirectory() as root:
             s=Service(root); s.create('r','marketing','task'); s.enqueue('r'); claim=s.queue.claim('worker',60)
-            with self.assertRaises(QueueError): s.finish_job('r',claim['token'])
+            graph_claim=s.claim('r');s.task_intake=SimpleNamespace(revalidate=lambda _:True)
+            from unittest.mock import patch
+            with patch.object(s,'verify_terminal',wraps=s.verify_terminal) as verified:
+                with self.assertRaisesRegex(QueueError,'verified workflow completion required'):s.finish_job('r',claim['token'],graph_claim)
+                verified.assert_called_once_with('r')
             self.assertEqual(s.queue.get('r')['status'],'running'); s.close()
 
     def test_terminal_check_rejects_changed_required_skill(self):
@@ -257,3 +261,40 @@ class ServiceTests(unittest.TestCase):
             s.complete('r','assembly',token,{})
             self.assertTrue(s.verify_terminal('r')); file.write_text('changed')
             self.assertFalse(s.verify_terminal('r')); s.close()
+
+    def test_stop_request_rejects_completed_graph_with_unfinished_job(self):
+        from pathlib import Path
+        from runner.manual_lifecycle import ManualLifecycle
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); service.lifecycle=ManualLifecycle(str(Path(root)/'state.db'),'worker','inc')
+            try:
+                service.create('r','marketing','task'); service.enqueue('r'); service.lifecycle.claim(); service.claim('r')
+                service.graph.db.execute("UPDATE graph_runs SET status='completed' WHERE id='r'")
+                with self.assertRaises(ServiceError): service.request_lifecycle_stop('r')
+                self.assertEqual(service.graph.db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
+            finally: service.lifecycle.close(); service.close()
+
+    def test_controller_lifecycle_confirmation_preserves_completed_job(self):
+        from runner.lifecycle import Lifecycle
+        from runner.service import ServiceError
+        from tests.test_lifecycle import Observer,Controller
+        for condition in ('valid','automatic','graph_changed','claim_remains'):
+            with self.subTest(condition=condition),tempfile.TemporaryDirectory() as root:
+                service=Service(root);observer=Observer()
+                service.lifecycle=Lifecycle(root+'/state.db',{'origin':'https://coolify.example.invalid','service':'svc','application':'app','controller_id':'controller-v1','permission_scope':'dedicated-team-deploy','verifier_id':'observer-v1'},observer,Controller())
+                try:
+                    service.create('r','engineering','task');service.enqueue('r');queue=service.queue.claim('worker',60);claim=service.claim('r')
+                    service.verify_terminal=lambda _:True;service.finish_job('r',queue['token'],claim)
+                    service.lifecycle.register('r','inc-1')
+                    if condition=='automatic':service.lifecycle.enable_auto(approved_policy=service.lifecycle.policy_hash,verify_policy=lambda _:True)
+                    service.request_lifecycle_stop('r',automatic=condition=='automatic')
+                    observer.current=None;observer.stopped=True
+                    if condition=='graph_changed':service.graph.db.execute("UPDATE graph_runs SET status='active' WHERE id='r'")
+                    if condition=='claim_remains':service.graph.db.execute("INSERT INTO graph_claims(task_id,run,token,expires) VALUES('task','r','unexpected',9999999999)")
+                    if condition in ('valid','automatic'):
+                        self.assertEqual(service.confirm_lifecycle_stop('r','proof')['status'],'stopped')
+                        self.assertEqual(service.confirm_lifecycle_stop('r','proof')['status'],'stopped')
+                    else:
+                        with self.assertRaisesRegex(ServiceError,'completed run not fenced'):service.confirm_lifecycle_stop('r','proof')
+                    self.assertEqual(service.queue.get('r')['status'],'completed')
+                finally:service.lifecycle.close();service.close()

@@ -24,6 +24,16 @@ def checkpoint_fixture(root,status='blocked'):
     service.task_intake=Intake();service.stage_dispatcher=Dispatcher();return service,None
 
 
+def legacy_completed_fixture(service,queue,claim):
+    from types import SimpleNamespace
+    from runner.human_review import HumanReview
+    service.graph.db.execute("INSERT INTO graph_stages VALUES('r','assembly','awaiting_review','package',1)")
+    service.task_intake=SimpleNamespace(revalidate=lambda _:True);service.verify_terminal=lambda _:True
+    service.human_review=HumanReview(service)
+    service.human_review.decide('r',queue['token'],claim,'package','approved')
+    service.queue.finish('r',queue['token'],verify_completed=lambda _:True)
+
+
 class AutoWorkerTests(unittest.TestCase):
     def test_idle_checkpoint_allows_fresh_worker_claim_without_old_tokens(self):
         from types import SimpleNamespace
@@ -336,6 +346,88 @@ class AutoWorkerTests(unittest.TestCase):
             stopped._set(status='awaiting_approval',run='r');stopped.stop()
             self.assertFalse(stopped.status()['checkpoint_available'])
 
+    def test_stop_and_status_are_responsive_during_completion_preflight(self):
+        import threading
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);entered=threading.Event();release=threading.Event();completed=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                service.task_intake=SimpleNamespace(config={'run':'r'},submit_configured=lambda:(service.create('r','marketing','task'),service.enqueue('r')))
+                service.stage_dispatcher=SimpleNamespace(step=lambda *_:{'status':'awaiting_review'})
+                service.human_review=SimpleNamespace(current=lambda _: {'decision':'approved'})
+                def prepare(*_):
+                    entered.set();release.wait(5)
+                    return lambda:completed.append(True)
+                service._prepare_job_completion=prepare
+                return service,None
+            controller=Service(root);controller.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();self.assertTrue(entered.wait(5))
+                started=time.monotonic();worker.status();worker.stop(controller)
+                self.assertLess(time.monotonic()-started,1)
+                self.assertEqual(controller.queue.get('r')['status'],'cancelling')
+                release.set();worker.thread.join(timeout=5);self.assertFalse(worker.thread.is_alive())
+                self.assertEqual(worker.status()['status'],'inspection_required');self.assertEqual(completed,[])
+            finally:
+                release.set()
+                if worker.thread:worker.thread.join(timeout=5)
+                controller.lifecycle.close();controller.close()
+
+    def test_completion_preflight_closes_owner_request_gate(self):
+        import threading
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);entered=threading.Event();release=threading.Event();completed=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                service.task_intake=SimpleNamespace(config={'run':'r'},submit_configured=lambda:(service.create('r','marketing','task'),service.enqueue('r')))
+                service.stage_dispatcher=SimpleNamespace(step=lambda *_:{'status':'awaiting_review','version':'a'*64})
+                service.human_review=SimpleNamespace(current=lambda _: {'decision':'approved'})
+                def prepare(*_):
+                    entered.set();release.wait(5)
+                    return lambda:completed.append(True)
+                service._prepare_job_completion=prepare
+                return service,None
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();self.assertTrue(entered.wait(5))
+                with self.assertRaisesRegex(AutoWorkerError,'review unavailable'):worker.request_decision('r','a'*64,'rejected')
+                with self.assertRaisesRegex(AutoWorkerError,'unavailable'):worker.request_action('r','pr_propose',{})
+                release.set();worker.thread.join(timeout=5);self.assertFalse(worker.thread.is_alive())
+                self.assertEqual(worker.status()['status'],'completed');self.assertEqual(completed,[True])
+            finally:
+                release.set()
+                if worker.thread:worker.thread.join(timeout=5)
+
+    def test_owner_request_queued_before_completion_is_processed(self):
+        import threading
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);reading=threading.Event();release=threading.Event();decisions=[];prepared=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                service.task_intake=SimpleNamespace(config={'run':'r'},submit_configured=lambda:(service.create('r','marketing','task'),service.enqueue('r')))
+                service.stage_dispatcher=SimpleNamespace(step=lambda *_:{'status':'awaiting_review','version':'a'*64})
+                def current(_):
+                    if not reading.is_set():reading.set();release.wait(5)
+                    return {'decision':'rejected' if decisions else 'approved'}
+                service.human_review=SimpleNamespace(current=current,decide=lambda *args:decisions.append(args[-1]))
+                service._prepare_job_completion=lambda *_:prepared.append(True)
+                return service,None
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();self.assertTrue(reading.wait(5))
+                self.assertTrue(worker.request_decision('r','a'*64,'rejected')['pending'])
+                release.set();deadline=time.monotonic()+5
+                while worker.status().get('status') not in ('revision_required','completed','inspection_required') and time.monotonic()<deadline:time.sleep(.01)
+                self.assertEqual(worker.status()['status'],'revision_required')
+                self.assertEqual(decisions,['rejected']);self.assertEqual(prepared,[])
+            finally:
+                release.set();worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
     def test_stop_does_not_cancel_completion_already_in_progress(self):
         import threading
         with tempfile.TemporaryDirectory() as root:
@@ -349,9 +441,9 @@ class AutoWorkerTests(unittest.TestCase):
                     def step(self,*args): return {'status':'awaiting_review'}
                 class Human:
                     def current(self,run): return {'decision':'approved'}
-                def finish(run,token):
+                def finish(run,token,graph_token):
                     entered.set(); release.wait(5); service.queue.finish(run,token,verify_completed=lambda _:True)
-                service.task_intake=Intake(); service.stage_dispatcher=Dispatcher(); service.human_review=Human(); service.finish_job=finish
+                service.task_intake=Intake(); service.stage_dispatcher=Dispatcher(); service.human_review=Human(); service._prepare_job_completion=lambda run,token,claim:lambda:finish(run,token,claim)
                 return service,None
             controller=Service(root); controller.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
             worker=AutoWorker(factory,root)
@@ -365,6 +457,61 @@ class AutoWorkerTests(unittest.TestCase):
                 release.set()
                 if worker.thread: worker.thread.join(timeout=5)
                 controller.lifecycle.close(); controller.close()
+
+    def test_completed_job_can_be_fenced_and_worker_replaced(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); service.lifecycle=ManualLifecycle(str(Path(root)/'state.db'),'worker','inc')
+            try:
+                service.create('r','marketing','task'); service.enqueue('r')
+                queue=service.lifecycle.claim(); graph_claim=service.claim('r')
+                legacy_completed_fixture(service,queue,graph_claim)
+                from runner.service import ServiceError
+                with self.assertRaises(ServiceError): service.cancel('r',graph_claim)
+                service.request_lifecycle_stop('r')
+                self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('completed',))
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+                self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
+                self.assertEqual(service.lifecycle.confirm_operator_stop('r','inc','terminated_and_fenced')['status'],'stopped')
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+                service.lifecycle.register_replacement('inc','inc-next','replacement_started')
+                service.create('r2','marketing','task-2'); service.enqueue('r2')
+                self.assertEqual(service.lifecycle.claim()['run'],'r2')
+            finally:
+                service.lifecycle.close(); service.close()
+
+    def test_completed_shutdown_resumes_after_interruption_between_fence_and_stop(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=str(Path(root)/'state.db'); service=Service(root); service.lifecycle=ManualLifecycle(path,'worker','inc')
+            service.create('r','marketing','task'); service.enqueue('r'); queue=service.lifecycle.claim(); claim=service.claim('r')
+            legacy_completed_fixture(service,queue,claim)
+            service._cancel('r',completed=True)
+            service.lifecycle.close(); service.close()
+            service=Service(root); service.lifecycle=ManualLifecycle(path,'worker','inc')
+            try:
+                service.request_lifecycle_stop('r')
+                self.assertEqual(service.lifecycle.confirm_operator_stop('r','inc','terminated_and_fenced')['status'],'stopped')
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+                self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('completed',))
+            finally: service.lifecycle.close(); service.close()
+
+    def test_completed_job_cannot_confirm_stop_with_unresolved_scope(self):
+        from runner.local_scope import LocalScopes
+        from runner.manual_lifecycle import ManualLifecycleError
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); service.lifecycle=ManualLifecycle(str(Path(root)/'state.db'),'worker','inc')
+            scopes=LocalScopes(str(Path(root)/'state.db'),Backend())
+            try:
+                service.create('r','marketing','task'); service.enqueue('r')
+                queue=service.lifecycle.claim(); claim=service.claim('r'); scopes.reserve('r')
+                legacy_completed_fixture(service,queue,claim)
+                service.request_lifecycle_stop('r')
+                with self.assertRaises(ManualLifecycleError): service.lifecycle.confirm_operator_stop('r','inc','terminated_and_fenced')
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+                self.assertEqual(service.lifecycle.status('r')['status'],'pending')
+                scopes._require_recovery_fence('r',('worker','inc'))
+            finally:
+                scopes.close(); service.lifecycle.close(); service.close()
 
     def test_stop_before_claim_prevents_late_assignment(self):
         import threading

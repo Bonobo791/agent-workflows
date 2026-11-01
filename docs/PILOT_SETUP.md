@@ -128,9 +128,26 @@ must not contain private skills, credentials, user data or session histories.
   `OPENFILM_PODMAN_IMAGE` and `OPENFILM_PODMAN_SOCKET` runs an offline still
   render and independent image review in that fixture. Its platform authority
   is synthetic; the probe does not establish actual platform compliance.
+  The fixture uses the real manual assignment and launch fence for the local
+  model and renderer, then requests a manual stop and verifies the fence closes.
+  It does not simulate an in-flight failure or establish crash recovery.
+  As a negative platform control, set `WORKFLOW_TEST_PLATFORM_SOURCE` to an
+  official source that does not establish the requested Instagram API feed PNG
+  specifications. The test requires a verified platform block and confirms no
+  render container was created. A passing probe proves the evidence gate
+  blocked; it does not prove the platform rejects that image.
+  Source-backed block findings are revalidated against the current brief and
+  authority before assembly and again before a human decision. If their proof
+  is missing, changed or stale, the package cannot be approved as verified.
   `WORKFLOW_TEST_DECISION=1` additionally exercises a fixture-only decision on
   the exact assembled version, with synthetic task freshness. It is not a
-  human decision on a real package.
+  human decision on a real package. Decision and completion preflight verify
+  terminal evidence before fetching task freshness, outside the worker stop lock.
+  The final transaction rechecks local evidence, claims and the exact decision
+  audit, including its timestamp. Remote task freshness cannot be made atomic
+  with the local database; a tracker change after that fetch remains possible.
+  Recovering a legacy completed job also requires terminal evidence and current
+  approval, and records any graph-claim release before marking the graph complete.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.
@@ -138,6 +155,15 @@ must not contain private skills, credentials, user data or session histories.
   evaluates the requested asset against the fetched source; missing, ambiguous
   or unsupported requirements block production. These judgments are not a
   guarantee that a platform will accept the final media.
+  Recording a platform review rechecks the source snapshot, policy, and both
+  task claims in the same transaction; stale or missing source evidence leaves
+  no committed platform-review record.
+  The opt-in `tests.test_platform_reviewer_live` positive control uses LinkedIn's
+  public profile-photo guidance for a synthetic 400×400 PNG and checks that
+  changed dimensions or surface invalidate the proof. Set
+  `WORKFLOW_TEST_REAL_PLATFORM=1`, `WORKFLOW_TEST_SYSTEMD=1` and
+  `CODEX_TEST_EXECUTABLE` to run it. This profile-photo check does not establish
+  support for a LinkedIn feed post or an Instagram asset.
 - Experimental `WORKFLOW_AUDIO_CONFIG_FILE`: owner-only JSON with exactly
   `runtime_root`, `python_root`, `model_root`, `fingerprint`, and `languages`.
   The first three are separate canonical owner-controlled directories; the
@@ -194,6 +220,10 @@ When a running task has older reviews without these inputs, dispatch invalidates
 those reviews and the assembled package only with current claims and no
 unresolved work. The reviews must run again and any new package needs a new
 human decision; decisions on earlier package versions remain in history.
+While an owner decision is being applied or an approved package is completing,
+the automatic worker rejects new owner requests. Requests already queued before
+completion are processed first. Completion preflight still permits prompt stop
+and status requests; a recorded decision on one package version is immutable.
 The standard local worker constructs the renderer when the Podman runtime
 configuration is present. Its policy check verifies the socket owner and
 access, rootless Podman, seccomp, SELinux, the pinned image ID and the renderer
@@ -420,5 +450,14 @@ test. Local fake-Engine tests do not prove any of these host properties.
 The private metrics snapshot reports an approval wait after the dispatcher reaches a marketing freeze or engineering PR gate. It counts the observation only while both claims are live, the recorded upstream stage revision remains current, and the gate has not completed. A matching freeze approval removes that wait immediately. The observation does not grant approval; inspect the private control plane for the current action. Existing waits appear after the worker next dispatches. Alert rules and dashboards are local definitions and do not establish a deployed collector or notifications.
 
 The approval alert measures a continuous nonzero aggregate for one hour; it does not measure the age of each individual wait.
+
+After a marketing job completes, the manual worker remains assigned until the
+owner requests `manual_stop` and confirms that exact incarnation stopped and
+was fenced. This preserves the completed job and graph; unresolved scopes or
+workspace claims still block confirmation. Register a distinct replacement
+incarnation before claiming another task. Completion itself is not evidence
+that a worker or external request stopped.
+The completed-workspace handoff was tested with a disposable user systemd
+scope on 2026-11-01; the task and completed job were synthetic.
 
 On worker shutdown, an active automatic assignment is fenced before the control process exits. Fencing invalidates its claims and requests a manual lifecycle stop; it does not prove that an in-flight process or remote request has stopped. Inspect unresolved scopes and confirm termination before replacement or recovery.

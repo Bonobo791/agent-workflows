@@ -67,12 +67,17 @@ class JobQueue:
             if not row or row[0] not in ('queued','running'): raise QueueError('job unavailable')
             self.db.execute('UPDATE jobs SET status=? WHERE run=?',('cancelled' if row[0]=='queued' else 'cancelling',run)); self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
-    def finish(self,run,token,verify_completed=None):
+    def finish(self,run,token,verify_completed=None,verify_final=None):
         self.db.execute('BEGIN IMMEDIATE')
         try:
             self._owned(run,token,('running',))
             if not callable(verify_completed) or verify_completed(run) is not True: raise QueueError('verified workflow completion required')
-            self.db.execute("UPDATE jobs SET status='completed',token=NULL,expires=NULL WHERE run=?",(run,)); self.db.execute('COMMIT')
+            self._owned(run,token,('running',))
+            last=self.db.execute('SELECT COALESCE(MAX(id),0) FROM job_audit').fetchone()[0]
+            if self.db.execute("UPDATE jobs SET status='completed',token=NULL,expires=NULL WHERE run=? AND status='running'",(run,)).rowcount!=1: raise QueueError('job state changed')
+            if self.db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()!=('completed',None,None) or not self.db.execute("SELECT 1 FROM job_audit WHERE id>? AND schema_version=1 AND run=? AND status='completed'",(last,run)).fetchone(): raise QueueError('completion audit unavailable')
+            if verify_final is not None and (not callable(verify_final) or verify_final(run) is not True): raise QueueError('completion state changed')
+            self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
     def mark_uncertain(self,run,token):
         self.db.execute('BEGIN IMMEDIATE')

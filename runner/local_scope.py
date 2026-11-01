@@ -217,7 +217,7 @@ class LocalScopes:
             self.db.execute('ROLLBACK');raise
     def _require_recovery_fence(self,run,fenced):
         if not isinstance(fenced,tuple) or len(fenced)!=2 or any(not isinstance(x,str) or not x for x in fenced): raise ScopeError('invalid recovery fence')
-        fence=self.db.execute("SELECT 1 FROM manual_assignments a JOIN manual_workers w ON w.target=a.target JOIN jobs j ON j.run=a.run JOIN graph_runs g ON g.id=a.run WHERE a.run=? AND a.target=? AND a.incarnation=? AND a.state='pending' AND w.incarnation=a.incarnation AND w.state='assigned' AND j.status IN ('cancelling','uncertain') AND g.status='cancelled'",(run,*fenced)).fetchone()
+        fence=self.db.execute("SELECT 1 FROM manual_assignments a JOIN manual_workers w ON w.target=a.target JOIN jobs j ON j.run=a.run JOIN graph_runs g ON g.id=a.run WHERE a.run=? AND a.target=? AND a.incarnation=? AND a.state='pending' AND w.incarnation=a.incarnation AND w.state='assigned' AND ((j.status IN ('cancelling','uncertain') AND g.status='cancelled') OR (j.status='completed' AND g.status='completed'))",(run,*fenced)).fetchone()
         if not fence or self.db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone(): raise ScopeError('recovery fence changed')
     def _require_inactive(self,unit,invocation,cgroup):
         for _ in range(2):
