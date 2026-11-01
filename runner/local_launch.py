@@ -8,6 +8,9 @@ import subprocess
 import time
 
 
+RECEIPT_UNAVAILABLE='launch receipt unavailable'
+AUTHORIZATION_UNAVAILABLE='launch authorization unavailable'
+
 class LaunchError(RuntimeError): pass
 
 
@@ -17,37 +20,37 @@ class GuardedLaunch:
         self.receipt=None
 
     def receive(self,deadline,cancelled):
-        if self.ack_fd is None or not callable(cancelled): raise LaunchError('launch receipt unavailable')
+        if self.ack_fd is None or not callable(cancelled): raise LaunchError(RECEIPT_UNAVAILABLE)
         data=b''
         try:
             while True:
-                if cancelled() or time.monotonic()>=deadline: raise LaunchError('launch receipt unavailable')
+                if cancelled() or time.monotonic()>=deadline: raise LaunchError(RECEIPT_UNAVAILABLE)
                 ready,_,_=select.select([self.ack_fd],[],[],min(.1,deadline-time.monotonic()))
                 if not ready: continue
                 chunk=os.read(self.ack_fd,513-len(data))
                 if not chunk: break
                 data+=chunk
-                if len(data)>512: raise LaunchError('launch receipt unavailable')
+                if len(data)>512: raise LaunchError(RECEIPT_UNAVAILABLE)
             receipt=json.loads(data)
             if (not isinstance(receipt,dict) or set(receipt)!={'version','nonce','pid'}
                     or type(receipt['version']) is not int or receipt['version']!=1
                     or receipt['nonce']!=self.nonce or type(receipt['pid']) is not int
                     or receipt['pid']!=self.process.pid or self.process.poll() is not None):
-                raise LaunchError('launch receipt unavailable')
+                raise LaunchError(RECEIPT_UNAVAILABLE)
             self.receipt=(receipt['pid'],receipt['nonce'])
             return receipt
         except (OSError,ValueError,TypeError):
-            raise LaunchError('launch receipt unavailable') from None
+            raise LaunchError(RECEIPT_UNAVAILABLE) from None
         finally:
             os.close(self.ack_fd);self.ack_fd=None
 
     def release(self):
         if self.receipt!=(self.process.pid,self.nonce) or self.go_fd is None or self.process.poll() is not None:
-            raise LaunchError('launch authorization unavailable')
+            raise LaunchError(AUTHORIZATION_UNAVAILABLE)
         try:
-            if os.write(self.go_fd,b'G')!=1: raise LaunchError('launch authorization unavailable')
+            if os.write(self.go_fd,b'G')!=1: raise LaunchError(AUTHORIZATION_UNAVAILABLE)
         except OSError:
-            raise LaunchError('launch authorization unavailable') from None
+            raise LaunchError(AUTHORIZATION_UNAVAILABLE) from None
         finally:
             os.close(self.go_fd);self.go_fd=None
 

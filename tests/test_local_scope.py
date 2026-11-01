@@ -13,6 +13,23 @@ class Backend:
     def empty_cgroup(self,path): return self.empty
 
 class ScopeTests(unittest.TestCase):
+    def test_stop_rejects_identity_changed_after_active_observation(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            backend=Backend();scopes=LocalScopes(root+'/state.db',backend)
+            try:
+                unit=scopes.reserve('run');backend.unit=unit;scopes.bind('run',unit)
+                inspect=backend.inspect
+                def changed(value):
+                    result=inspect(value)
+                    scopes.db.execute('UPDATE local_scopes SET invocation=? WHERE unit=?',('b'*32,unit))
+                    return result
+                with patch.object(backend,'inspect',side_effect=changed):
+                    with self.assertRaises(ScopeError):scopes.stop('run',unit)
+                self.assertEqual(backend.stop_calls,0)
+                self.assertEqual(scopes.state('run',unit),'running')
+            finally:scopes.close()
+
     def test_pending_job_check_requires_exact_unit_and_empty_job(self):
         from unittest.mock import patch
         from runner.local_scope import SystemdScopes

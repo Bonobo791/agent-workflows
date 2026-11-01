@@ -82,4 +82,7 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
             launch.close()
             for stream in (launch.process.stdin,launch.process.stdout):
                 if stream is not None:stream.close()
+            try:launch.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                launch.process.kill();launch.process.wait(timeout=5)
         raise LocalProcessError('scope launch outcome unresolved') from None

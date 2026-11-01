@@ -319,11 +319,11 @@ recovery state.
 An unobserved launch or interrupted stop remains fenced, as does any unresolved
 engineering workspace claim. Operator stop confirmation still requires the exact
 incarnation and termination attestation.
-If a previously bound scope exits and systemd forgets the unit before the stop
-control runs, the recorded scope stays unresolved even when inspection shows an
-empty cgroup. The current control cannot establish that its launch request is
-quiescent; do not treat the empty observation as permission to confirm the stop
-or replay work. A trusted quiescence verifier and recovery control remain needed.
+If a legacy bound scope without a guarded receipt exits and systemd forgets the
+unit before the stop control runs, it stays unresolved even with an empty cgroup.
+Only the guarded-launch evidence described above qualifies for
+`reconcile_local_scope`; an empty observation alone never authorizes stop
+confirmation or replay. Interrupted stops still need separate trusted evidence.
 
 An opt-in real sandbox probe can check the specific parent cgroup file and user
 D-Bus socket on the local host:

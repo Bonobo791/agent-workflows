@@ -106,15 +106,19 @@ observed active scope; absent launches and interrupted stops remain unresolved.
 Manual stop confirmation now blocks when a local scope remains unresolved and
 reports the recorded scope identity. An interrupted stop can be reconciled only
 with a trusted quiescence verifier, an inactive matching scope, and an empty or
-removed recorded cgroup. No production quiescence verifier or recovery control
-is configured; an unobserved launch remains fenced.
+removed recorded cgroup. Guarded launches now record a private receipt before
+authorization; `reconcile_local_scope` can settle their exited scopes using the
+exact receipt, audit, fence and host observations. Legacy unobserved launches
+and interrupted stops remain fenced; their quiescence verification is incomplete.
 
 A disposable signed-in Codex crash probe also observed a previously bound scope
 exit and disappear before recovery. Its cgroup was empty, but the recorded scope
 remained `running`; the stop control rejected it and the run stayed fenced. A
 separate real-systemd regression confirms that an externally stopped bound scope
-cannot be confirmed through the current controls. This is safe fencing, not
-completed recovery; trusted launch-quiescence verification remains outstanding.
+cannot be confirmed without additional guarded-launch evidence. This original
+probe establishes safe fencing for legacy launches. The guarded recovery path
+has separate coverage; complete crash and external-request recovery remains
+incomplete. See `docs/local-scope-recovery.md` for its host assumptions and limits.
 
 The OpenFilm image has a local build using a pinned Playwright base and locked
 npm dependencies. The rootless Podman render adapter uses `keep-id` and private

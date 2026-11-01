@@ -25,6 +25,21 @@ def add_recovery_fence(scopes):
 
 
 class LocalLaunchTests(unittest.TestCase):
+    def test_target_receives_only_explicit_environment(self):
+        env={**os.environ,'WORKFLOW_TEST_SECRET':'private'}
+        code="import os; print(os.environ.get('WORKFLOW_TEST_SECRET','absent'),os.environ['WORKFLOW_TEST_ALLOWED'])"
+        launch=start_guarded(['/usr/bin/env','-i','WORKFLOW_TEST_ALLOWED=public'],
+                             [sys.executable,'-c',code],cwd=None,env=env)
+        try:
+            launch.receive(time.monotonic()+5,lambda:False);launch.release()
+            stdout,_=launch.process.communicate(timeout=5)
+            self.assertEqual(launch.process.returncode,0)
+            self.assertEqual(stdout,b'absent public\n')
+        finally:
+            launch.close()
+            if launch.process.poll() is None:launch.process.kill();launch.process.wait(timeout=5)
+            launch.process.stdin.close();launch.process.stdout.close()
+
     def test_target_waits_for_receipt_and_release(self):
         with tempfile.TemporaryDirectory() as root:
             marker=Path(root)/'target'
@@ -48,7 +63,8 @@ class LocalLaunchTests(unittest.TestCase):
             code='from pathlib import Path; Path('+repr(str(marker))+').touch()'
             launch=start_guarded([], [sys.executable,'-c',code], cwd=root, env=dict(os.environ))
             try:
-                with self.assertRaises(LaunchError):launch.receive(time.monotonic()+5,lambda:True)
+                deadline=time.monotonic()+5
+                with self.assertRaises(LaunchError):launch.receive(deadline,lambda:True)
                 launch.close()
                 self.assertNotEqual(launch.process.wait(timeout=5),0)
                 self.assertFalse(marker.exists())
@@ -97,7 +113,8 @@ class LocalLaunchTests(unittest.TestCase):
                 try:
                     if payload:os.write(ack_write,payload)
                     os.close(ack_write);ack_write=None
-                    with self.assertRaises(LaunchError):launch.receive(time.monotonic()+2,lambda:False)
+                    deadline=time.monotonic()+2
+                    with self.assertRaises(LaunchError):launch.receive(deadline,lambda:False)
                     with self.assertRaises(LaunchError):launch.release()
                     launch.close()
                     self.assertEqual(os.read(go_read,1),b'')

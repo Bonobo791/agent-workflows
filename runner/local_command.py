@@ -66,6 +66,9 @@ def _cleanup_command(s,run,unit,process,stopped):
             except Exception:pass
         for stream in (process.stdin,process.stdout):
             if stream is not None:stream.close()
+        try:process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill();process.wait(timeout=5)
 
 def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved,on_started=None,*,input_data=None,workspace_claim=None,reserved_command=None):
     manager={k:s.environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in s.environment};manager['PATH']='/usr/bin:/bin'
