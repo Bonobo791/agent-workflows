@@ -220,6 +220,10 @@ When a running task has older reviews without these inputs, dispatch invalidates
 those reviews and the assembled package only with current claims and no
 unresolved work. The reviews must run again and any new package needs a new
 human decision; decisions on earlier package versions remain in history.
+While an owner decision is being applied or an approved package is completing,
+the automatic worker rejects new owner requests. Requests already queued before
+completion are processed first. Completion preflight still permits prompt stop
+and status requests; a recorded decision on one package version is immutable.
 The standard local worker constructs the renderer when the Podman runtime
 configuration is present. Its policy check verifies the socket owner and
 access, rootless Podman, seccomp, SELinux, the pinned image ID and the renderer

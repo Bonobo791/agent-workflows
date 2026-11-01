@@ -248,6 +248,15 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             with self.assertRaisesRegex(WorkspaceError,'graph claim'):
                 self.registry.release_local('run-1',assignment,unit,fenced=('worker','inc'))
             self.registry.db.execute("DELETE FROM graph_claims WHERE run='run-1'")
+            for trigger in ("CREATE TRIGGER corrupt_recovery BEFORE INSERT ON workspace_recovery_audit BEGIN SELECT RAISE(IGNORE);END",
+                            "CREATE TRIGGER corrupt_recovery AFTER INSERT ON workspace_recovery_audit BEGIN UPDATE workspace_recovery_audit SET created=0 WHERE id=NEW.id;END",
+                            "CREATE TRIGGER corrupt_recovery AFTER INSERT ON workspace_recovery_audit BEGIN DELETE FROM workspace_recovery_audit WHERE id=NEW.id;END"):
+                self.registry.db.execute(trigger)
+                with self.subTest(trigger=trigger),self.assertRaisesRegex(WorkspaceError,'recovery audit'):
+                    self.registry.release_local('run-1',assignment,unit,fenced=('worker','inc'))
+                self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+                self.assertEqual(self.registry.db.execute('SELECT count(*) FROM workspace_recovery_audit').fetchone(),(0,))
+                self.registry.db.execute('DROP TRIGGER corrupt_recovery')
             self.assertEqual(self.control.handle('x'*40,release),{'released':True})
             self.assertEqual(service.lifecycle.confirm_operator_stop('run-1','inc','terminated_and_fenced')['status'],'stopped')
             self.assertEqual(service.queue.get('run-1')['status'],'completed')

@@ -375,6 +375,59 @@ class AutoWorkerTests(unittest.TestCase):
                 if worker.thread:worker.thread.join(timeout=5)
                 controller.lifecycle.close();controller.close()
 
+    def test_completion_preflight_closes_owner_request_gate(self):
+        import threading
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);entered=threading.Event();release=threading.Event();completed=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                service.task_intake=SimpleNamespace(config={'run':'r'},submit_configured=lambda:(service.create('r','marketing','task'),service.enqueue('r')))
+                service.stage_dispatcher=SimpleNamespace(step=lambda *_:{'status':'awaiting_review','version':'a'*64})
+                service.human_review=SimpleNamespace(current=lambda _: {'decision':'approved'})
+                def prepare(*_):
+                    entered.set();release.wait(5)
+                    return lambda:completed.append(True)
+                service._prepare_job_completion=prepare
+                return service,None
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();self.assertTrue(entered.wait(5))
+                with self.assertRaisesRegex(AutoWorkerError,'review unavailable'):worker.request_decision('r','a'*64,'rejected')
+                with self.assertRaisesRegex(AutoWorkerError,'unavailable'):worker.request_action('r','pr_propose',{})
+                release.set();worker.thread.join(timeout=5);self.assertFalse(worker.thread.is_alive())
+                self.assertEqual(worker.status()['status'],'completed');self.assertEqual(completed,[True])
+            finally:
+                release.set()
+                if worker.thread:worker.thread.join(timeout=5)
+
+    def test_owner_request_queued_before_completion_is_processed(self):
+        import threading
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);reading=threading.Event();release=threading.Event();decisions=[];prepared=[]
+            def factory():
+                service=Service(root);service.lifecycle=ManualLifecycle(str(root/'state.db'),'worker','inc')
+                service.task_intake=SimpleNamespace(config={'run':'r'},submit_configured=lambda:(service.create('r','marketing','task'),service.enqueue('r')))
+                service.stage_dispatcher=SimpleNamespace(step=lambda *_:{'status':'awaiting_review','version':'a'*64})
+                def current(_):
+                    if not reading.is_set():reading.set();release.wait(5)
+                    return {'decision':'rejected' if decisions else 'approved'}
+                service.human_review=SimpleNamespace(current=current,decide=lambda *args:decisions.append(args[-1]))
+                service._prepare_job_completion=lambda *_:prepared.append(True)
+                return service,None
+            worker=AutoWorker(factory,root)
+            try:
+                worker.start();self.assertTrue(reading.wait(5))
+                self.assertTrue(worker.request_decision('r','a'*64,'rejected')['pending'])
+                release.set();deadline=time.monotonic()+5
+                while worker.status().get('status') not in ('revision_required','completed','inspection_required') and time.monotonic()<deadline:time.sleep(.01)
+                self.assertEqual(worker.status()['status'],'revision_required')
+                self.assertEqual(decisions,['rejected']);self.assertEqual(prepared,[])
+            finally:
+                release.set();worker.stop()
+                if worker.thread:worker.thread.join(timeout=5)
+
     def test_stop_does_not_cancel_completion_already_in_progress(self):
         import threading
         with tempfile.TemporaryDirectory() as root:

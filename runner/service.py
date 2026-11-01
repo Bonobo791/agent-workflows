@@ -136,6 +136,8 @@ class Service:
             job=db.execute(_JOB_STATUS,(run,)).fetchone()
             if job and job[0] in ('cancelling','uncertain'):
                 db.execute("UPDATE jobs SET status='cancelled',token=NULL,expires=NULL WHERE run=?",(run,))
+            elif job==('completed',):
+                if db.execute("SELECT status FROM graph_runs WHERE id=?",(run,)).fetchone()!=('completed',) or db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone():raise ServiceError('completed run not fenced')
             elif job and job[0]!='cancelled': raise ServiceError('job state incompatible with cancellation')
             db.execute('COMMIT')
         except Exception:

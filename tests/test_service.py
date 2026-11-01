@@ -261,3 +261,28 @@ class ServiceTests(unittest.TestCase):
             s.complete('r','assembly',token,{})
             self.assertTrue(s.verify_terminal('r')); file.write_text('changed')
             self.assertFalse(s.verify_terminal('r')); s.close()
+
+    def test_controller_lifecycle_confirmation_preserves_completed_job(self):
+        from runner.lifecycle import Lifecycle
+        from runner.service import ServiceError
+        from tests.test_lifecycle import Observer,Controller
+        for condition in ('valid','automatic','graph_changed','claim_remains'):
+            with self.subTest(condition=condition),tempfile.TemporaryDirectory() as root:
+                service=Service(root);observer=Observer()
+                service.lifecycle=Lifecycle(root+'/state.db',{'origin':'https://coolify.example.invalid','service':'svc','application':'app','controller_id':'controller-v1','permission_scope':'dedicated-team-deploy','verifier_id':'observer-v1'},observer,Controller())
+                try:
+                    service.create('r','engineering','task');service.enqueue('r');queue=service.queue.claim('worker',60);claim=service.claim('r')
+                    service.verify_terminal=lambda _:True;service.finish_job('r',queue['token'],claim)
+                    service.lifecycle.register('r','inc-1')
+                    if condition=='automatic':service.lifecycle.enable_auto(approved_policy=service.lifecycle.policy_hash,verify_policy=lambda _:True)
+                    service.request_lifecycle_stop('r',automatic=condition=='automatic')
+                    observer.current=None;observer.stopped=True
+                    if condition=='graph_changed':service.graph.db.execute("UPDATE graph_runs SET status='active' WHERE id='r'")
+                    if condition=='claim_remains':service.graph.db.execute("INSERT INTO graph_claims(task_id,run,token,expires) VALUES('task','r','unexpected',9999999999)")
+                    if condition in ('valid','automatic'):
+                        self.assertEqual(service.confirm_lifecycle_stop('r','proof')['status'],'stopped')
+                        self.assertEqual(service.confirm_lifecycle_stop('r','proof')['status'],'stopped')
+                    else:
+                        with self.assertRaisesRegex(ServiceError,'completed run not fenced'):service.confirm_lifecycle_stop('r','proof')
+                    self.assertEqual(service.queue.get('r')['status'],'completed')
+                finally:service.lifecycle.close();service.close()

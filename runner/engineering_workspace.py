@@ -8,6 +8,7 @@ import re
 import sqlite3
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 class WorkspaceError(RuntimeError): pass
@@ -139,6 +140,9 @@ class EngineeringWorkspace:
             if not row or not valid_scope_identity(unit,*row): raise WorkspaceError('terminal local scope evidence required')
             if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')
             if fenced is not None:
-                self.db.execute("INSERT INTO workspace_recovery_audit(schema_version,run,assignment,unit,status,created) VALUES(1,?,?,?,'released',(julianday('now')-2440587.5)*86400.0)",(run,assignment,unit))
+                created=time.time()
+                audit=self.db.execute("INSERT INTO workspace_recovery_audit(schema_version,run,assignment,unit,status,created) VALUES(1,?,?,?,'released',?)",(run,assignment,unit,created))
+                if audit.rowcount!=1 or self.db.execute('SELECT schema_version,run,assignment,unit,status,created FROM workspace_recovery_audit WHERE id=?',(audit.lastrowid,)).fetchone()!=(1,run,assignment,unit,'released',created):raise WorkspaceError('workspace recovery audit unavailable')
+            if self.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()!=(None,):raise WorkspaceError('workspace release changed')
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
