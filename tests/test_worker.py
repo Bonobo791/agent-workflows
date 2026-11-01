@@ -451,7 +451,7 @@ class WorkerTests(unittest.TestCase):
     def test_startup_requires_seo_skill_for_canonical_draft_and_review(self):
         with tempfile.TemporaryDirectory() as root:
             skills=Path(root)/'skills'; skills.mkdir()
-            config={'skill_roots':[str(skills)],'required_skills':{'canonical_draft':['writer'],'canonical_review':['editor','plan-seo-geo-growth']}}
+            config={'skill_roots':[str(skills)],'required_skills':{'canonical_draft':['writer'],'canonical_review':['editor']}}
             service,control=build_control(root,'x'*40,role_config=config)
             try:
                 self.assertEqual(service.required_skills['canonical_draft'],['writer','plan-seo-geo-growth'])
