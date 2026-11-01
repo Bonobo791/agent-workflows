@@ -108,6 +108,7 @@ def dispatch(dispatcher,run,stage,queue_claim,graph_claim,feedback_ref=None,corr
         return False
     runner=GraphRunner(service.graph,service.artifacts,specialist,gate,skill_resolver=service.skill_resolver,required_skills=service.required_skills)
     ref=runner.execute(run,stage,graph_claim,{'inputs':refs,'head':before['head']},correction_id=correction_id)
+    if runner.correction_outcome is not None: return {'stage':stage,'status':runner.correction_outcome,'artifact_ref':ref,'reason':'correction not adopted; approved implementation and blocked review retained'}
     return {'stage':stage,'status':service.graph.get(run,stage)['status'],'artifact_ref':ref}
 
 def approval_package(service,run):
