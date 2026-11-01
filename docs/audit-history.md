@@ -156,8 +156,14 @@ SQLite database, advances after the supplied exporter acknowledges success,
 and uses compare-and-swap when senders race. Both databases and the correlation
 key must be kept private; the caller supplies connections and a bounded-time
 exporter. Changing the key, source database path or destination replays history;
-restoring a source at the same path requires explicit cursor reconciliation.
-No background dispatcher or cursor database is configured, so delivery is not
+a keyed digest of the last exported projected event detects a missing or changed
+checkpoint after a restore and returns `inspection_required` without advancing.
+A nonzero cursor created before checkpoint digests were introduced also requires
+inspection; do not silently reset it. This detects a changed checkpoint, not all
+possible alterations to earlier history, so stop delivery while restoring the
+source and explicitly reconcile cursors before resuming. A restore racing with
+an export is not atomic across the two databases and may cause duplicate or
+missed delivery. No background dispatcher or cursor database is configured, so delivery is not
 called by the worker. `OpenTelemetryAuditExporter` adapts these events to an explicitly
 provided OpenTelemetry SDK log exporter and acknowledges only SDK success. Its
 optional dependencies are pinned in `requirements-observability.txt`; no
