@@ -24,7 +24,9 @@ class StageEntrypointTests(unittest.TestCase):
         self._run_marketing(with_asset=True,asset_blocked=True)
     def test_platform_block_evidence_must_remain_verified(self):
         self._run_marketing(with_asset=True,platform_blocked=True)
-    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False,platform_blocked=False):
+    def test_approved_package_completes_with_current_platform_block(self):
+        self._run_marketing(with_asset=True,platform_blocked=True,complete_job=True)
+    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False,platform_blocked=False,complete_job=False):
         class External(http.server.BaseHTTPRequestHandler):
             version='v1'; owner=None; available=True
             def log_message(self,*args): pass
@@ -270,6 +272,10 @@ class StageEntrypointTests(unittest.TestCase):
                     service.graph.db.execute('DROP TRIGGER reject_human_audit')
                     self.assertEqual(control.handle('x'*40,decision)['decision'],'approved')
                     self.assertEqual(control.handle('x'*40,{'action':'human_review_status','run':'run-1'})['decision']['version'],version)
+                    if complete_job:
+                        service.finish_job('run-1',q['token'])
+                        self.assertEqual(service.queue.get('run-1')['status'],'completed')
+                        return
                     with self.assertRaises(ControlError): control.handle('x'*40,decision)
                     brief=package['stages']['brief']['artifact']; review=package['stages']['canonical_review']['artifact']; channel=package['stages']['linkedin_review']['artifact']
                     proof=json.loads(service.artifacts.get(review['_review_evidence']))
