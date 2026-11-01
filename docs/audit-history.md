@@ -52,10 +52,10 @@ later failure observation cannot be stored, the request remains without a
 terminal observation; the executor still requests cancellation and fencing.
 The private row includes the selected model, but its projection exports only a
 keyed execution ID and allowlisted role and state. Prior launches are not
-backfilled. `execution_link_audit` binds a successful launch to its session and
-turn in the same transaction as turn completion; the projection uses keyed IDs
-for each. When a bound tool item arrives first, an `observed` link is recorded
-with that item, even if the turn later fails. This observation does not imply
+backfilled. `execution_link_audit` records an `observed` link when the turn ID
+is received and a `completed` link with the turn completion transaction; the
+projection uses keyed IDs for each. The observed link can survive a failed turn.
+This observation does not imply
 the turn completed or the worker stopped.
 `tool_audit` records each observed MCP, web-search or command-execution item as
 it arrives for a bound session and turn, including items before an interrupted
@@ -84,6 +84,11 @@ scope identifier to correlate these records without exposing the scope unit;
 the binding does not imply that earlier unbound attempts completed. Existing
 scope states and turn bindings are not backfilled; `starting` and `stopping`
 do not establish a process outcome.
+`local_execution_scope_audit` links a local execution and session to its
+recorded scope before its turn starts. Its keyed identifiers correlate with
+launch, turn and scope records without exposing the private values. Audit failure
+prevents the binding; older bindings are not backfilled. A binding alone does
+not establish that a turn was sent or that a worker stopped.
 `local_scope_launch_audit` records a guarded launch receipt with the scope
 identity in the same transaction as the running binding. The target waits for
 authorization until that transaction succeeds. Export correlates the record

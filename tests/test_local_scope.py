@@ -233,6 +233,22 @@ class ScopeTests(unittest.TestCase):
                     self.assertEqual(result['recorded'],{'unit':unit,'state':'running','invocation':'a'*32,'cgroup':'/user.slice/'+unit})
                     self.assertEqual(result['observed']['active'],'active')
                     self.assertIs(result['cgroup_empty'],True)
+                    self.assertIsNone(result['execution'])
+                    service.graph.db.execute('CREATE TABLE local_execution_scopes(run TEXT,role TEXT,execution TEXT,session TEXT,unit TEXT,binding TEXT)')
+                    service.graph.db.execute('INSERT INTO local_execution_scopes VALUES(?,?,?,?,?,?)',('run','canonical_draft','exec','session',unit,'binding'))
+                    pending=control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
+                    self.assertIsNone(pending['execution']['turn'])
+                    self.assertFalse(pending['execution']['completed'])
+                    service.graph.db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,'run','canonical_draft','exec','session','turn','observed',1)")
+                    linked=control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
+                    self.assertEqual(linked['execution'],{'execution':'exec','role':'canonical_draft','session':'session','turn':'turn','completed':False})
+                    service.graph.db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,'run','canonical_draft','exec','session','unrelated','completed',1)")
+                    self.assertFalse(control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})['execution']['completed'])
+                    service.graph.db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,'run','canonical_draft','exec','session','turn','completed',1)")
+                    self.assertTrue(control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})['execution']['completed'])
+                    service.graph.db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,'run','canonical_draft','exec','session','other','observed',1)")
+                    with self.assertRaises(ControlError): control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
+                    service.graph.db.execute("DELETE FROM execution_link_audit WHERE turn='other'")
                     self.assertEqual(scopes.state('run',unit),'running')
                     backend.invocation='b'*32;backend.empty=False
                     changed=control.handle('secret',{'action':'inspect_local_scope','run':'run','unit':unit})
@@ -268,6 +284,27 @@ class ScopeTests(unittest.TestCase):
             self.assertEqual(states[-1]['scope_id'],links[0]['scope_id']);self.assertEqual(links[0]['role'],'platform_review')
             self.assertIsNotNone(links[0]['turn_id']);self.assertEqual(_attributes(links[0])['scope_id'],states[-1]['scope_id'])
             for private in (unit,'private-session','private-turn'):self.assertNotIn(private,str(links))
+            scopes.close()
+    def test_running_execution_scope_audit_correlates_and_failure_rolls_back(self):
+        from runner.audit_export import project_event, read_events
+        from runner.local_supervisor import LocalSupervisor
+        from runner.otel_audit import _attributes
+        with tempfile.TemporaryDirectory() as root:
+            db=root+'/state.db'; backend=Backend()
+            LocalSupervisor(db,'/bin/true',{},backend,lambda _:True,lambda *_:root,lambda:True,{})
+            scopes=LocalScopes(db,backend); unit=scopes.reserve('run'); backend.unit=unit; scopes.bind('run',unit)
+            values=('run','canonical_draft','private-execution','private-session',unit,'private-binding')
+            scopes.db.execute("CREATE TRIGGER fail_execution_scope_audit BEFORE INSERT ON local_execution_scope_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+            with self.assertRaises(sqlite3.IntegrityError): scopes.db.execute('INSERT INTO local_execution_scopes VALUES(?,?,?,?,?,?)',values)
+            self.assertEqual(scopes.db.execute('SELECT count(*) FROM local_execution_scopes').fetchone()[0],0)
+            scopes.db.execute('DROP TRIGGER fail_execution_scope_audit')
+            scopes.db.execute('INSERT INTO local_execution_scopes VALUES(?,?,?,?,?,?)',values)
+            events,_=read_events(scopes.db,'local_execution_scope_audit',0,10,b'x'*32)
+            scope,_=read_events(scopes.db,'local_scope_audit',0,10,b'x'*32)
+            turn=project_event('execution_link_audit',{'id':1,'schema_version':1,'run':'run','role':'canonical_draft','execution':'private-execution','session':'private-session','turn':'private-turn','status':'observed','created':1},b'x'*32)
+            self.assertEqual((events[0]['scope_id'],events[0]['execution_id'],events[0]['session_id']),(scope[-1]['scope_id'],turn['execution_id'],turn['session_id']))
+            self.assertEqual(_attributes(events[0])['status'],'bound')
+            for private in (unit,'private-execution','private-session','private-binding'): self.assertNotIn(private,str(events))
             scopes.close()
     def test_scope_audit_replays_and_failure_prevents_stop_request(self):
         from runner.audit_export import read_events
