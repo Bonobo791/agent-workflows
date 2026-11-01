@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import json
 from runner.service import Service
+from runner.graph import GraphError
 from runner.stage_dispatch import StageDispatcher, StageError
 from tests.source_fixture import outputs as fixture_outputs, verifier as fixture_verifier
 
@@ -305,6 +306,18 @@ class StageDispatchTests(unittest.TestCase):
                 self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_attempts WHERE run='r' AND status='uncertain'").fetchone())
                 self.assertEqual(service.graph.db.execute("SELECT state FROM correction_attempts WHERE run='r'").fetchall(),[('completed',)])
                 service.lifecycle.close(); service.close()
+
+    def test_unadopted_record_commits_with_correction_close_or_not_at_all(self):
+        with tempfile.TemporaryDirectory() as root:
+            service,dispatcher,queue,claim=self._blocked_canonical_review_fixture(root)
+            graph=service.graph; reserved=dispatcher._reserve_correction('r','canonical_draft','canonical_review',claim)
+            graph.begin_attempt('r','canonical_draft','fixture-input',claim,2,correction_id=reserved)
+            record={'approved':'a'*40,'rejected':'b'*40}
+            with self.assertRaises(GraphError): graph.close_unadopted_correction('r','canonical_draft',claim,'other-input',reserved,'ref',record)
+            self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM engineering_unadopted').fetchone(),(0,))
+            graph.close_unadopted_correction('r','canonical_draft',claim,'fixture-input',reserved,'ref',record)
+            self.assertEqual(graph.db.execute('SELECT run,correction_id,approved,rejected FROM engineering_unadopted').fetchall(),[('r',reserved,'a'*40,'b'*40)])
+            service.lifecycle.close(); service.close()
 
     def test_blocked_review_triggers_one_resumed_writer_correction(self):
         with tempfile.TemporaryDirectory() as root:

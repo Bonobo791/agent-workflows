@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from workflows.marketing.gates import STAGE_DEPENDENCIES, CHANNELS
 
+UNADOPTED_SQL='CREATE TABLE IF NOT EXISTS engineering_unadopted(run TEXT PRIMARY KEY,correction_id INTEGER NOT NULL,approved TEXT NOT NULL,rejected TEXT NOT NULL)'
 class GraphError(RuntimeError):
     pass
 
@@ -256,8 +257,9 @@ class GraphStore:
             self.db.execute('COMMIT')
         except Exception:
             self.db.execute('ROLLBACK'); raise
-    def close_unadopted_correction(self,run,stage,token,input_hash,correction_id,result_version):
-        """Record a completed correction turn whose gate did not pass without replacing the approved writer or blocking review evidence."""
+    def close_unadopted_correction(self,run,stage,token,input_hash,correction_id,result_version,unadopted=None):
+        """Record a completed correction turn whose gate did not pass without replacing the approved writer or blocking review evidence. An unadopted workspace commit pair is recorded in the same transaction."""
+        if unadopted: self.db.execute(UNADOPTED_SQL)
         self.db.execute('BEGIN IMMEDIATE')
         try:
             self._lease(run,token)
@@ -267,6 +269,7 @@ class GraphStore:
             if not row or not writer or writer['status']!='passed' or writer['version']!=row[0] or not review or review['status']!='blocked' or review['version']!=row[2]: raise GraphError('correction completion mismatch')
             if self.db.execute("UPDATE graph_attempts SET status='completed' WHERE run=? AND stage=? AND version=? AND status='uncertain'",(run,stage,input_hash)).rowcount!=1: raise GraphError('attempt unavailable')
             self.db.execute("UPDATE correction_attempts SET state='completed',result_version=? WHERE id=?",(result_version,correction_id))
+            if unadopted: self.db.execute('INSERT INTO engineering_unadopted VALUES(?,?,?,?)',(run,correction_id,unadopted['approved'],unadopted['rejected']))
             self.db.execute('COMMIT')
         except Exception:
             self.db.execute('ROLLBACK'); raise
