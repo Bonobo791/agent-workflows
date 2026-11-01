@@ -30,6 +30,7 @@ def publish(directory,success,now=None):
         temporary='.audit-health-'+secrets.token_hex(16)+'.tmp'
         output=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
         with os.fdopen(output,'w',encoding='utf-8') as stream:
+            os.fchmod(stream.fileno(),0o600)
             json.dump({'timestamp':int(now),'success':success},stream,separators=(',',':'))
             stream.flush(); os.fsync(stream.fileno())
         os.replace(temporary,NAME,src_dir_fd=fd,dst_dir_fd=fd); temporary=None
@@ -56,4 +57,4 @@ def read_metrics(directory,now=None):
         finally: os.close(directory_fd)
         if not isinstance(value,dict) or set(value)!={'timestamp','success'} or type(value['timestamp']) is not int or not 0<=value['timestamp']<=now+60 or type(value['success']) is not bool: return result
         return result+f"workflow_audit_delivery_last_attempt_timestamp_seconds {value['timestamp']}\nworkflow_audit_delivery_last_attempt_success {int(value['success'])}\n"
-    except (OSError,ValueError,TypeError,UnicodeError): return result
+    except (OSError,ValueError,TypeError,RuntimeError): return result

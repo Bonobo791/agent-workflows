@@ -29,8 +29,14 @@ const { chromium } = require('playwright-core');
     const errors = page.getByText(/data source not found|failed to fetch|error querying/i);
     if (await errors.count()) throw new Error('dashboard reports a datasource error');
     await page.screenshot({ path: '/output/dashboard-desktop.png', fullPage: true });
+    await page.getByText('Audit delivery last attempt', { exact: true }).first().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(6000);
+    if (await errors.count()) throw new Error('audit panels report a datasource error');
+    await page.screenshot({ path: '/output/audit-desktop.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(1000);
+    await page.getByText('Audit delivery attempt age', { exact: true }).first().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(6000);
+    await page.screenshot({ path: '/output/audit-mobile.png', fullPage: true });
     const evidence = page.locator('p').filter({ hasText: 'Confirm stopped workers and investigate state in the private control plane.' }).first();
     if (!(await evidence.count())) throw new Error('full evidence explanation is missing');
     const clipped = await evidence.evaluate(element => {

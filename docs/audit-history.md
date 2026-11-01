@@ -182,7 +182,10 @@ JSON object of per-table results. A nonzero exit can follow successful earlier
 tables, whose cursors remain committed.
 
 The database directories and files must be owned by the current user and private;
-the source must already exist. The key is an owner-only file with at least 32
+the source must already exist. Delivery holds the checked database descriptors
+until their SQLite connections close and verifies the opened database identity.
+Keep source restoration and cursor reconciliation outside an active delivery.
+The key is an owner-only file with at least 32
 characters and must remain stable for replay. An optional `--token-file` supplies
 an owner-only bearer token. Install `requirements-observability.txt` separately.
 The endpoint must be explicit; HTTP is allowed only on loopback. The command
@@ -235,20 +238,24 @@ private output directory `~/.local/share/agent-workflows-monitor/audit`. Pull th
 pinned image only after reviewing it. Copy `observability/local/audit.env.example`
 to `~/.config/agent-workflows/audit.env` with absolute paths to the private
 worker database, separate cursor database, stable correlation key, and checkout.
-The Python environment must have `requirements-observability.txt` installed.
+The delivery unit runs `/usr/bin/python3`; `requirements-observability.txt`
+must be installed for that interpreter. If using a virtual environment instead,
+change the unit to its absolute Python path before enabling it.
 The collector unit publishes only host loopback port 14318. The timer runs one
 bounded page per currently present audit table once per minute after the prior
 run finishes; nonzero status is recorded by systemd and retried at the next
 interval. New tables are picked up on a later run. To monitor delivery, set `WORKFLOW_AUDIT_HEALTH_DIR` in both `audit.env` and
-`monitor.env` to the same private directory. The command atomically records
+`monitor.env` to the same private directory. Create it before enabling delivery
+with `install -d -m 0700 /absolute/private/health-directory`. The command atomically records
 only the last attempt time and success or failure there; the authenticated
 metrics endpoint exposes those values. The alert rules signal a failed attempt
-or stale/missing health after their wait periods. If monitoring is not configured,
+after five minutes, stale attempts after five minutes without an update,
+and missing or invalid configured health on the next rule evaluation. If monitoring is not configured,
 no audit delivery alert is emitted. These checks do not guarantee the backlog is
 drained or establish durable retention. Review the units and file-exporter
 limitations above before enabling them.
-The delivery unit uses `PrivateTmp=yes`: its checkout, database, cursor and key
-must not be under a host `/tmp` path hidden from that unit. On 2026-11-01 the
+The delivery unit uses `PrivateTmp=yes`: its checkout, database, cursor, key and
+`WORKFLOW_AUDIT_HEALTH_DIR` directory must not be under a host `/tmp` path hidden from that unit. On 2026-11-01 the
 collector and delivery commands and their hardening properties passed as
 temporary user-systemd units, including collector stop and restart. The timer
 was syntax-checked, but none of these units was installed or exercised as a
@@ -361,8 +368,8 @@ non-activated Prometheus rule file. Alertmanager deduplication and routing are
 deployment configuration and have not been configured or verified here.
 `observability/dashboard.json` is an importable Grafana dashboard definition
 for the same snapshot metrics; its evidence-gaps panel explicitly identifies
-unavailable measurements. Neither the dashboard nor alert rules have been
-imported into a live service. Prometheus `promtool` 3.15.1 validated the rule
+unavailable measurements. The disposable integration probes described above exercised dashboard import
+and alert routing; no persistent production service is configured here. Prometheus `promtool` 3.15.1 validated the rule
 syntax and `promtool test rules observability/alerts_test.yml` exercised alert
 wait periods, resolution, and stale versus missing snapshots locally. This does
 not verify collection, alert routing, notifications, or deployment.

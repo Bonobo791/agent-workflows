@@ -59,7 +59,6 @@ groups:
           description: Inspect the local delivery service and collector before retrying.
       - alert: WorkflowAuditDeliveryStale
         expr: (time() - workflow_audit_delivery_last_attempt_timestamp_seconds > 300) or (workflow_audit_delivery_configured == 1 unless workflow_audit_delivery_last_attempt_timestamp_seconds)
-        for: 5m
         labels:
           severity: warning
         annotations:

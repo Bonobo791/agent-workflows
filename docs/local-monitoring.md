@@ -20,9 +20,11 @@ failed scrape describes telemetry availability, not proof of process termination
 The endpoint does not configure a collector, retention, or API protection.
 
 When audit delivery is enabled, set `WORKFLOW_AUDIT_HEALTH_DIR` to the same
-private directory used by the delivery unit. The endpoint adds only the latest
+private directory used by the delivery unit. Create it before enabling delivery
+with `install -d -m 0700 /absolute/private/health-directory`. The endpoint adds only the latest
 attempt time and success flag; missing or invalid health data is reported as a
-configured but unavailable status. Alert rules detect a failed or stale attempt,
+configured but unavailable status. Missing health alerts immediately; a stopped
+attempt becomes stale after five minutes. Alert rules detect a failed or stale attempt,
 not whether a backlog is fully delivered or data is crash durable.
 
 The audit failure and recovery alerts were delivered to a synthetic receiver

@@ -132,6 +132,7 @@ class AuditCollectorAuthIntegrationTests(unittest.TestCase):
                 request=urllib.request.Request(endpoint,data=payload,headers=headers,method='POST')
                 with opener.open(request,timeout=10) as response: self.assertEqual(response.status,200)
             self.assertTrue(list(store.glob('audit-*-size.json')),'size rotation did not occur')
+            self.assertTrue(any(before in path.read_bytes() for path in store.glob('audit*.json')),'pre-rotation audit bytes missing')
         finally:
             if systemd and unit_started:
                 status=subprocess.run(['systemctl','--user','show',name,'--property=LoadState','--value'],capture_output=True,text=True,timeout=15)

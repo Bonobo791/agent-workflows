@@ -55,7 +55,7 @@ class DesktopAlertReceiverTests(unittest.TestCase):
         for name in ('WorkflowAuditDeliveryFailed','WorkflowAuditDeliveryStale'):
             response=self.request({'alerts':[{'status':'firing','labels':{'alertname':name},'annotations':{'summary':'private text'}}]})
             self.assertEqual(response,204)
-        self.assertTrue(all('private text' not in str(event) for event in self.received))
+        self.assertEqual(self.received,[('Agent Workflows alert','Workflow audit delivery is failing'),('Agent Workflows alert','Workflow audit delivery status is stale or unavailable')])
 
     def test_duplicate_authorization_is_rejected(self):
         data=b'{"alerts":[]}'

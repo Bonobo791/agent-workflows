@@ -1,7 +1,7 @@
 """Explicit one-page audit delivery; no background service or default endpoint."""
 import argparse
 import json
-from contextlib import ExitStack, closing
+from contextlib import ExitStack, closing, contextmanager
 import os
 from pathlib import Path
 import sqlite3
@@ -14,6 +14,7 @@ from runner.opik_export import create_opik_trace_exporter
 from runner.worker import read_secret
 
 
+@contextmanager
 def _private_database(path,create):
     path=Path(path)
     if not path.is_absolute() or path.parent.resolve(strict=True)!=path.parent or path.name in ('','.','..'):
@@ -27,14 +28,19 @@ def _private_database(path,create):
         try:
             info=os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077 or info.st_nlink!=1: raise ValueError('private database required')
+            if create: os.fchmod(fd,0o600)
+            pinned=f'/proc/{os.getpid()}/fd/{fd}'
+            target=pinned if create else 'file:'+quote(pinned,safe='/')+'?mode=ro'
+            with closing(sqlite3.connect(target,uri=not create,isolation_level=None)) as connection:
+                actual=connection.execute('PRAGMA database_list').fetchone()[2]
+                if not os.path.samefile(pinned,actual):raise ValueError('database identity changed')
+                yield connection
         finally: os.close(fd)
     finally: os.close(directory)
-    return str(path)
 
 
 def present_tables(source):
-    source=_private_database(source,False)
-    with closing(sqlite3.connect('file:'+quote(source,safe='/')+'?mode=ro',uri=True,isolation_level=None)) as db:
+    with _private_database(source,False) as db:
         present={row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {'graph_audit','claim_audit','job_audit','action_audit','attempt_audit'}<=present: raise ValueError('core audit tables unavailable')
     return sorted(set(TABLES)&present)
@@ -42,17 +48,16 @@ def present_tables(source):
 
 def deliver_tables(source,cursor,key_file,endpoint,tables,limit=100,token_file=None):
     if not isinstance(tables,(list,tuple)) or not 1<=len(tables)<=len(TABLES) or any(not isinstance(table,str) or table not in TABLES for table in tables) or len(set(tables))!=len(tables) or type(limit) is not int or not 1<=limit<=500: raise ValueError('invalid audit selection')
-    source=_private_database(source,False); cursor=_private_database(cursor,True)
-    key=read_secret(key_file).encode('utf-8')
-    import requests
     with ExitStack() as cleanup:
+        audit=cleanup.enter_context(_private_database(source,False))
+        progress=cleanup.enter_context(_private_database(cursor,True))
+        key=read_secret(key_file).encode('utf-8')
+        import requests
         session=requests.Session(); session.trust_env=False; cleanup.callback(session.close)
         if token_file is not None: session.headers['Authorization']='Bearer '+read_secret(token_file)
         adapter=create_opik_trace_exporter(endpoint,session); cleanup.callback(adapter.exporter.shutdown)
-        audit=sqlite3.connect('file:'+quote(source,safe='/')+'?mode=ro',uri=True,isolation_level=None); cleanup.callback(audit.close)
         present={row[0] for row in audit.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not set(tables)<=present: raise ValueError('selected audit table unavailable')
-        progress=sqlite3.connect(cursor,isolation_level=None); cleanup.callback(progress.close)
         results={}
         for table in tables:
             result=deliver_page(audit,progress,endpoint,table,limit,key,adapter)
