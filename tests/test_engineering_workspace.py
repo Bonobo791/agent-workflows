@@ -2,6 +2,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+import time
 from pathlib import Path
 from runner.engineering_workspace import EngineeringWorkspace, WorkspaceError
 from runner.worker import build_control
@@ -232,6 +233,7 @@ class EngineeringWorkspaceTests(unittest.TestCase):
         try:
             unit=scopes.reserve('run-1'); backend.unit=unit; scopes.bind('run-1',unit)
             self.registry.bind_local_scope('run-1',assignment,unit)
+            service.verify_terminal=lambda _:True
             service.queue.finish('run-1',queue['token'],verify_completed=lambda _:True)
             self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
             release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
@@ -242,6 +244,10 @@ class EngineeringWorkspaceTests(unittest.TestCase):
                 with self.subTest(table=table), self.assertRaises(ControlError): self.control.handle('x'*40,release)
                 self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
                 self.registry.db.execute('UPDATE '+table+' SET status=? WHERE '+field+'=?',('completed','run-1'))
+            self.registry.db.execute("INSERT INTO graph_claims(run,task_id,token,expires) SELECT id,task_id,'unexpected',? FROM graph_runs WHERE id='run-1'",(time.time()+60,))
+            with self.assertRaisesRegex(WorkspaceError,'graph claim'):
+                self.registry.release_local('run-1',assignment,unit,fenced=('worker','inc'))
+            self.registry.db.execute("DELETE FROM graph_claims WHERE run='run-1'")
             self.assertEqual(self.control.handle('x'*40,release),{'released':True})
             self.assertEqual(service.lifecycle.confirm_operator_stop('run-1','inc','terminated_and_fenced')['status'],'stopped')
             self.assertEqual(service.queue.get('run-1')['status'],'completed')
@@ -371,7 +377,9 @@ class EngineeringWorkspaceTests(unittest.TestCase):
                     if launcher.poll() is not None or time.monotonic()>=deadline: raise
                     time.sleep(.05)
             group=backend.inspect(unit)['cgroup'];self.registry.bind_local_scope('run-1',assignment,unit)
-            if completed: service.queue.finish('run-1',queue['token'],verify_completed=lambda _:True)
+            if completed:
+                service.verify_terminal=lambda _:True
+                service.queue.finish('run-1',queue['token'],verify_completed=lambda _:True)
             stop=self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
             self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
             release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}

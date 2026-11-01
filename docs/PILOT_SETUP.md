@@ -141,7 +141,13 @@ must not contain private skills, credentials, user data or session histories.
   is missing, changed or stale, the package cannot be approved as verified.
   `WORKFLOW_TEST_DECISION=1` additionally exercises a fixture-only decision on
   the exact assembled version, with synthetic task freshness. It is not a
-  human decision on a real package.
+  human decision on a real package. Decision and completion preflight verify
+  terminal evidence before fetching task freshness, outside the worker stop lock.
+  The final transaction rechecks local evidence, claims and the exact decision
+  audit, including its timestamp. Remote task freshness cannot be made atomic
+  with the local database; a tracker change after that fetch remains possible.
+  Recovering a legacy completed job also requires terminal evidence and current
+  approval, and records any graph-claim release before marking the graph complete.
 - Optional `WORKFLOW_PLATFORM_CONFIG_FILE`: owner-only JSON containing
   `sources`, a mapping from each supported channel to an object with its
   exact official documentation `url` and the intended posting `surface`.

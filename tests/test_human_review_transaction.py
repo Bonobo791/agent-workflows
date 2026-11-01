@@ -9,6 +9,7 @@ from runner.service import Service
 class HumanReviewTransactionTests(unittest.TestCase):
     def test_decision_requires_matching_audit_and_current_queue_fence(self):
         triggers=(
+            "CREATE TRIGGER fail_test AFTER INSERT ON human_review_audit BEGIN UPDATE human_review_audit SET created=created+1 WHERE id=NEW.id; END",
             "CREATE TRIGGER fail_test BEFORE INSERT ON human_review_decisions BEGIN SELECT RAISE(IGNORE); END",
             "CREATE TRIGGER fail_test BEFORE INSERT ON human_review_audit BEGIN SELECT RAISE(IGNORE); END",
             "CREATE TRIGGER fail_test AFTER INSERT ON human_review_audit BEGIN UPDATE human_review_audit SET actor='altered' WHERE id=NEW.id; END",
@@ -29,6 +30,79 @@ class HumanReviewTransactionTests(unittest.TestCase):
                     self.assertEqual(service.graph.db.execute('SELECT count(*) FROM human_review_audit').fetchone()[0],0)
                     self.assertEqual(service.graph.db.execute("SELECT status FROM jobs WHERE run='r'").fetchone()[0],'running')
                 finally: service.close()
+
+    def test_decision_rechecks_evidence_after_acquiring_write_lock(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');service.enqueue('r');queue=service.queue.claim('worker',60);claim=service.claim('r')
+                service.graph.db.execute("INSERT INTO graph_stages VALUES('r','assembly','awaiting_review','package',1)")
+                service.graph.db.execute('CREATE TABLE evidence(valid INTEGER)');service.graph.db.execute('INSERT INTO evidence VALUES(1)')
+                service.task_intake=SimpleNamespace(revalidate=lambda _:True)
+                actual=service.graph.db
+                class ChangedBeforeLock:
+                    def execute(self,sql,*args):
+                        if sql=='BEGIN IMMEDIATE':actual.execute('UPDATE evidence SET valid=0')
+                        return actual.execute(sql,*args)
+                    def __getattr__(self,name):return getattr(actual,name)
+                service.graph.db=ChangedBeforeLock()
+                service.verify_terminal=lambda _:actual.execute('SELECT valid FROM evidence').fetchone()==(1,)
+                review=HumanReview(service)
+                with self.assertRaises(HumanReviewError):review.decide('r',queue['token'],claim,'package','approved')
+                self.assertEqual(actual.execute('SELECT COUNT(*) FROM human_review_decisions').fetchone(),(0,))
+            finally:service.close()
+
+    def test_completion_revalidates_task_after_terminal_verification(self):
+        from runner.queue import QueueError
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');service.enqueue('r');queue=service.queue.claim('worker',60);claim=service.claim('r')
+                service.graph.db.execute("INSERT INTO graph_stages VALUES('r','assembly','awaiting_review','package',1)")
+                fresh=[True];service.task_intake=SimpleNamespace(revalidate=lambda _:fresh[0]);service.human_review=HumanReview(service)
+                service.verify_terminal=lambda _:True
+                service.human_review.decide('r',queue['token'],claim,'package','approved')
+                def terminal(_):fresh[0]=False;return True
+                service.verify_terminal=terminal
+                with self.assertRaises(QueueError):service.finish_job('r',queue['token'],claim)
+                self.assertEqual(service.queue.get('r')['status'],'running')
+            finally:service.close()
+
+    def test_legacy_completion_requires_evidence_and_audits_claim_release(self):
+        for condition in ('nonterminal','valid','ignored_audit','deleted_audit'):
+            with self.subTest(condition=condition),tempfile.TemporaryDirectory() as root:
+                service=Service(root)
+                try:
+                    service.create('r','engineering','task');service.enqueue('r');queue=service.queue.claim('worker',60);service.claim('r')
+                    service.queue.finish('r',queue['token'],verify_completed=lambda _:True)
+                    if condition!='nonterminal':service.verify_terminal=lambda _:True
+                    if condition=='ignored_audit':service.graph.db.execute("CREATE TRIGGER corrupt_release BEFORE INSERT ON claim_audit WHEN NEW.status='released' BEGIN SELECT RAISE(IGNORE);END")
+                    if condition=='deleted_audit':service.graph.db.execute("CREATE TRIGGER corrupt_release AFTER DELETE ON graph_claims BEGIN DELETE FROM claim_audit WHERE status='released';END")
+                    if condition=='valid':
+                        service._cancel('r',completed=True)
+                        self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('completed',))
+                        self.assertEqual(service.graph.db.execute("SELECT status FROM claim_audit WHERE status='released'").fetchall(),[('released',)])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError,{'nonterminal':'verified workflow completion required','ignored_audit':'claim release audit unavailable','deleted_audit':'graph completion evidence unavailable'}[condition]):service._cancel('r',completed=True)
+                        self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('active',))
+                        self.assertTrue(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
+                    self.assertEqual(service.queue.get('r')['status'],'completed')
+                finally:service.close()
+
+    def test_completion_cannot_change_approval_in_its_final_transaction(self):
+        from runner.queue import QueueError
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');service.enqueue('r');queue=service.queue.claim('worker',60);claim=service.claim('r')
+                service.graph.db.execute("INSERT INTO graph_stages VALUES('r','assembly','awaiting_review','package',1)")
+                service.task_intake=SimpleNamespace(revalidate=lambda _:True);service.verify_terminal=lambda _:True;service.human_review=HumanReview(service)
+                service.human_review.decide('r',queue['token'],claim,'package','approved')
+                service.graph.db.execute("CREATE TRIGGER corrupt_approval AFTER UPDATE ON jobs WHEN NEW.status='completed' BEGIN UPDATE human_review_audit SET created=created+1;END")
+                with self.assertRaises(QueueError):service.finish_job('r',queue['token'],claim)
+                self.assertEqual(service.queue.get('r')['status'],'running')
+                self.assertEqual(service.human_review.current('r')['decision'],'approved')
+            finally:service.close()
 
     def test_completion_requires_current_audited_approval(self):
         from runner.queue import QueueError
@@ -190,6 +264,8 @@ class HumanReviewTransactionTests(unittest.TestCase):
                 review=HumanReview(service)
                 self.assertEqual(review.decide('r',queue['token'],claim,'package','approved')['decision'],'approved')
                 self.assertEqual(review.current('r')['decision'],'approved')
+                service.graph.db.execute('UPDATE human_review_audit SET created=created+1')
+                with self.assertRaises(HumanReviewError):review.current('r')
                 service.graph.db.execute('DELETE FROM human_review_audit')
                 with self.assertRaises(HumanReviewError): review.current('r')
                 service.graph.db.execute("UPDATE human_review_decisions SET actor='other'")

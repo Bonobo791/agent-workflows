@@ -83,7 +83,8 @@ class PlatformReviewerTests(unittest.TestCase):
                             Executor.blocked=is_blocked;Executor.supported=not is_blocked
                             before=service.graph.db.execute('SELECT count(*) FROM platform_reviews').fetchone()[0]
                             with patch.object(authority.fetcher,'fetch',side_effect=fetch),patch('runner.platform_reviewer.CodexExecutor',Executor):
-                                with self.assertRaises((ValueError,GraphError)): authority.check_for_claim('run',brief_ref,brief,claim,job['token'])
+                                message='claim expired or invalid' if 'graph_claims' in mutation else 'platform review unavailable' if 'policy_hash' in mutation else 'platform claim or source unavailable'
+                                with self.assertRaisesRegex((ValueError,GraphError),message): authority.check_for_claim('run',brief_ref,brief,claim,job['token'])
                             self.assertEqual(service.graph.db.execute("SELECT status FROM jobs WHERE run='run'").fetchone()[0],'running')
                             self.assertEqual(service.graph.db.execute('SELECT count(*) FROM platform_reviews').fetchone()[0],before)
                     finally: service.graph.db.execute('DROP TRIGGER corrupt_platform')

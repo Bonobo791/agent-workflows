@@ -233,7 +233,11 @@ class ServiceTests(unittest.TestCase):
         from runner.queue import QueueError
         with tempfile.TemporaryDirectory() as root:
             s=Service(root); s.create('r','marketing','task'); s.enqueue('r'); claim=s.queue.claim('worker',60)
-            with self.assertRaises(QueueError): s.finish_job('r',claim['token'],'invalid')
+            graph_claim=s.claim('r');s.task_intake=SimpleNamespace(revalidate=lambda _:True)
+            from unittest.mock import patch
+            with patch.object(s,'verify_terminal',wraps=s.verify_terminal) as verified:
+                with self.assertRaisesRegex(QueueError,'verified workflow completion required'):s.finish_job('r',claim['token'],graph_claim)
+                verified.assert_called_once_with('r')
             self.assertEqual(s.queue.get('r')['status'],'running'); s.close()
 
     def test_terminal_check_rejects_changed_required_skill(self):
