@@ -109,6 +109,13 @@ with a trusted quiescence verifier, an inactive matching scope, and an empty or
 removed recorded cgroup. No production quiescence verifier or recovery control
 is configured; an unobserved launch remains fenced.
 
+A disposable signed-in Codex crash probe also observed a previously bound scope
+exit and disappear before recovery. Its cgroup was empty, but the recorded scope
+remained `running`; the stop control rejected it and the run stayed fenced. A
+separate real-systemd regression confirms that an externally stopped bound scope
+cannot be confirmed through the current controls. This is safe fencing, not
+completed recovery; trusted launch-quiescence verification remains outstanding.
+
 The OpenFilm image has a local build using a pinned Playwright base and locked
 npm dependencies. The rootless Podman render adapter uses `keep-id` and private
 SELinux relabeling, and checks the resulting image, namespace and labels. A real
