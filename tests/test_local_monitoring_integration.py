@@ -282,7 +282,7 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             wait_up('1')
             def notifications():
                 metrics = request(f'http://127.0.0.1:{alert_port}/metrics', True).decode()
-                return sum(float(line.rsplit(' ',1)[1]) for line in metrics.splitlines()
+                return sum(float(line.rsplit('}',1)[1].split()[0]) for line in metrics.splitlines()
                            if line.startswith('alertmanager_notifications_total{') and 'integration="webhook"' in line)
             prior_notifications = notifications()
             worker.terminate()
@@ -318,6 +318,9 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                     alerts = json.loads(request(f'http://127.0.0.1:{alert_port}/api/v2/alerts', True))
                     if any(alert.get('labels', {}).get('alertname') == 'WorkflowMetricsMissing' for alert in alerts):
                         break
+                except urllib.error.HTTPError as error:
+                    error.close()
+                    raise
                 except urllib.error.URLError:
                     pass
                 time.sleep(.2)
