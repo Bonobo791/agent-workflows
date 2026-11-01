@@ -11,8 +11,22 @@ import time
 import unittest
 
 
-def cleanup_crash_fixture(temporary,backend):
+def _cleanup_scope(backend,unit,invocation,cgroup):
     from runner.local_scope import valid_scope_identity
+    if not re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit) or not valid_scope_identity(unit,invocation,cgroup):
+        raise RuntimeError('test scope identity is unverified')
+    state=backend.inspect(unit)
+    if state['active']=='active':
+        if (state['id'],state['load'],state['invocation'],state['cgroup'])!=(unit,'loaded',invocation,cgroup):
+            raise RuntimeError('test scope identity changed')
+        if backend.stop(unit) is not True:raise RuntimeError('test scope stop is unverified')
+        state=backend.inspect(unit)
+    if (state['id']!=unit or state['active']!='inactive' or state['load'] not in ('loaded','not-found')
+            or state['invocation'] not in ('',invocation) or backend.empty_cgroup(cgroup) is not True
+            or backend.no_pending_job(unit) is not True):raise RuntimeError('test scope cleanup is unverified')
+
+
+def cleanup_crash_fixture(temporary,backend):
     root=Path(temporary.name)
     try:
         if (root/'state.db').exists():
@@ -20,17 +34,7 @@ def cleanup_crash_fixture(temporary,backend):
                 present=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone()
                 rows=db.execute("SELECT unit,invocation,cgroup FROM local_scopes WHERE state IS NOT 'terminated'").fetchall() if present else []
             for unit,invocation,cgroup in rows:
-                if not re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit) or not valid_scope_identity(unit,invocation,cgroup):
-                    raise RuntimeError('test scope identity is unverified')
-                state=backend.inspect(unit)
-                if state['active']=='active':
-                    if (state['id'],state['load'],state['invocation'],state['cgroup'])!=(unit,'loaded',invocation,cgroup):
-                        raise RuntimeError('test scope identity changed')
-                    if backend.stop(unit) is not True:raise RuntimeError('test scope stop is unverified')
-                    state=backend.inspect(unit)
-                if (state['id']!=unit or state['active']!='inactive' or state['load'] not in ('loaded','not-found')
-                        or state['invocation'] not in ('',invocation) or backend.empty_cgroup(cgroup) is not True
-                        or backend.no_pending_job(unit) is not True):raise RuntimeError('test scope cleanup is unverified')
+                _cleanup_scope(backend,unit,invocation,cgroup)
     except Exception as error:
         error.add_note('Private executor-crash fixture retained at '+str(root))
         raise
