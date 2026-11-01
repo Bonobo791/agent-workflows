@@ -272,11 +272,23 @@ the recovery procedure below for those cases.
 For local scope recovery, first request `manual_stop` for the run. The returned
 scope list identifies unresolved units. The owner can call `stop_local_scope`
 with that run and unit: it binds an observed active scope and verifies termination.
+For a previously guarded launch that has already exited, the owner can call
+`reconcile_local_scope` with that run and unit. It requires the recorded launch
+receipt and audit, the exact fenced run, an inactive unit with no systemd job,
+and an empty recorded cgroup. A `stopping` scope also qualifies when its exact
+audited stop witness has completed; a missing or incomplete receipt remains
+unresolved. This operation does not confirm the worker stopped, release a
+workspace, or resolve remote requests.
+Review [local scope recovery evidence](local-scope-recovery.md) and its host
+and systemd assumptions before using the reconciliation control.
 
 For new local model executions, approved commands, and push snapshots, the
 workspace claim and its reserved scope are recorded together. A reserved scope
 is not proof of a launch; an absent or ambiguous launch still remains fenced.
 Older claims without a scope binding are not backfilled.
+Guarded launches wait for the scope identity and launch receipt to be committed;
+the final run-fence check and authorization share a database write lock with
+cancellation. A missing receipt or a lost fence prevents the target from starting.
 
 If the stop response includes `local_workspace`, the owner can call
 `release_local_workspace` with the exact `run`, `assignment`, and `unit` after
@@ -319,14 +331,14 @@ active and cannot resume. A separately scoped app server reads the exact saved
 thread and checks any matching turn without treating its status as permission
 to resume. The probe does not establish the upstream turn outcome or provide a
 production control to inspect or reconcile it.
-An unobserved launch or interrupted stop remains fenced, as does any unresolved
-engineering workspace claim. Operator stop confirmation still requires the exact
-incarnation and termination attestation.
-If a previously bound scope exits and systemd forgets the unit before the stop
-control runs, the recorded scope stays unresolved even when inspection shows an
-empty cgroup. The current control cannot establish that its launch request is
-quiescent; do not treat the empty observation as permission to confirm the stop
-or replay work. A trusted quiescence verifier and recovery control remain needed.
+An unobserved launch or a stop without a completed witness remains fenced, as
+does any unresolved engineering workspace claim. Operator stop confirmation
+still requires the exact incarnation and termination attestation.
+If a legacy bound scope without a guarded receipt exits and systemd forgets the
+unit before the stop control runs, it stays unresolved even with an empty cgroup.
+Only the guarded-launch evidence described above qualifies for
+`reconcile_local_scope`; an empty observation alone never authorizes stop
+confirmation or replay. Interrupted stops require their completed, audited witness.
 
 An opt-in real sandbox probe can check the specific parent cgroup file and user
 D-Bus socket on the local host:

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 def connect_control(path, timeout):
@@ -118,11 +119,15 @@ class WorkerProcessTests(unittest.TestCase):
     def test_late_scope_launch_after_worker_crash_stays_fenced(self):
         self._exercise_interrupted_worker(True,unbound=True,late=True)
 
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1' and os.environ.get('WORKFLOW_TEST_CODEX'),'real user systemd and signed-in Codex not configured')
+    def test_sigkill_recovers_guarded_scope_that_exited_before_restart(self):
+        self._exercise_interrupted_worker(True,vanished=True)
+
     @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
     def test_crash_with_externally_stopped_bound_scope_remains_fenced(self):
         self._exercise_interrupted_worker(True,externally_stopped=True)
 
-    def _exercise_interrupted_worker(self,hard_crash,unbound=False,late=False,externally_stopped=False):
+    def _exercise_interrupted_worker(self,hard_crash,unbound=False,late=False,vanished=False,externally_stopped=False):
         code="""
 import os, subprocess, sys, time
 from pathlib import Path
@@ -213,6 +218,7 @@ worker.main()
             env.pop('WORKFLOW_TEST_LATE',None)
             env.update(CONTROL_SECRET_FILE=str(secret),WORKFLOW_DATA_DIR=str(root),WORKFLOW_EXECUTION_MODE='disabled',WORKFLOW_LIFECYCLE_MODE='manual',MANUAL_WORKER_TARGET='fixture',MANUAL_WORKER_INCARNATION='one',WORKFLOW_TASK_CONFIG_FILE=str(root/'task.json'),WORKFLOW_ROLE_CONFIG_FILE=str(root/'roles.json'),DOCKER_RUNTIME_CONFIG_FILE=str(root/'runtime.json'))
             if unbound: env['WORKFLOW_TEST_UNBOUND']='1'; env.pop('WORKFLOW_TEST_CODEX',None)
+            if externally_stopped: env.pop('WORKFLOW_TEST_CODEX',None)
             if late: env.update(WORKFLOW_TEST_LATE='1',WORKFLOW_TEST_LAUNCHER=str(launcher_script))
             if hard_crash: env['WORKFLOW_CONTROL_DIR']=str(root/'first-control')
             process=subprocess.Popen([sys.executable,'-c',code],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -231,7 +237,7 @@ worker.main()
                 self.assertEqual(process.returncode,-9 if hard_crash else 0,stderr.decode())
                 self.assertNotIn(b'x'*40,stdout+stderr)
                 if hard_crash:
-                    self._recover_crashed_worker(root,env,code,unbound,late,externally_stopped)
+                    self._recover_crashed_worker(root,env,code,unbound,late,vanished,externally_stopped)
                     return
                 self._assert_shutdown_fenced(root,path)
             finally:
@@ -243,13 +249,15 @@ worker.main()
         failure=(root/'stage-error').read_text() if (root/'stage-error').exists() else 'no stage result'
         self.assertTrue((root/'stage-entered').exists(),failure)
 
-    def _recover_crashed_worker(self,root,env,code,unbound,late,externally_stopped=False):
+    def _recover_crashed_worker(self,root,env,code,unbound,late,vanished=False,externally_stopped=False):
         import sqlite3
-        if externally_stopped:
+        if vanished or externally_stopped:
             from runner.local_scope import SystemdScopes, valid_scope_identity
             backend=SystemdScopes(os.environ)
             with closing(sqlite3.connect(root/'state.db')) as db:
                 unit,invocation,cgroup,state=db.execute("SELECT unit,invocation,cgroup,state FROM local_scopes WHERE run='r'").fetchone()
+                if vanished:
+                    self.assertIsNotNone(db.execute('SELECT 1 FROM local_scope_launch_receipts WHERE run=? AND unit=? AND invocation=? AND cgroup=?',('r',unit,invocation,cgroup)).fetchone())
             self.assertEqual(state,'running')
             self.assertTrue(valid_scope_identity(unit,invocation,cgroup))
             observed=backend.inspect(unit)
@@ -302,19 +310,25 @@ worker.main()
                     time.sleep(.05)
                 self.assertEqual(observed['active'],'active')
                 self.assertTrue(observed['cgroup']); self.assertTrue(observed['invocation'])
-            result=action({'action':'stop_local_scope','run':'r','unit':unit})
             if externally_stopped:
+                result=action({'action':'stop_local_scope','run':'r','unit':unit})
                 self.assertFalse(result['ok'],result)
+                self.assertFalse(action({'action':'reconcile_local_scope','run':'r','unit':unit})['ok'])
                 self.assertFalse(action({'action':'manual_confirm_stopped','run':'r','incarnation':'one','attestation':'terminated_and_fenced'})['ok'])
                 with closing(sqlite3.connect(root/'state.db')) as db:
                     self.assertEqual(db.execute('SELECT state FROM local_scopes WHERE unit=?',(unit,)).fetchone(),('running',))
                 self._assert_database_fenced(root)
                 return
+            from runner.local_scope import SystemdScopes
+            observed=SystemdScopes(os.environ).inspect(unit)
+            operation='reconcile_local_scope' if not unbound and observed['active']=='inactive' else 'stop_local_scope'
+            if vanished:self.assertEqual(operation,'reconcile_local_scope')
+            result=action({'action':operation,'run':'r','unit':unit})
             if not result['ok']:
                 observed=action({'action':'inspect_local_scope','run':'r','unit':unit})
                 with closing(sqlite3.connect(root/'state.db')) as db:
                     stored=db.execute('SELECT state,invocation,cgroup FROM local_scopes WHERE unit=?',(unit,)).fetchone()
-                self.fail(f'scope stop rejected: {result}, recorded={stored}, inspection={observed}')
+                self.fail(f'scope recovery rejected: {result}, recorded={stored}, inspection={observed}')
             self.assertEqual(result['result'],{'unit':unit,'state':'terminated'})
             if unbound:
                 self.assertEqual(unit,row[0])

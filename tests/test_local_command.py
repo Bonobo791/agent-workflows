@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import os
 from runner.local_command import LocalCommandBackend, LocalCommandError
 from runner.local_scope import LocalScopes
 from tests.test_local_scope import Backend
@@ -10,6 +11,53 @@ class Supervisor:
     def fence(self,run):return True
 
 class LocalCommandTests(unittest.TestCase):
+    def test_cleanup_reaps_client_even_after_scope_stopped(self):
+        from unittest.mock import Mock
+        from runner.local_command import _cleanup_command
+        process=Mock(stdin=None,stdout=None)
+        _cleanup_command(None,'run','unit',process,True)
+        process.wait.assert_called_once_with(timeout=1)
+
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_guarded_command_executes_after_scope_receipt(self):
+        import time
+        from pathlib import Path
+        from types import SimpleNamespace
+        from runner.local_command import _run_scoped
+        from runner.local_scope import SystemdScopes
+        with tempfile.TemporaryDirectory(prefix='workflow-command-') as root:
+            backend=SystemdScopes(os.environ)
+            supervisor=SimpleNamespace(db=str(Path(root)/'state.db'),backend=backend,environment=dict(os.environ),fence=lambda _:True)
+            units=[]
+            result=_run_scoped(supervisor,'run',root,['/usr/bin/printf','guarded'],{'PATH':'/usr/bin:/bin'},time.monotonic()+30,1024,units.append)
+            self.assertEqual((result['exit_code'],result['stdout']),(0,b'guarded'))
+            scopes=LocalScopes(supervisor.db,backend)
+            try:
+                self.assertEqual(scopes.state('run',units[0]),'terminated')
+                self.assertEqual(scopes.db.execute('SELECT run,unit FROM local_scope_launch_receipts').fetchone(),('run',units[0]))
+            finally:scopes.close()
+    @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
+    def test_guarded_command_never_runs_when_receipt_binding_fails(self):
+        import time
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runner.local_command import _run_scoped
+        from runner.local_scope import ScopeError, SystemdScopes
+        with tempfile.TemporaryDirectory(prefix='workflow-command-failure-') as root:
+            backend=SystemdScopes(os.environ)
+            supervisor=SimpleNamespace(db=str(Path(root)/'state.db'),backend=backend,environment=dict(os.environ),fence=lambda _:True)
+            units=[];groups=[];marker=Path(root)/'executed'
+            def reject(scopes,run,unit,launch):
+                groups.append(backend.inspect(unit)['cgroup'])
+                raise ScopeError('audit unavailable')
+            with patch.object(LocalScopes,'bind_confirmed',autospec=True,side_effect=reject):
+                deadline=time.monotonic()+30
+                with self.assertRaises(LocalCommandError):
+                    _run_scoped(supervisor,'run',root,['/usr/bin/touch',str(marker)],{'PATH':'/usr/bin:/bin'},deadline,1024,units.append)
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline and not backend.empty_cgroup(groups[0]):time.sleep(.05)
+            self.assertTrue(backend.empty_cgroup(groups[0]));self.assertFalse(marker.exists())
     def test_terminal_receipt_requires_exact_scope_and_exit_code(self):
         with tempfile.TemporaryDirectory() as root:
             db=root+'/state.db';engine=Backend();supervisor=Supervisor(db,engine);scopes=LocalScopes(db,engine);unit=scopes.reserve('run');engine.unit=unit;scopes.bind('run',unit)
