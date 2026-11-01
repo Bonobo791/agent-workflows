@@ -26,6 +26,9 @@ class LocalSupervisor:
         try:
             dbh.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT NOT NULL,role TEXT NOT NULL,session TEXT NOT NULL UNIQUE,binding TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(run,role))')
             dbh.execute('CREATE TABLE IF NOT EXISTS local_execution_scopes(run TEXT NOT NULL,role TEXT NOT NULL,execution TEXT NOT NULL PRIMARY KEY,session TEXT NOT NULL,unit TEXT NOT NULL UNIQUE,binding TEXT NOT NULL)')
+            dbh.execute('CREATE TABLE IF NOT EXISTS local_execution_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,role TEXT NOT NULL,execution TEXT NOT NULL,session TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
+            dbh.execute("""CREATE TRIGGER IF NOT EXISTS local_execution_scope_audit_insert AFTER INSERT ON local_execution_scopes BEGIN
+                INSERT INTO local_execution_scope_audit(schema_version,run,role,execution,session,unit,status,created) VALUES(1,NEW.run,NEW.role,NEW.execution,NEW.session,NEW.unit,'bound',(julianday('now')-2440587.5)*86400.0); END""")
             dbh.execute('CREATE TABLE IF NOT EXISTS local_turn_scopes(run TEXT NOT NULL,role TEXT NOT NULL,session TEXT NOT NULL,turn TEXT NOT NULL,unit TEXT NOT NULL UNIQUE,binding TEXT NOT NULL,PRIMARY KEY(run,role,session,turn))')
             dbh.execute('CREATE TABLE IF NOT EXISTS local_turn_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,role TEXT NOT NULL,session TEXT NOT NULL,turn TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
             dbh.execute("""CREATE TRIGGER IF NOT EXISTS local_turn_scope_audit_insert AFTER INSERT ON local_turn_scopes BEGIN
