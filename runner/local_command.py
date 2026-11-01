@@ -8,6 +8,7 @@ import subprocess
 import time
 from runner.adapter import managed_app_server_spec
 from runner.local_scope import LocalScopes, reserve_for_execution
+from runner.local_launch import reap_after_failure, start_guarded
 from runner.process_transport import ProcessTransport
 
 class LocalCommandError(RuntimeError): pass
@@ -65,6 +66,7 @@ def _cleanup_command(s,run,unit,process,stopped):
             except Exception:pass
         for stream in (process.stdin,process.stdout):
             if stream is not None:stream.close()
+        reap_after_failure(process)
 
 def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved,on_started=None,*,input_data=None,workspace_claim=None,reserved_command=None):
     manager={k:s.environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in s.environment};manager['PATH']='/usr/bin:/bin'
@@ -75,15 +77,19 @@ def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved
         unit=_claim_command_launch(s,run,workspace,reserved_command,workspace_claim)
 
     relay=str(Path(__file__).with_name('local_command_child.py').resolve(strict=True))
-    command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']+[k+'='+v for k,v in child_env.items()]+['/usr/bin/python3','-I',relay]
-    process=None; stopped=False
+    command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']+[k+'='+v for k,v in child_env.items()]
+    process=None; launch=None; stopped=False
     try:
-        process=subprocess.Popen(command,cwd=workspace,env=manager,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
+        launch=start_guarded(command,['/usr/bin/python3','-I',relay],cwd=workspace,env=manager,deadline=deadline)
+        process=launch.process
+        launch.receive(deadline,lambda:s.fence(run) is not True)
+        scopes=LocalScopes(s.db,s.backend)
+        try:
+            scopes.bind_confirmed(run,unit,launch)
+            scopes.release_confirmed(run,unit,launch,lambda:s.fence(run),deadline=deadline)
+        finally:scopes.close()
         transport=ProcessTransport(process,deadline,lambda:s.fence(run) is not True)
         if transport.receive()!={'ready':True}: raise LocalCommandError('scope relay unavailable')
-        scopes=LocalScopes(s.db,s.backend)
-        try:scopes.bind(run,unit)
-        finally:scopes.close()
         if on_started is not None:on_started(unit)
         if s.fence(run) is not True: raise LocalCommandError('run fence unavailable')
         remaining=int(deadline-time.monotonic())-1
@@ -102,6 +108,7 @@ def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved
         return {'outcome':'exited','exit_code':exit_code,'stdout':stdout,'stderr':stderr,'unit':unit}
     except Exception: raise LocalCommandError('local command outcome uncertain') from None
     finally:
+        if launch is not None:launch.close()
         _cleanup_command(s,run,unit,process,stopped)
 
 class LocalCommandBackend:

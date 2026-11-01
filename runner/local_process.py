@@ -5,7 +5,8 @@ import stat
 import subprocess
 import time
 from runner.adapter import managed_app_server_spec, verify_managed_workspace
-from runner.local_scope import LocalScopes, ScopeError, reserve_for_execution
+from runner.local_scope import LocalScopes, reserve_for_execution
+from runner.local_launch import reap_after_failure, start_guarded
 from runner.process_transport import ProcessTransport
 
 class LocalProcessError(RuntimeError): pass
@@ -65,20 +66,22 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
         args,child_env=managed_app_server_spec(executable,environment,disabled_integrations=disabled_integrations,output_dir=str(output_dir),git_dir=git_dir)
     except (OSError,ValueError): raise LocalProcessError('private output allocation unavailable') from None
     command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']
-    command.extend(k+'='+v for k,v in child_env.items());command.extend(args)
+    command.extend(k+'='+v for k,v in child_env.items())
+    launch=None
     try:
-        process=subprocess.Popen(command,cwd=str(path),env=manager_env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
-    except OSError: raise LocalProcessError('scope launch outcome unresolved') from None
-    deadline=time.monotonic()+10
-    while time.monotonic()<deadline:
-        if process.poll() is not None: raise LocalProcessError('scope launch exited before identity was bound')
-        if fence() is not True: raise LocalProcessError('run fence lost during scope launch')
+        deadline=time.monotonic()+10
+        launch=start_guarded(command,args,cwd=str(path),env=manager_env,deadline=deadline)
+        launch.receive(deadline,lambda:fence() is not True)
         scopes=LocalScopes(db,backend)
         try:
-            try:
-                scopes.bind(run,unit)
-                return LocalProcessHandle(db,run,unit,str(path),str(output_dir),args[0],process,backend,fence,git_dir)
-            except ScopeError: pass
+            scopes.bind_confirmed(run,unit,launch)
+            scopes.release_confirmed(run,unit,launch,fence,deadline=deadline)
         finally: scopes.close()
-        time.sleep(.05)
-    raise LocalProcessError('scope launch outcome unresolved')
+        return LocalProcessHandle(db,run,unit,str(path),str(output_dir),args[0],launch.process,backend,fence,git_dir)
+    except Exception:
+        if launch is not None:
+            launch.close()
+            for stream in (launch.process.stdin,launch.process.stdout):
+                if stream is not None:stream.close()
+            reap_after_failure(launch.process)
+        raise LocalProcessError('scope launch outcome unresolved') from None

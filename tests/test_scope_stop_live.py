@@ -61,6 +61,7 @@ import sys,time
 from pathlib import Path
 from runner.local_scope import LocalScopes,SystemdScopes
 class DelayedStop(SystemdScopes):
+    stop_witnessed=None
     def stop(self,unit):
         if sys.argv[4]=='after': super().stop(unit)
         Path(sys.argv[3]).write_text(sys.argv[4])
@@ -143,6 +144,7 @@ import os,subprocess,sys
 from pathlib import Path
 from runner.local_scope import LocalScopes,SystemdScopes
 class HeldStop(SystemdScopes):
+    stop_witnessed=None
     def stop(self,unit):
         child=subprocess.Popen(['/usr/bin/systemctl','--user','stop',unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         Path(sys.argv[3]).write_text(str(child.pid))
