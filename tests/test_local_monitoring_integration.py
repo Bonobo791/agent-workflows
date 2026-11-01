@@ -22,6 +22,36 @@ from runner.desktop_alert_receiver import build_server
 from tests.monitoring_cleanup import cleanup_monitoring
 
 
+def assert_no_firing(events, seconds, message):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            title, body = events.get(timeout=max(0.01, deadline-time.monotonic()))
+        except queue.Empty:
+            return
+        if 'metrics are unavailable' in body and 'resolved' not in title:
+            raise AssertionError(message)
+
+
+class AlertDedupAssertionTests(unittest.TestCase):
+    def test_queued_firing_is_rejected_even_after_unrelated_notifications(self):
+        for preceding in ([], [('other', 'unrelated')], [('resolved', 'metrics are unavailable')]):
+            with self.subTest(preceding=preceding):
+                events = queue.Queue()
+                for event in preceding:
+                    events.put(event)
+                events.put(('firing', 'metrics are unavailable'))
+                with self.assertRaisesRegex(AssertionError, 'duplicate firing'):
+                    assert_no_firing(events, .02, 'duplicate firing')
+
+    def test_empty_or_nonfiring_queue_passes(self):
+        events = queue.Queue()
+        events.put(('other', 'unrelated'))
+        events.put(('resolved', 'metrics are unavailable'))
+        assert_no_firing(events, .01, 'duplicate firing')
+        assert_no_firing(events, .01, 'duplicate firing')
+
+
 @unittest.skipUnless(os.environ.get('WORKFLOW_LOCAL_MONITORING_TEST') == '1',
                      'local monitoring test not configured')
 class LocalMonitoringIntegrationTests(unittest.TestCase):
@@ -282,7 +312,7 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
             wait_up('1')
             def notifications():
                 metrics = request(f'http://127.0.0.1:{alert_port}/metrics', True).decode()
-                return sum(float(line.rsplit(' ',1)[1]) for line in metrics.splitlines()
+                return sum(float(line.rsplit('}',1)[1].split()[0]) for line in metrics.splitlines()
                            if line.startswith('alertmanager_notifications_total{') and 'integration="webhook"' in line)
             prior_notifications = notifications()
             worker.terminate()
@@ -296,14 +326,7 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                 time.sleep(.1)
             else:
                 self.fail('Alertmanager did not acknowledge the firing notification')
-            while not events.empty():
-                events.get_nowait()
-            try:
-                title, body = events.get(timeout=2)
-                self.assertFalse('metrics are unavailable' in body and 'resolved' not in title,
-                                 'duplicate before Alertmanager restart')
-            except queue.Empty:
-                pass
+            assert_no_firing(events, 2, 'duplicate before Alertmanager restart')
             if systemd_mode:
                 subprocess.run(['systemctl', '--user', 'restart', alert_name], check=True, capture_output=True, timeout=30)
             else:
@@ -318,19 +341,15 @@ class LocalMonitoringIntegrationTests(unittest.TestCase):
                     alerts = json.loads(request(f'http://127.0.0.1:{alert_port}/api/v2/alerts', True))
                     if any(alert.get('labels', {}).get('alertname') == 'WorkflowMetricsMissing' for alert in alerts):
                         break
+                except urllib.error.HTTPError as error:
+                    error.close()
+                    raise
                 except urllib.error.URLError:
                     pass
                 time.sleep(.2)
             else:
                 self.fail('Alertmanager did not receive the still-active alert after restart')
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline:
-                try:
-                    title, body = events.get(timeout=max(0.01, deadline-time.monotonic()))
-                except queue.Empty:
-                    break
-                self.assertFalse('metrics are unavailable' in body and 'resolved' not in title,
-                                 'Alertmanager repeated an active alert after restart')
+            assert_no_firing(events, 8, 'Alertmanager repeated an active alert after restart')
             if systemd_mode:
                 subprocess.run(['systemctl', '--user', 'restart', prom_name], check=True, capture_output=True, timeout=30)
             else:
