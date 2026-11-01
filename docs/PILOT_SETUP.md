@@ -320,6 +320,19 @@ recovery state.
 An unobserved launch or a stop without a completed witness remains fenced, as
 does any unresolved engineering workspace claim. Operator stop confirmation
 still requires the exact incarnation and termination attestation.
+If systemd forgets a previously bound scope, an empty cgroup alone does not
+establish that its launch request is quiescent. Legacy scopes without a guarded
+launch receipt remain unresolved and must not be replayed.
+
+An opt-in real sandbox probe can check the specific parent cgroup file and user
+D-Bus socket on the local host:
+`WORKFLOW_TEST_SYSTEMD=1 CODEX_TEST_EXECUTABLE=/absolute/path/to/codex python -m unittest tests.test_scope_isolation_live`.
+It verifies that the host paths exist and the user bus accepts a connection
+before requiring a permission, read-only, or hidden-path error inside the
+sandbox. It uses a recorded disposable scope and attempts no cgroup write or
+D-Bus request. A
+passing result covers only those paths, not all possible descendant escapes or
+the quiescence of an interrupted launch.
 
 Marketing source review requires either the configured local snapshot authority
 or an independently authenticated source-tool authority. Missing, stale or

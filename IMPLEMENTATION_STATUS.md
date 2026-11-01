@@ -102,12 +102,23 @@ input pipe without making an external write. Real GitHub mutations remain
 untested, and ambiguous outcomes require independent reconciliation.
 
 After manual stop fences a run, `stop_local_scope` can bind and terminate its
-observed active scope; absent launches and interrupted stops remain unresolved.
-Manual stop confirmation now blocks when a local scope remains unresolved and
-reports the recorded scope identity. An interrupted stop can be reconciled only
-with a trusted quiescence verifier, an inactive matching scope, and an empty or
-removed recorded cgroup. No production quiescence verifier or recovery control
-is configured; an unobserved launch remains fenced.
+observed active scope. Guarded launches record an exact scope receipt before
+authorization, and a detached witness records completion of new systemd stop
+requests. The owner-only `reconcile_local_scope` control can reconcile a fenced
+run with a matching guarded-launch receipt or completed witnessed stop, audited
+evidence, an inactive unit with no current job, and an empty recorded cgroup.
+Unobserved launches, legacy stops without receipts and incomplete witnesses
+remain fenced. Recovery relies on the host and systemd assumptions documented
+in [local scope recovery](docs/local-scope-recovery.md); it does not establish
+remote outcomes or replace worker-stop attestation.
+
+A disposable signed-in Codex crash probe also observed a previously bound scope
+exit and disappear before recovery. Its cgroup was empty, but the recorded scope
+remained `running`; the stop control rejected it and the run stayed fenced. A
+separate real-systemd regression confirms that an externally stopped legacy
+scope without a guarded receipt remains fenced. Guarded scopes have since been
+tested through signed-in worker-crash recovery; the full workflow and all host
+containment assumptions have not been established by that test.
 
 The OpenFilm image has a local build using a pinned Playwright base and locked
 npm dependencies. The rootless Podman render adapter uses `keep-id` and private
