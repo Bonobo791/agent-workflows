@@ -163,7 +163,25 @@ inspection; do not silently reset it. This detects a changed checkpoint, not all
 possible alterations to earlier history, so stop delivery while restoring the
 source and explicitly reconcile cursors before resuming. A restore racing with
 an export is not atomic across the two databases and may cause duplicate or
-missed delivery. No background dispatcher or cursor database is configured, so delivery is not
+missed delivery.
+
+Recovering a table that reports `inspection_required` (including a cursor written
+before checkpoint digests existed) is a manual decision; delivery never re-anchors
+a position by itself, because an anchor created now would vouch for history nobody
+has verified. Stop the delivery timer, then establish the cause by comparing the
+source database with an independent copy or the collector output. If continuity
+cannot be shown, replay the table: back up the cursor database, then remove that
+table's rows (this affects every source and destination using that cursor database):
+
+```sh
+sqlite3 /private/audit-cursors.db \
+  "DELETE FROM export_cursor_anchors WHERE table_name='graph_audit'; DELETE FROM export_cursors WHERE table_name='graph_audit';"
+```
+
+The next run re-delivers the whole table from its first row and records a fresh
+anchor. Receivers must tolerate duplicates; replay does not remove events already
+delivered. Restart the timer afterwards and confirm the health status is successful.
+There is no supported way to keep an old position without verification. No background dispatcher or cursor database is configured, so delivery is not
 called by the worker. An operator can explicitly deliver one bounded page per selected table:
 
 ```sh

@@ -298,6 +298,24 @@ class AuditExportTests(unittest.TestCase):
                 self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,b'x'*32,lambda _:True),{'status':'inspection_required','cursor':1})
             finally: cursor.close(); graph.close()
 
+    def test_documented_cursor_reset_replays_table_without_accepting_old_position(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/state.db'); graph.register(engineering_definition()); graph.create('run','engineering'); token=graph.claim('run',60)
+            graph.finish('run','intake',graph.prepare('run','intake',token),'passed','result',token)
+            cursor=sqlite3.connect(root+'/cursor.db',isolation_level=None); key=b'x'*32; sent=[]
+            try:
+                first=deliver_page(graph.db,cursor,'target','graph_audit',10,key,lambda events:sent.append(len(events)) or True)
+                cursor.execute('DELETE FROM export_cursor_anchors')
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,key,lambda _:True),{'status':'inspection_required','cursor':first['cursor']})
+                cursor.execute("DELETE FROM export_cursor_anchors WHERE table_name='graph_audit'")
+                cursor.execute("DELETE FROM export_cursors WHERE table_name='graph_audit'")
+                replayed=deliver_page(graph.db,cursor,'target','graph_audit',10,key,lambda events:sent.append(len(events)) or True)
+                self.assertEqual(sent,[first['cursor'],first['cursor']]); self.assertEqual(replayed['cursor'],first['cursor'])
+                self.assertEqual(cursor.execute('SELECT COUNT(*) FROM export_cursor_anchors').fetchone()[0],1)
+                self.assertEqual(deliver_page(graph.db,cursor,'target','graph_audit',10,key,lambda _:True)['status'],'empty')
+            finally: cursor.close(); graph.close()
+
     def test_history_change_during_export_does_not_advance_cursor(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as root:
