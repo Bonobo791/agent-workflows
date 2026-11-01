@@ -302,15 +302,30 @@ class Service:
             try: fresh=self.task_intake is not None and self.task_intake.revalidate(run) is True
             except Exception: fresh=False
             if not fresh: raise QueueError('task freshness unavailable or changed')
+        released=[]
         def verified(run):
             if not self.verify_terminal(run): return False
-            if self.graph._definition(run).name!='marketing': return True
-            if self.human_review is None: return False
-            from runner.human_review import HumanReviewError
-            try: decision=self.human_review.current(run)
-            except HumanReviewError: return False
-            return bool(decision and decision['decision']=='approved')
-        self.queue.finish(run,queue_token,verify_completed=verified)
+            if self.graph._definition(run).name=='marketing':
+                if self.human_review is None: return False
+                from runner.human_review import HumanReviewError
+                try: decision=self.human_review.current(run)
+                except HumanReviewError: return False
+                if not decision or decision['decision']!='approved': return False
+            db=self.queue.db
+            claim=db.execute('SELECT c.task_id,c.expires FROM graph_claims c JOIN graph_runs g ON g.id=c.run AND g.task_id=c.task_id WHERE c.run=?',(run,)).fetchone()
+            if not claim or claim[1]<=self.graph.clock(): return False
+            created=time.time()
+            inserted=db.execute("INSERT INTO claim_audit(schema_version,run,task_id,status,created) VALUES(1,?,?,'released',?)",(run,claim[0],created))
+            if inserted.rowcount!=1 or db.execute('SELECT run,task_id,status,created FROM claim_audit WHERE id=?',(inserted.lastrowid,)).fetchone()!=(run,claim[0],'released',created): return False
+            released.append((inserted.lastrowid,claim[0],created))
+            if db.execute('DELETE FROM graph_claims WHERE run=?',(run,)).rowcount!=1: return False
+            if claim[1]<=self.graph.clock(): return False
+            if db.execute("UPDATE graph_runs SET status='completed' WHERE id=? AND status='active'",(run,)).rowcount!=1: return False
+            return db.execute("SELECT status FROM graph_runs WHERE id=?",(run,)).fetchone()==('completed',) and not db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone()
+        def final(run):
+            db=self.queue.db
+            return len(released)==1 and db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()==('completed',) and not db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone() and db.execute('SELECT run,task_id,status,created FROM claim_audit WHERE id=?',(released[0][0],)).fetchone()==(run,released[0][1],'released',released[0][2])
+        self.queue.finish(run,queue_token,verify_completed=verified,verify_final=final)
     def claim(self,run): return self.graph.claim(run,60)
     def release(self,run,token): self.graph.release(run,token)
     def approve(self,run,action,version,actor):

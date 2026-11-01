@@ -41,6 +41,22 @@ class QueueTests(unittest.TestCase):
         self.q.enqueue('one'); self.q.claim('worker',5); self.time[0]=6
         self.assertEqual(self.q.get('one')['status'],'uncertain')
 
+    def test_finish_rejects_claim_expiring_during_verification(self):
+        self.q.enqueue('one'); claim=self.q.claim('worker',10)
+        def verify(run): self.time[0]=11; return True
+        with self.assertRaises(QueueError): self.q.finish('one',claim['token'],verify_completed=verify)
+        self.assertEqual(self.q.db.execute("SELECT status FROM jobs WHERE run='one'").fetchone(),('running',))
+
+    def test_finish_requires_durable_completion_audit(self):
+        for trigger in ("CREATE TRIGGER reject_completion BEFORE INSERT ON job_audit WHEN NEW.status='completed' BEGIN SELECT RAISE(IGNORE); END",
+                        "CREATE TRIGGER reject_completion AFTER INSERT ON job_audit WHEN NEW.status='completed' BEGIN UPDATE job_audit SET status='altered' WHERE id=NEW.id; END"):
+            with self.subTest(trigger=trigger):
+                self.q.enqueue('one'); claim=self.q.claim('worker',10); self.q.db.execute(trigger)
+                with self.assertRaises(QueueError): self.q.finish('one',claim['token'],verify_completed=lambda run: True)
+                self.assertEqual(self.q.get('one')['status'],'running')
+                self.q.db.execute('DROP TRIGGER reject_completion'); self.q.finish('one',claim['token'],verify_completed=lambda run: True)
+                self.q.db.execute('DELETE FROM jobs')
+
     def test_finish_requires_trusted_terminal_verification(self):
         self.q.enqueue('one'); claim=self.q.claim('worker',10)
         with self.assertRaises(QueueError): self.q.finish('one',claim['token'])
