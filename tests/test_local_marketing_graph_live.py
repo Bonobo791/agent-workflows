@@ -40,16 +40,21 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
         }.items():
             directory=skills/name; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text(content)
         render=os.environ.get('WORKFLOW_TEST_RENDER')=='1'
+        platform_source=os.environ.get('WORKFLOW_TEST_PLATFORM_SOURCE')
+        if platform_source: self.assertTrue(render,'source-backed platform probe requires rendering configuration')
         if os.environ.get('WORKFLOW_TEST_DECISION')=='1': self.assertEqual(os.environ.get('WORKFLOW_TEST_CHANNELS'),'1','decision probe requires the channel workflow')
         if render:
             self.assertEqual(os.environ.get('WORKFLOW_TEST_CHANNELS'),'1','render probe requires the channel workflow')
             manual=Path(os.environ['OPENFILM_TEST_MANUAL']).read_text()
             directory=skills/'openfilm'; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text(manual)
             directory=skills/'asset-editor'; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text('Independently inspect the supplied fixture images and evidence. Do not infer missing evidence.')
+            if platform_source:
+                directory=skills/'platform-editor'; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text('Compare the exact requested asset to the supplied official source. Block if any requirement is not explicitly established.')
+        backend=SystemdScopes(os.environ)
         service=Service(str(root)); service.state_db_path=str(root/'state.db')
         service.lifecycle=ManualLifecycle(service.state_db_path,'fixture','fixture-incarnation'); completed=False
         try:
-            config=inspect_config(os.environ['CODEX_TEST_EXECUTABLE'],str(workspace),os.environ); backend=SystemdScopes(os.environ)
+            config=inspect_config(os.environ['CODEX_TEST_EXECUTABLE'],str(workspace),os.environ)
             discovery=start_local_process(str(root/'state.db'),'discovery',str(workspace),config['codex_executable'],os.environ,backend,lambda:True,config['disabled_integrations'])
             try:
                 app=AppServer(discovery.open_transport(time.monotonic()+90,lambda:False)); app.initialize()
@@ -90,7 +95,11 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                         assets=[{**{key:item[key] for key in ('channel','kind','width','height','duration_seconds')},'source_ref':source,'supported':True} for item in brief['assets']]
                         return service.artifacts.put(json.dumps({'brief_ref':brief_ref,'checked_at':now,'expires_at':now+3600,'assets':assets}).encode())
                     def verify(self,*args): return True
-                service.openfilm_platform_authority=FixturePlatform()
+                if platform_source:
+                    from runner.platform_reviewer import PlatformReviewer
+                    service.required_skills['platform_review']=['platform-editor']
+                    service.openfilm_platform_authority=PlatformReviewer(service,{'sources':{'instagram':{'url':platform_source,'surface':'Instagram API feed image'}}})
+                else: service.openfilm_platform_authority=FixturePlatform()
                 service.approve('controller','docker_config',runtime.policy_hash,'fixture-operator')
                 service.approve('controller','openfilm_builder_policy',builder.policy_hash,'fixture-operator')
                 service.approve('controller','openfilm_policy',service.openfilm_backend.policy_hash,'fixture-operator')
@@ -129,7 +138,14 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 outcome=dispatcher.step('r',queue['token'],claim)
                 self.assertEqual(outcome['stage'],'asset_brief'); self.assertIn(outcome['status'],('passed','blocked'))
                 outcome=dispatcher.step('r',queue['token'],claim)
-                if render:
+                if platform_source:
+                    self.assertEqual((outcome['stage'],outcome['status']),('asset_production','blocked'))
+                    record=json.loads(service.artifacts.get(outcome['artifact_ref']))
+                    brief_ref=json.loads(service.artifacts.get(service.graph.get('r','asset_brief')['version']))['outputs'][0]
+                    brief=json.loads(service.artifacts.get(brief_ref))
+                    self.assertTrue(service.openfilm_platform_authority.verify_blocked('r',brief_ref,brief,record['platform_block_ref']))
+                    self.assertEqual(service.docker_assignments.db.execute('SELECT count(*) FROM docker_assignments').fetchone()[0],0)
+                elif render:
                     self.assertEqual((outcome['stage'],outcome['status']),('asset_production','awaiting_review'))
                     manifest=json.loads(service.artifacts.get(service.graph.get('r','asset_production')['version']))
                     self.assertTrue(manifest['assets']); self.assertTrue(all(item['kind']=='png' for item in manifest['assets']))
@@ -139,12 +155,12 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 else: self.assertEqual((outcome['stage'],outcome['status']),('asset_production','blocked'))
                 outcome=dispatcher.step('r',queue['token'],claim)
                 self.assertEqual(outcome['stage'],'instagram_review'); self.assertIn(outcome['status'],('passed','blocked'))
-                if not render: self.assertEqual(outcome['status'],'blocked')
+                if not render or platform_source: self.assertEqual(outcome['status'],'blocked')
                 self.assertTrue(dispatcher._verify_recorded_review('r','instagram_review'))
                 outcome=dispatcher.step('r',queue['token'],claim)
                 self.assertEqual((outcome['stage'],outcome['status']),('assembly','awaiting_review'))
                 package=json.loads(service.artifacts.get(service.graph.get('r','assembly')['version']))
-                if not render:
+                if not render or platform_source:
                     self.assertEqual(package['stages']['asset_production']['status'],'blocked')
                     self.assertEqual(package['stages']['instagram_review']['status'],'blocked')
                 if os.environ.get('WORKFLOW_TEST_DECISION')=='1':
@@ -170,5 +186,9 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                     if not re.fullmatch(r'[0-9a-f]{64}',cid): raise RuntimeError('fixture container identity unavailable')
                     subprocess.run(['/usr/bin/podman','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,check=True)
             service.lifecycle.close(); service.close()
-            if completed: temporary.cleanup()
-            else: print('Private marketing-graph fixture retained at '+str(root))
+            from tests.test_local_executor_crash_live import cleanup_crash_fixture
+            if completed: cleanup_crash_fixture(temporary,backend)
+            else:
+                from types import SimpleNamespace
+                cleanup_crash_fixture(SimpleNamespace(name=str(root),cleanup=lambda:None),backend)
+                print('Private marketing-graph fixture retained at '+str(root))

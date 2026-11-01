@@ -2,6 +2,7 @@ import hashlib,json,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 from runner.local_scope import LocalScopes
+from runner.graph import GraphError
 from runner.local_supervisor import LocalSupervisor
 from runner.manual_lifecycle import ManualLifecycle
 from runner.openfilm_platform import verify_platform
@@ -75,6 +76,17 @@ class PlatformReviewerTests(unittest.TestCase):
                 with patch.object(authority.fetcher,'fetch') as network:
                     with self.assertRaises(ValueError): authority.check_for_claim('run',unknown_ref,unknown,claim,job['token'])
                     network.assert_not_called()
+                for mutation in ("UPDATE jobs SET status='cancelling' WHERE run=NEW.run", "UPDATE graph_claims SET expires=0 WHERE run=NEW.run", "UPDATE platform_reviews SET policy_hash='altered' WHERE proof=NEW.proof"):
+                    service.graph.db.execute(f'CREATE TRIGGER corrupt_platform AFTER INSERT ON platform_reviews BEGIN {mutation}; END')
+                    try:
+                        for is_blocked in (False,True):
+                            Executor.blocked=is_blocked;Executor.supported=not is_blocked
+                            before=service.graph.db.execute('SELECT count(*) FROM platform_reviews').fetchone()[0]
+                            with patch.object(authority.fetcher,'fetch',side_effect=fetch),patch('runner.platform_reviewer.CodexExecutor',Executor):
+                                with self.assertRaises((ValueError,GraphError)): authority.check_for_claim('run',brief_ref,brief,claim,job['token'])
+                            self.assertEqual(service.graph.db.execute("SELECT status FROM jobs WHERE run='run'").fetchone()[0],'running')
+                            self.assertEqual(service.graph.db.execute('SELECT count(*) FROM platform_reviews').fetchone()[0],before)
+                    finally: service.graph.db.execute('DROP TRIGGER corrupt_platform')
                 service.graph.db.execute("UPDATE local_scopes SET state='running' WHERE unit=(SELECT unit FROM local_turn_scopes WHERE session='session-1')")
                 self.assertFalse(authority.verify('run',brief_ref,brief,proof))
             finally:service.lifecycle.close();service.close()
