@@ -138,6 +138,39 @@ with patch.object(supervisor,'preflight',return_value=True), patch('runner.local
                 self.assertEqual(fenced,['r'])
             finally: graph.close()
 
+    def test_local_scope_audit_failure_prevents_turn_and_fences(self):
+        import sqlite3
+        from unittest.mock import patch
+        from runner.local_supervisor import LocalSupervisor
+        from runner.local_scope import LocalScopes
+        from runner.process_transport import ProcessTransport
+        from tests.test_local_scope import Backend
+        class ScopedHandle(Handle):
+            def __init__(self,root,unit):
+                super().__init__(root,'ok','local-thread','local-turn','canonical_draft')
+                self.unit=unit; self.output_path_prefix=root
+            def assert_active(self): return True
+            def verify_config(self,request): return True
+            def open_transport(self,deadline,cancelled): return ProcessTransport(self.process,deadline,cancelled)
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(mode=0o700); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            binary=Path(root)/'codex'; binary.write_text('x'); binary.chmod(0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            backend=Backend(); supervisor=LocalSupervisor(root+'/db',str(binary),{'HOME':root},backend,lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+            scopes=LocalScopes(root+'/db',backend); unit=scopes.reserve('r'); backend.unit=unit; scopes.bind('r',unit); scopes.close()
+            graph.db.execute("CREATE TRIGGER fail_scope_link BEFORE INSERT ON local_execution_scope_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+            handle=ScopedHandle(str(output),unit); fenced=[]; executor=CodexExecutor(supervisor,Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with patch.object(supervisor,'preflight',return_value=True), patch('runner.local_supervisor.start_local_process',return_value=handle):
+                    with self.assertRaises(sqlite3.IntegrityError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='instructions\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
+                self.assertFalse((output/'draft.txt').exists())
+                self.assertEqual(graph.db.execute('SELECT count(*) FROM local_execution_scopes').fetchone()[0],0)
+                self.assertEqual(graph.db.execute('SELECT count(*) FROM execution_link_audit').fetchone()[0],0)
+                self.assertEqual(graph.db.execute('SELECT state FROM local_sessions').fetchone(),('active',))
+                self.assertFalse(supervisor.can_resume('r','canonical_draft','local-thread',{},'m'))
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
+
     def test_turn_identity_survives_exit_without_tool_events(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as root:
