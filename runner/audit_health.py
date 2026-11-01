@@ -13,8 +13,10 @@ NAME='audit-delivery-health.json'
 
 def _directory(directory):
     path=Path(directory)
-    if not path.is_absolute() or path.resolve(strict=True)!=path: raise ValueError('canonical private directory required')
-    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        if not path.is_absolute() or path.resolve(strict=True)!=path: raise ValueError('canonical private directory required')
+        fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    except (OSError,RuntimeError) as error: raise ValueError('canonical private directory required') from error
     info=os.fstat(fd)
     if info.st_uid!=os.geteuid() or info.st_mode&0o077:
         os.close(fd); raise ValueError('private directory required')
@@ -26,7 +28,7 @@ def publish(directory,success,now=None):
     if type(success) is not bool or type(now) not in (int,float) or not math.isfinite(now) or now<0: raise ValueError('invalid delivery health')
     fd=_directory(directory); temporary=None
     try:
-        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        fcntl.flock(fd,fcntl.LOCK_EX)
         temporary='.audit-health-'+secrets.token_hex(16)+'.tmp'
         output=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
         with os.fdopen(output,'w',encoding='utf-8') as stream:

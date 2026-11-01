@@ -33,6 +33,18 @@ class AuditHealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root,patch('runner.audit_health.Path.resolve',side_effect=RuntimeError('symlink loop')):
             self.assertEqual(read_metrics(root),'workflow_audit_delivery_configured 1\n')
 
+    def test_publish_waits_for_concurrent_publisher_and_rejects_symlink_loop(self):
+        import fcntl, os, threading, time
+        with tempfile.TemporaryDirectory() as root:
+            fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY); fcntl.flock(fd,fcntl.LOCK_EX)
+            worker=threading.Thread(target=publish,args=(root,True),kwargs={'now':100}); worker.start()
+            time.sleep(0.2); self.assertTrue(worker.is_alive())
+            fcntl.flock(fd,fcntl.LOCK_UN); os.close(fd); worker.join(5)
+            self.assertFalse(worker.is_alive())
+            self.assertIn('last_attempt_success 1',read_metrics(root,now=100))
+            loop=Path(root)/'loop'; loop.symlink_to(loop)
+            with self.assertRaises(ValueError): publish(loop,True,now=1)
+
     def test_command_records_failure_and_success_without_private_data(self):
         from runner.audit_delivery import main
         with tempfile.TemporaryDirectory() as root:
