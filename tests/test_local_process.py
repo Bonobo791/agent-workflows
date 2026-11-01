@@ -69,11 +69,12 @@ class LocalProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             binary=Path(root)/'codex';binary.write_text('synthetic');binary.chmod(0o700)
             work=Path(root)/'work';work.mkdir(mode=0o700);launched=[]
+            workspace,binary_path,backend=str(work),str(binary),Backend()
             def start(prefix,target,**kwargs):
                 result=start_guarded([],target,**kwargs);launched.append(result);return result
             with patch('runner.local_process.start_guarded',side_effect=start),patch.object(LocalScopes,'bind_confirmed',side_effect=RuntimeError('audit unavailable')):
                 with self.assertRaises(LocalProcessError):
-                    start_local_process(root+'/state.db','run',str(work),str(binary),{'HOME':root},Backend(),lambda:True,{'mcp_servers':[],'plugins':[]})
+                    start_local_process(root+'/state.db','run',workspace,binary_path,{'HOME':root},backend,lambda:True,{'mcp_servers':[],'plugins':[]})
             self.assertIsNotNone(launched[0].process.returncode)
             with self.assertRaises(ChildProcessError):os.waitpid(launched[0].process.pid,os.WNOHANG)
     def test_git_write_permission_is_explicit_and_scoped_to_checkout(self):

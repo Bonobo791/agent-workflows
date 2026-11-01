@@ -34,6 +34,16 @@ configured sandbox and host retaining descendants in the scope. An empty
 cgroup does not prove that an escaped process never existed. Validate those
 assumptions for the deployed host before relying on this recovery control.
 
+SonarCloud reported command and argument injection at the guard's `execve`,
+tracing its source to an HTTP request. The guard is a local executable and has
+no HTTP entry point. Its production callers supply either the configured,
+hash-checked Codex executable and managed arguments or the fixed local-command
+relay; an approved command reaches the relay through its bounded input protocol.
+The guard uses an argument vector without a shell. This assessment depends on
+those callers and the trusted local controller; it does not make arbitrary new
+callers of `start_guarded` safe. The hosted findings remain open until reviewed
+in SonarCloud.
+
 Opt-in systemd tests exercise caller death before authorization and after
 target start, a signed-in synthetic worker crash followed by an explicitly
 exited scope, and interrupted stops. Separate unit tests cover missing or
