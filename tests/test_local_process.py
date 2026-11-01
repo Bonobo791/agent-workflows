@@ -58,11 +58,8 @@ class LocalProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             binary=Path(root)/'codex';binary.write_text('synthetic');binary.chmod(0o700)
             work=Path(root)/'work';work.mkdir(mode=0o700)
-            backend=Backend();process=FakeProcess();process.wait=Mock(return_value=0);launches=[]
-            start=self.guarded_launch(backend,process)
-            def launch(*args,**kwargs):
-                result=start(*args,**kwargs);launches.append(result);return result
-            with patch('runner.local_process.start_guarded',side_effect=launch), patch.object(LocalScopes,'bind_confirmed',side_effect=RuntimeError('audit unavailable')):
+            backend=Backend();process=FakeProcess();process.wait=Mock(return_value=0)
+            with patch('runner.local_process.start_guarded',side_effect=self.guarded_launch(backend,process)), patch.object(LocalScopes,'bind_confirmed',side_effect=RuntimeError('audit unavailable')):
                 with self.assertRaises(LocalProcessError):
                     start_local_process(root+'/state.db','run',str(work),str(binary),{'HOME':root},backend,lambda:True,{'mcp_servers':[],'plugins':[]})
             self.assertEqual(os.read(self.last_go_read,1),b'')

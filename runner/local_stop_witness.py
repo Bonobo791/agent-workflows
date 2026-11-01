@@ -10,16 +10,30 @@ import subprocess
 import sys
 
 
+def observed_identity_matches(unit,invocation,cgroup):
+    result=subprocess.run(['/usr/bin/systemctl','--user','show',unit,'--property=Id','--property=LoadState','--property=ActiveState','--property=InvocationID','--property=ControlGroup'],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=15,check=True)
+    fields={}
+    for line in result.stdout.splitlines():
+        key,sep,value=line.partition('=')
+        if not sep or key in fields: return False
+        fields[key]=value
+    return result.returncode==0 and fields=={'Id':unit,'LoadState':'loaded','ActiveState':'active','InvocationID':invocation,'ControlGroup':cgroup}
+
+
+def validate_request(path,run,unit,nonce):
+    state=Path(path);parent=state.parent;info=state.lstat();directory=parent.lstat()
+    if (not state.is_absolute() or state.resolve(strict=True)!=state or parent.resolve(strict=True)!=parent
+            or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o022
+            or not stat.S_ISDIR(directory.st_mode) or directory.st_uid!=os.geteuid() or directory.st_mode&0o077
+            or not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run)
+            or not isinstance(unit,str) or not re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit)
+            or not isinstance(nonce,str) or not re.fullmatch(r'[0-9a-f]{64}',nonce)): raise ValueError('invalid stop witness request')
+
+
 def run_stop(path,run,unit,nonce):
     db=None
     try:
-        state=Path(path);parent=state.parent;info=state.lstat();directory=parent.lstat()
-        if (not state.is_absolute() or state.resolve(strict=True)!=state or parent.resolve(strict=True)!=parent
-                or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o022
-                or not stat.S_ISDIR(directory.st_mode) or directory.st_uid!=os.geteuid() or directory.st_mode&0o077
-                or not isinstance(run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run)
-                or not isinstance(unit,str) or not re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit)
-                or not isinstance(nonce,str) or not re.fullmatch(r'[0-9a-f]{64}',nonce)): return False
+        validate_request(path,run,unit,nonce)
         digest=hashlib.sha256(bytes.fromhex(nonce)).hexdigest()
         db=sqlite3.connect(path,timeout=10,isolation_level=None)
         db.execute('BEGIN IMMEDIATE')
@@ -30,13 +44,7 @@ def run_stop(path,run,unit,nonce):
         if db.execute("UPDATE local_scope_stop_operations SET status='active' WHERE run=? AND unit=? AND nonce_hash=? AND status='pending'",(run,unit,digest)).rowcount!=1: raise ValueError()
         if not db.execute("SELECT 1 FROM local_scope_stop_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND invocation=? AND cgroup=? AND nonce_hash=? AND status='active'",(last,run,unit,*row,digest)).fetchone(): raise ValueError()
         db.execute('COMMIT')
-        result=subprocess.run(['/usr/bin/systemctl','--user','show',unit,'--property=Id','--property=LoadState','--property=ActiveState','--property=InvocationID','--property=ControlGroup'],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=15,check=True)
-        fields={}
-        for line in result.stdout.splitlines():
-            key,sep,value=line.partition('=')
-            if not sep or key in fields: return False
-            fields[key]=value
-        if result.returncode!=0 or fields!={'Id':unit,'LoadState':'loaded','ActiveState':'active','InvocationID':row[0],'ControlGroup':row[1]}: return False
+        if not observed_identity_matches(unit,*row):return False
         result=subprocess.run(['/usr/bin/systemctl','--user','stop',unit],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,check=True)
         if result.returncode!=0:return False
         db.execute('BEGIN IMMEDIATE')
