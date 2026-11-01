@@ -6,6 +6,25 @@ from runner.session_store import SessionStore, SessionError
 CONFIG='a'*64
 SKILLS='b'*64
 class SessionStoreTests(unittest.TestCase):
+    def test_replaced_home_file_cannot_be_released(self):
+        with tempfile.TemporaryDirectory() as root:
+            store=SessionStore(root); entry=store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
+            try:
+                home=Path(entry['home']); home.rmdir(); home.write_text('synthetic')
+                with self.assertRaises(SessionError): store.release('job-1',lambda _:True)
+                self.assertEqual(store.db.execute("SELECT state FROM homes").fetchone()[0],'active')
+            finally: store.close()
+    def test_unreadable_home_cannot_be_recovered(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            store=SessionStore(root); store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
+            try:
+                store.bind('job-1','thread-1'); store.release('job-1',lambda _:True)
+                with self.assertRaises(SessionError): store.backup('job-1',lambda _:(_ for _ in ()).throw(OSError('interrupted')),lambda _:True)
+                with patch('runner.session_store.os.scandir',side_effect=PermissionError('unreadable')):
+                    with self.assertRaises(SessionError): store.recover_backup('job-1',lambda *_:True,lambda _:True)
+                self.assertFalse(store.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
+            finally: store.close()
     def test_writer_replacement_reuses_only_matching_task_role_and_binding(self):
         with tempfile.TemporaryDirectory() as root:
             store=SessionStore(root)

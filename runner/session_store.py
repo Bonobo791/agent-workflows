@@ -89,8 +89,9 @@ class SessionStore:
     def _check_home(self,home):
         path=self.homes/home
         try:
-            if path.resolve(strict=True)!=path: raise SessionError('state path escaped')
-            for directory,dirs,files in os.walk(path,followlinks=False):
+            if path.resolve(strict=True)!=path or not stat.S_ISDIR(path.lstat().st_mode): raise SessionError('state path escaped')
+            def scan_error(error): raise error
+            for directory,dirs,files in os.walk(path,followlinks=False,onerror=scan_error):
                 for name in dirs+files:
                     if _FORBIDDEN.fullmatch(name): raise SessionError('forbidden state entry')
                     info=os.lstat(Path(directory)/name)
