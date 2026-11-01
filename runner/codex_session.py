@@ -48,6 +48,7 @@ def run_codex(transport,provenance,run,role,claim,skills,prompt,model,session_id
         if size[0]>MAX_OUTPUT: raise ProtocolError('model output too large')
         chunks.append(text)
     def bind_turn(actual):
+        if not isinstance(actual,str) or not actual:raise ProtocolError('invalid turn ID')
         if on_turn is not None: on_turn(thread[0],actual)
         turn[0]=actual
         for message in early: event(message)

@@ -97,7 +97,6 @@ class CodexExecutor:
                 if cancelled(): raise ExecutorError('execution cancelled')
                 if callable(getattr(handle,'assert_active',None)): handle.assert_active()
             def on_thread(session):
-                if callable(getattr(handle,'bind_session',None)): handle.bind_session(session)
                 from runner.local_supervisor import LocalSessionHandle
                 if isinstance(handle,LocalSessionHandle):
                     from pathlib import Path
@@ -109,9 +108,12 @@ class CodexExecutor:
                         self.provenance.graph._lease(run,claim)
                         identity=db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='running'",(run,unit)).fetchone()
                         if cancelled() or (handle.run,handle.role)!=(run,role) or not identity or not valid_scope_identity(unit,*identity) or not self.provenance.verify(run,role,session,skills): raise ExecutorError('local execution scope unavailable')
+                        last=db.execute('SELECT COALESCE(MAX(id),0) FROM local_execution_scope_audit').fetchone()[0]
                         db.execute('INSERT INTO local_execution_scopes VALUES(?,?,?,?,?,?)',(run,role,execution,session,unit,handle.binding))
+                        if not db.execute("SELECT 1 FROM local_execution_scope_audit WHERE id>? AND schema_version=1 AND run=? AND role=? AND execution=? AND session=? AND unit=? AND status='bound'",(last,run,role,execution,session,unit)).fetchone():raise ExecutorError('local execution scope audit unavailable')
                         db.execute('COMMIT')
                     except Exception: db.execute('ROLLBACK'); raise
+                if callable(getattr(handle,'bind_session',None)): handle.bind_session(session)
             def on_turn(session,turn):
                 db.execute('BEGIN IMMEDIATE')
                 try:

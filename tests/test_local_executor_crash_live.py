@@ -11,6 +11,59 @@ import time
 import unittest
 
 
+def _cleanup_scope(backend,unit,invocation,cgroup):
+    from runner.local_scope import valid_scope_identity
+    if not re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit) or not valid_scope_identity(unit,invocation,cgroup):
+        raise RuntimeError('test scope identity is unverified')
+    state=backend.inspect(unit)
+    if state['active']=='active':
+        if (state['id'],state['load'],state['invocation'],state['cgroup'])!=(unit,'loaded',invocation,cgroup):
+            raise RuntimeError('test scope identity changed')
+        if backend.stop(unit) is not True:raise RuntimeError('test scope stop is unverified')
+        state=backend.inspect(unit)
+    if (state['id']!=unit or state['active']!='inactive' or state['load'] not in ('loaded','not-found')
+            or state['invocation'] not in ('',invocation) or backend.empty_cgroup(cgroup) is not True
+            or backend.no_pending_job(unit) is not True):raise RuntimeError('test scope cleanup is unverified')
+
+
+def cleanup_crash_fixture(temporary,backend):
+    root=Path(temporary.name)
+    try:
+        if (root/'state.db').exists():
+            with closing(sqlite3.connect(root/'state.db')) as db:
+                present=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone()
+                rows=db.execute("SELECT unit,invocation,cgroup FROM local_scopes WHERE state IS NOT 'terminated'").fetchall() if present else []
+            for unit,invocation,cgroup in rows:
+                _cleanup_scope(backend,unit,invocation,cgroup)
+    except Exception as error:
+        error.add_note('Private executor-crash fixture retained at '+str(root))
+        raise
+    temporary.cleanup()
+
+
+class CrashFixtureCleanupTests(unittest.TestCase):
+    def test_unverified_cleanup_retains_state_and_never_stops_changed_scope(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from tests.test_local_scope import Backend
+        for failure in ('nonempty','identity','none'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);unit='agent-workflows-'+'a'*48+'.scope'
+                with closing(sqlite3.connect(root/'state.db')) as db:
+                    db.execute('CREATE TABLE local_scopes(unit TEXT,invocation TEXT,cgroup TEXT,state TEXT)')
+                    db.execute('INSERT INTO local_scopes VALUES(?,?,?,?)',(unit,'a'*32,'/user.slice/'+unit,'running'));db.commit()
+                backend=Backend();backend.unit=unit;backend.no_pending_job=lambda _:True
+                if failure=='nonempty':backend.empty=False
+                if failure=='identity':backend.invocation='b'*32
+                temporary=SimpleNamespace(name=directory,cleanup=Mock())
+                if failure=='none':
+                    cleanup_crash_fixture(temporary,backend);temporary.cleanup.assert_called_once()
+                else:
+                    with self.assertRaises(RuntimeError):cleanup_crash_fixture(temporary,backend)
+                    temporary.cleanup.assert_not_called();self.assertTrue((root/'state.db').exists())
+                if failure=='identity':self.assertEqual(backend.stop_calls,0)
+
+
 @unittest.skipUnless(os.environ.get('CODEX_TEST_EXECUTABLE') and os.environ.get('WORKFLOW_TEST_SYSTEMD') == '1', 'signed-in local runtime not configured')
 class LocalExecutorCrashLiveTests(unittest.TestCase):
     def test_crash_preserves_scope_and_turn_identity(self):
@@ -41,7 +94,10 @@ supervisor=LocalSupervisor(db,config['codex_executable'],environment,backend,lam
 executor=CodexExecutor(supervisor,Provenance(graph),ArtifactStore(str(root/'art')),lambda run:None)
 executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='Instructions: reply in text only.\\nThink carefully about a short fictional story, then write a paragraph. Do not use tools.',instruction_length=len('Instructions: reply in text only.'),model=model,input_versions=[],output_paths=[],timeout=120)
 '''
-        with tempfile.TemporaryDirectory(prefix='workflow-executor-crash-') as directory:
+        temporary=tempfile.TemporaryDirectory(prefix='workflow-executor-crash-',delete=False)
+        from runner.local_scope import SystemdScopes
+        backend=SystemdScopes(dict(os.environ))
+        with temporary as directory:
             root=Path(directory); (root/'workspace').mkdir(mode=0o700); (root/'art').mkdir(mode=0o700)
             process=subprocess.Popen([sys.executable,'-c',code,str(root)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
             try:
@@ -82,14 +138,4 @@ executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='In
             finally:
                 if process.poll() is None: process.kill(); process.wait(timeout=10)
                 process.stderr.close()
-                if (root/'state.db').exists():
-                    with closing(sqlite3.connect(root/'state.db')) as db:
-                        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone():
-                            units=db.execute("SELECT unit,cgroup FROM local_scopes WHERE state IS NOT 'terminated'").fetchall()
-                            for unit,cgroup in units:
-                                if re.fullmatch(r'agent-workflows-[0-9a-f]{48}\.scope',unit):
-                                    subprocess.run(['/usr/bin/systemctl','--user','stop',unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
-                                    from runner.local_scope import SystemdScopes
-                                    backend=SystemdScopes(os.environ); state=backend.inspect(unit)
-                                    self.assertEqual((state['id'],state['active']),(unit,'inactive'))
-                                    self.assertTrue(cgroup and backend.empty_cgroup(cgroup),'test scope cgroup still populated or unrecorded')
+                cleanup_crash_fixture(temporary,backend)
