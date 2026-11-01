@@ -27,6 +27,71 @@ class Supervisor:
     def can_resume(self,run,role,session): return True  # synthetic app-server fixture
     def start(self,run,role): return Handle(self.root,self.mode,self.thread,self.turn,role)
 class ExecutorTests(unittest.TestCase):
+    def test_controller_sigkill_preserves_local_turn_and_fences_resume(self):
+        from contextlib import closing
+        import signal
+        import sqlite3
+        import time
+        code = '''
+import sys
+from pathlib import Path
+from unittest.mock import patch
+from runner.artifacts import ArtifactStore
+from runner.codex_executor import CodexExecutor
+from runner.graph import GraphStore, marketing_definition
+from runner.local_scope import LocalScopes
+from runner.local_supervisor import LocalSupervisor
+from runner.process_transport import ProcessTransport
+from runner.provenance import Provenance
+from tests.test_codex_executor import Handle
+from tests.test_local_scope import Backend
+root=Path(sys.argv[1]); output=root/'out'; art=root/'art'; binary=root/'codex'
+graph=GraphStore(str(root/'db')); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+backend=Backend(); supervisor=LocalSupervisor(str(root/'db'),str(binary),{'HOME':str(root)},backend,lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+scopes=LocalScopes(str(root/'db'),backend); unit=scopes.reserve('r'); backend.unit=unit; scopes.bind('r',unit); scopes.close()
+class ScopedHandle(Handle):
+    def __init__(self):
+        super().__init__(str(output),'turn_hang','local-thread','local-turn','canonical_draft')
+        self.unit=unit; self.output_path_prefix=str(output)
+    def assert_active(self): return True
+    def verify_config(self,request): return True
+    def open_transport(self,deadline,cancelled): return ProcessTransport(self.process,deadline,cancelled)
+handle=ScopedHandle(); executor=CodexExecutor(supervisor,Provenance(graph),ArtifactStore(str(art)),lambda run:None)
+with patch.object(supervisor,'preflight',return_value=True), patch('runner.local_supervisor.start_local_process',return_value=handle):
+    executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='instructions\\n{}',instruction_length=len('instructions'),model='m',input_versions=[],output_paths=[])
+'''
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(mode=0o700); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            binary=Path(root)/'codex'; binary.write_text('x'); binary.chmod(0o700)
+            process=subprocess.Popen([sys.executable,'-c',code,root],start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+            try:
+                deadline=time.monotonic()+10
+                while True:
+                    if process.poll() is not None: self.fail('controller exited before turn: '+process.stderr.read().decode())
+                    try:
+                        with closing(sqlite3.connect(root+'/db')) as db:
+                            observed=db.execute("SELECT count(*) FROM execution_link_audit WHERE status='observed'").fetchone()[0]
+                    except sqlite3.OperationalError: observed=0
+                    if observed: break
+                    if time.monotonic()>=deadline: self.fail('turn evidence was not recorded')
+                    time.sleep(.02)
+                process.kill(); process.wait(timeout=5)
+                with closing(sqlite3.connect(root+'/db')) as db:
+                    row=db.execute('SELECT s.session,s.unit,l.turn,l.status FROM local_execution_scopes s JOIN execution_link_audit l ON l.execution=s.execution').fetchone()
+                    self.assertEqual((row[0],row[2],row[3]),('local-thread','local-turn','observed'))
+                    self.assertEqual(db.execute('SELECT state FROM local_sessions').fetchone(),('active',))
+                    self.assertEqual(db.execute('SELECT state FROM local_scopes WHERE unit=?',(row[1],)).fetchone(),('running',))
+                    self.assertEqual(db.execute('SELECT count(*) FROM execution_completions').fetchone()[0],0)
+                from runner.local_supervisor import LocalSupervisor
+                from tests.test_local_scope import Backend
+                supervisor=LocalSupervisor(root+'/db',str(binary),{'HOME':root},Backend(),lambda run:True,lambda run,role:str(output),lambda:True,{'mcp_servers':[],'plugins':[]})
+                self.assertFalse(supervisor.can_resume('r','canonical_draft','local-thread',{},'m'))
+            finally:
+                try: os.killpg(process.pid,signal.SIGKILL)
+                except ProcessLookupError: pass
+                if process.poll() is None: process.wait(timeout=5)
+                process.stderr.close()
+
     def test_interrupted_local_turn_keeps_scope_link_and_fences_session(self):
         from unittest.mock import patch
         from runner.local_supervisor import LocalSupervisor
