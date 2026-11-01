@@ -19,6 +19,7 @@ for line in sys.stdin:
         if mode=='hang': time.sleep(10); break
         tid=message['params']['threadId']; turn=os.environ.get('FAKE_TURN','turn-one')
         send({'id':ident,'result':{'turn':{'id':turn}}})
+        if mode=='turn_exit': sys.exit(7)
         if mode=='approval': send({'id':99,'method':'item/commandExecution/requestApproval','params':{}}); continue
         if mode in ('tool','tool_exit'):
             send({'method':'item/completed','params':{'threadId':tid,'turnId':turn,'item':{'type':'mcpToolCall','status':'completed','arguments':{'input':'synthetic-private'},'result':{'output':'synthetic-private'}}}})

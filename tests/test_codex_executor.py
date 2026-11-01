@@ -27,6 +27,37 @@ class Supervisor:
     def can_resume(self,run,role,session): return True  # synthetic app-server fixture
     def start(self,run,role): return Handle(self.root,self.mode,self.thread,self.turn,role)
 class ExecutorTests(unittest.TestCase):
+    def test_session_binding_failure_prevents_turn_and_fences(self):
+        class UnboundHandle(Handle):
+            def bind_session(self,session): raise RuntimeError('binding failed')
+        class UnboundSupervisor(Supervisor):
+            def start(self,run,role): return UnboundHandle(self.root,self.mode,self.thread,self.turn,role)
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            fenced=[]; executor=CodexExecutor(UnboundSupervisor(str(output)),Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with self.assertRaises(RuntimeError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=[])
+                self.assertFalse((output/'draft.txt').exists())
+                self.assertEqual(graph.db.execute('SELECT count(*) FROM execution_link_audit').fetchone()[0],0)
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
+
+    def test_turn_identity_survives_exit_without_tool_events(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root)/'out'; output.mkdir(); art=Path(root)/'art'; art.mkdir(mode=0o700)
+            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
+            fenced=[]; executor=CodexExecutor(Supervisor(str(output),mode='turn_exit'),Provenance(graph),ArtifactStore(str(art)),fenced.append)
+            try:
+                with self.assertRaises(Exception): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='private prompt',model='m',input_versions=[],output_paths=[])
+                self.assertEqual(graph.db.execute('SELECT session,turn,status FROM execution_link_audit').fetchall(),[('thread-one','turn-one','observed')])
+                self.assertFalse(executor.provenance.completed('r','canonical_draft','thread-one'))
+                self.assertEqual(fenced,['r'])
+            finally: graph.close()
+            with sqlite3.connect(root+'/db') as db:
+                self.assertEqual(db.execute('SELECT session,turn,status FROM execution_link_audit').fetchall(),[('thread-one','turn-one','observed')])
+
     def test_local_turn_requires_and_records_terminated_scope(self):
         from unittest.mock import patch
         from runner.local_supervisor import LocalSupervisor
@@ -167,7 +198,7 @@ class ExecutorTests(unittest.TestCase):
             result=executor.execute(**args); self.assertEqual(result['output'],'correct'); self.assertEqual(executor.artifacts.get(result['outputs'][0]),b'synthetic output')
             self.assertEqual(graph.db.execute('SELECT status FROM execution_launch_audit ORDER BY id').fetchall(),[('requested',),('completed',)])
             launch=graph.db.execute("SELECT execution FROM execution_launch_audit WHERE status='completed'").fetchone()[0]
-            self.assertEqual(graph.db.execute('SELECT execution,session,turn,status FROM execution_link_audit').fetchone(),(launch,result['session_id'],result['turn_id'],'completed'))
+            self.assertEqual(graph.db.execute('SELECT execution,session,turn,status FROM execution_link_audit ORDER BY id').fetchall(),[(launch,result['session_id'],result['turn_id'],status) for status in ('observed','completed')])
             audit=graph.db.execute('SELECT model,input_versions,output_refs,response_ref,tool_evidence_ref FROM execution_turn_audit WHERE run=? AND session=? AND turn=?',('r',result['session_id'],result['turn_id'])).fetchone()
             self.assertEqual(audit,('synthetic',json.dumps(['input']),json.dumps(result['outputs']),result['response_ref'],result['tool_evidence_ref']))
             graph.bind_session('r','canonical_draft',result['session_id'],claim)
@@ -186,7 +217,7 @@ class ExecutorTests(unittest.TestCase):
             graph.db.execute("CREATE TRIGGER reject_turn_audit BEFORE INSERT ON execution_turn_audit BEGIN SELECT RAISE(ABORT,'failure'); END")
             with self.assertRaises(sqlite3.IntegrityError): executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=[],output_paths=['draft.txt'])
             self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM completed_turn_outputs').fetchone()[0],0)
-            self.assertEqual(graph.db.execute('SELECT COUNT(*) FROM execution_link_audit').fetchone()[0],0)
+            self.assertEqual(graph.db.execute('SELECT status FROM execution_link_audit').fetchall(),[('observed',)])
             self.assertFalse(provenance.completed('r','canonical_draft','thread-one')); graph.close()
     def test_link_audit_failure_rolls_back_completion(self):
         import sqlite3

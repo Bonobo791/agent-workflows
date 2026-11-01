@@ -10,6 +10,21 @@ class FakeTransport:
     def receive(self): return next(self.messages)
 
 class CodexSessionTests(unittest.TestCase):
+    def test_thread_binding_precedes_turn_and_failure_blocks_turn(self):
+        class Transport(FakeTransport):
+            def __init__(self): super().__init__(); self.sent=[]
+            def send(self,message): self.sent.append(message.get('method'))
+        with tempfile.TemporaryDirectory() as root:
+            graph=GraphStore(root+'/db'); graph.register(engineering_definition()); graph.create('r','engineering'); claim=graph.claim('r',60)
+            transport=Transport()
+            def bind(session):
+                self.assertEqual(session,'actual-thread')
+                self.assertNotIn('turn/start',transport.sent)
+                raise RuntimeError('binding failed')
+            try:
+                with self.assertRaises(RuntimeError): run_codex(transport,Provenance(graph),'r','qa',claim,{},'prompt','model',on_thread=bind)
+                self.assertNotIn('turn/start',transport.sent)
+            finally: graph.close()
     def test_only_final_agent_message_becomes_structured_output(self):
         class Messages(FakeTransport):
             def __init__(self):
