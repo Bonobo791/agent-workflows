@@ -292,7 +292,16 @@ class Service:
                 if (not recorded and names) or (recorded and recorded[0]!=fingerprint): return False
             return True
         except Exception: return False
-    def finish_job(self,run,queue_token): self.queue.finish(run,queue_token,verify_completed=self.verify_terminal)
+    def finish_job(self,run,queue_token):
+        def verified(run):
+            if not self.verify_terminal(run): return False
+            if self.graph._definition(run).name!='marketing': return True
+            if self.human_review is None: return False
+            from runner.human_review import HumanReviewError
+            try: decision=self.human_review.current(run)
+            except HumanReviewError: return False
+            return bool(decision and decision['decision']=='approved')
+        self.queue.finish(run,queue_token,verify_completed=verified)
     def claim(self,run): return self.graph.claim(run,60)
     def release(self,run,token): self.graph.release(run,token)
     def approve(self,run,action,version,actor):

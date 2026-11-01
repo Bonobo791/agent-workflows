@@ -30,6 +30,43 @@ class HumanReviewTransactionTests(unittest.TestCase):
                     self.assertEqual(service.graph.db.execute("SELECT status FROM jobs WHERE run='r'").fetchone()[0],'running')
                 finally: service.close()
 
+    def test_completion_requires_current_audited_approval(self):
+        from runner.queue import QueueError
+        for decision in (None, 'rejected', 'approved', 'missing_audit', 'stale_package'):
+            with self.subTest(decision=decision), tempfile.TemporaryDirectory() as root:
+                service=Service(root)
+                try:
+                    service.create('r','marketing','task'); service.enqueue('r'); queue=service.queue.claim('worker',60); claim=service.graph.claim('r',60)
+                    service.graph.db.execute("INSERT INTO graph_stages VALUES('r','assembly','awaiting_review','package',1)")
+                    service.task_intake=SimpleNamespace(revalidate=lambda run:True); service.verify_terminal=lambda run:True
+                    service.human_review=HumanReview(service)
+                    if decision is not None:
+                        service.human_review.decide('r',queue['token'],claim,'package','rejected' if decision=='rejected' else 'approved')
+                    if decision=='missing_audit': service.graph.db.execute('DELETE FROM human_review_audit')
+                    if decision=='stale_package': service.graph.db.execute("UPDATE graph_stages SET version='new-package' WHERE run='r' AND stage='assembly'")
+                    if decision=='approved':
+                        service.finish_job('r',queue['token'])
+                        self.assertEqual(service.queue.get('r')['status'],'completed')
+                    else:
+                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                        self.assertEqual(service.queue.get('r')['status'],'running')
+                finally: service.close()
+
+    def test_completion_requires_review_service_only_for_marketing(self):
+        from runner.queue import QueueError
+        for workflow in ('marketing','engineering'):
+            with self.subTest(workflow=workflow), tempfile.TemporaryDirectory() as root:
+                service=Service(root)
+                try:
+                    service.create('r',workflow,'task'); service.enqueue('r'); queue=service.queue.claim('worker',60)
+                    service.verify_terminal=lambda run:True
+                    if workflow=='marketing':
+                        with self.assertRaises(QueueError): service.finish_job('r',queue['token'])
+                    else:
+                        service.finish_job('r',queue['token'])
+                        self.assertEqual(service.queue.get('r')['status'],'completed')
+                finally: service.close()
+
     def test_existing_decision_without_audit_requires_inspection(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)
