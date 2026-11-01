@@ -75,3 +75,11 @@ scope and the test verified its terminated state before confirming the manual
 stop. The crash probe covered the case where the guarded scope had already
 exited before restart. These results do not establish automatic termination,
 recovery of external requests, or a complete production workflow.
+
+On the same host and commit, four additional SIGKILL/restart tests used
+synthetic work in real user systemd scopes. An owner stopped both a bound scope
+and an active scope whose identity had not been recorded before the crash. A
+late launch stayed fenced until the owner observed and stopped it. A previously
+bound scope stopped outside the controller stayed fenced because it lacked the
+required reconciliation evidence. These are isolated test cases, not evidence
+that arbitrary in-flight launches or remote outcomes can be recovered.
