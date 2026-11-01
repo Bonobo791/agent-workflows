@@ -149,6 +149,12 @@ must not contain private skills, credentials, user data or session histories.
   evaluates the requested asset against the fetched source; missing, ambiguous
   or unsupported requirements block production. These judgments are not a
   guarantee that a platform will accept the final media.
+  The opt-in `tests.test_platform_reviewer_live` positive control uses LinkedIn's
+  public profile-photo guidance for a synthetic 400×400 PNG and checks that
+  changed dimensions or surface invalidate the proof. Set
+  `WORKFLOW_TEST_REAL_PLATFORM=1`, `WORKFLOW_TEST_SYSTEMD=1` and
+  `CODEX_TEST_EXECUTABLE` to run it. This profile-photo check does not establish
+  support for a LinkedIn feed post or an Instagram asset.
 - Experimental `WORKFLOW_AUDIO_CONFIG_FILE`: owner-only JSON with exactly
   `runtime_root`, `python_root`, `model_root`, `fingerprint`, and `languages`.
   The first three are separate canonical owner-controlled directories; the
