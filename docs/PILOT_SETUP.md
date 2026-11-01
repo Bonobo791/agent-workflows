@@ -203,15 +203,22 @@ requires trusted checks that the exact backup operation is quiescent and fenced
 and that the home is safe, then rechecks its private files before making it idle.
 The home must remain an owner-only directory owned by the worker, and any directory scan error blocks recovery;
 an incomplete scan is not evidence that the home is safe.
-Recovery is bound to the exact backup generation; legacy interrupted backups
-without a generation remain fenced for inspection. The trusted exporter receives
+Recovery is bound to the exact backup generation and its recorded directory
+device, inode and nanosecond change time; an inode match alone is insufficient.
+Directory metadata changes also leave recovery fenced. Existing databases add
+the identity field without backfilling it: interrupted backups without a
+generation or recorded identity remain fenced for inspection.
+The trusted exporter receives
 `(pinned_home_path, generation)`, where the path is a descriptor-backed alias
 valid only while the synchronous exporter runs. Verification and export use
 the same opened directory even if its original name is replaced; replacement
 leaves the backup fenced. The exporter must finish all readers before returning.
 This pins the directory, not an immutable snapshot of its entries: trusted
 termination and credential verifiers must exclude concurrent writers.
-The quiescence verifier receives
+The credential verifier also receives a pinned alias during recovery and must
+finish before returning. The original name and recorded identity are rechecked
+within the state-update transaction, including when credential verification
+fails. The quiescence verifier receives
 `(job, home_path, generation)`; it must verify that exact operation. Older
 callback signatures cannot recover a backup.
 No production verifier or control endpoint for that recovery is configured.

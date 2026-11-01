@@ -57,6 +57,71 @@ class SessionStoreTests(unittest.TestCase):
                     self.assertEqual(store.db.execute('SELECT state FROM homes').fetchone(),('backup',))
                 finally:store.close()
 
+    def test_failed_credential_check_cannot_release_replaced_backup_home(self):
+        with tempfile.TemporaryDirectory() as root:
+            store=SessionStore(root);entry=store.acquire('r','implement','j',CONFIG,SKILLS)
+            try:
+                store.bind('j','thread');store.release('j',lambda _:True)
+                def unsafe(path):
+                    home=Path(entry['home']);home.rename(home.with_name('old'));home.mkdir(mode=0o700)
+                    return False
+                exported=[]
+                with self.assertRaises(SessionError):store.backup('j',lambda *_:exported.append(True),unsafe)
+                self.assertEqual(exported,[])
+                self.assertEqual(store.db.execute('SELECT state FROM homes').fetchone(),('backup',))
+            finally:store.close()
+
+    def test_recovery_rejects_home_replaced_before_or_during_verification(self):
+        for stage in ('before','quiescent','safe'):
+            with self.subTest(stage=stage),tempfile.TemporaryDirectory() as root:
+                store=SessionStore(root);entry=store.acquire('r','implement','j',CONFIG,SKILLS)
+                try:
+                    store.bind('j','thread');store.release('j',lambda _:True)
+                    with self.assertRaises(SessionError):store.backup('j',lambda *_:(_ for _ in ()).throw(OSError('interrupted')),lambda _:True)
+                    home=Path(entry['home'])
+                    def replace():home.rename(home.with_name('old'));home.mkdir(mode=0o700)
+                    if stage=='before':replace()
+                    def quiescent(*_):
+                        if stage=='quiescent':replace()
+                        return True
+                    def safe(path):
+                        if stage=='safe':replace()
+                        return True
+                    with self.assertRaises(SessionError):store.recover_backup('j',quiescent,safe)
+                    self.assertEqual(store.db.execute('SELECT state FROM homes').fetchone(),('backup',))
+                    self.assertFalse(store.can_resume('r','implement','thread',CONFIG,SKILLS,lambda _:True))
+                finally:store.close()
+
+    def test_legacy_backup_identity_is_not_invented_during_migration(self):
+        with tempfile.TemporaryDirectory() as root:
+            store=SessionStore(root);store.acquire('r','implement','j',CONFIG,SKILLS)
+            store.bind('j','thread');store.release('j',lambda _:True)
+            with self.assertRaises(SessionError):store.backup('j',lambda *_:(_ for _ in ()).throw(OSError('interrupted')),lambda _:True)
+            home,generation=store.db.execute('SELECT home,generation FROM backup_generations').fetchone()
+            store.db.execute('DROP TABLE backup_generations')
+            store.db.execute('CREATE TABLE backup_generations(home TEXT PRIMARY KEY,generation TEXT NOT NULL)')
+            store.db.execute('INSERT INTO backup_generations VALUES(?,?)',(home,generation));store.close()
+            store=SessionStore(root)
+            try:
+                self.assertEqual(store.db.execute('SELECT home,generation,identity FROM backup_generations').fetchone(),(home,generation,None))
+                with self.assertRaises(SessionError):store.recover_backup('j',lambda *_:True,lambda _:True)
+                self.assertEqual(store.db.execute('SELECT state FROM homes').fetchone(),('backup',))
+            finally:store.close()
+
+    def test_recovery_rejects_changed_metadata_even_with_same_inode(self):
+        import time
+        with tempfile.TemporaryDirectory() as root:
+            store=SessionStore(root);entry=store.acquire('r','implement','j',CONFIG,SKILLS)
+            try:
+                store.bind('j','thread');store.release('j',lambda _:True)
+                with self.assertRaises(SessionError):store.backup('j',lambda *_:(_ for _ in ()).throw(OSError('interrupted')),lambda _:True)
+                home=Path(entry['home']);before=home.stat();time.sleep(.002)
+                home.chmod(0o750);home.chmod(0o700);after=home.stat()
+                self.assertEqual(before.st_ino,after.st_ino);self.assertNotEqual(before.st_ctime_ns,after.st_ctime_ns)
+                with self.assertRaises(SessionError):store.recover_backup('j',lambda *_:True,lambda _:True)
+                self.assertEqual(store.db.execute('SELECT state FROM homes').fetchone(),('backup',))
+            finally:store.close()
+
     def test_home_that_is_no_longer_private_cannot_resume_or_back_up(self):
         with tempfile.TemporaryDirectory() as root:
             store=SessionStore(root); entry=store.acquire('run-1','implement','job-1',CONFIG,SKILLS)
@@ -143,7 +208,7 @@ class SessionStoreTests(unittest.TestCase):
             store.close(); store=SessionStore(root)
             calls=[]
             generation=store.db.execute('SELECT generation FROM backup_generations').fetchone()[0]
-            self.assertTrue(store.recover_backup('job-1',lambda job,path,g:calls.append((job,path,g)) or True,lambda path:calls.append(path) or True))
+            self.assertTrue(store.recover_backup('job-1',lambda job,path,g:calls.append((job,path,g)) or True,lambda path:calls.append(entry['home']) or Path(path).samefile(entry['home'])))
             self.assertEqual(calls,[('job-1',entry['home'],generation),entry['home']])
             self.assertTrue(store.can_resume('run-1','implement','thread-1',CONFIG,SKILLS,lambda _:True))
             with self.assertRaises(SessionError): store.recover_backup('job-1',lambda *_:True,lambda _:True)

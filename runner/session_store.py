@@ -5,6 +5,7 @@ proof that arbitrary session contents contain no credentials. Production mount
 and resume remain disabled until the credential boundary is independently
 verified for the actual runtime.
 """
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
@@ -21,6 +22,8 @@ _BACKUP_HOME_CHANGED='backup home changed'
 def _name(value):
     return isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}',value) and value not in ('.','..')
 def _digest(value): return isinstance(value,str) and re.fullmatch(r'[0-9a-f]{64}',value)
+
+def _home_identity(info): return f'{info.st_dev}:{info.st_ino}:{info.st_ctime_ns}'
 
 def _check_entries(path):
     def scan_error(error): raise error
@@ -51,7 +54,14 @@ class SessionStore:
         self.db=sqlite3.connect(str(self.root/'session-state.db'),timeout=10,isolation_level=None)
         self.db.execute('''CREATE TABLE IF NOT EXISTS homes(id TEXT PRIMARY KEY,run TEXT NOT NULL,role TEXT NOT NULL,config TEXT NOT NULL,skills TEXT NOT NULL,session TEXT UNIQUE,state TEXT NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS home_claims(job TEXT PRIMARY KEY,home TEXT NOT NULL,state TEXT NOT NULL)''')
-        self.db.execute('CREATE TABLE IF NOT EXISTS backup_generations(home TEXT PRIMARY KEY,generation TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS backup_generations(home TEXT PRIMARY KEY,generation TEXT NOT NULL,identity TEXT)')
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            if 'identity' not in {row[1] for row in self.db.execute('PRAGMA table_info(backup_generations)')}:
+                self.db.execute('ALTER TABLE backup_generations ADD COLUMN identity TEXT')
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK');self.db.close();raise
     def close(self): self.db.close()
     def acquire(self,run,role,job,config,skills,session=None,verify_safe=None):
         if not all(_name(x) for x in (run,role,job)) or not _digest(config) or not _digest(skills) or (session is not None and not _name(session)): raise SessionError('invalid session identity')
@@ -99,7 +109,7 @@ class SessionStore:
         path=self.homes/home if fd is None else Path(f'/proc/{os.getpid()}/fd/{fd}')
         try:
             info=path.lstat() if fd is None else os.fstat(fd)
-            identity=(info.st_dev,info.st_ino)
+            identity=_home_identity(info)
             if (fd is None and path.resolve(strict=True)!=path) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise SessionError('unsafe state home')
             _check_entries(path)
             return identity
@@ -122,51 +132,50 @@ class SessionStore:
             identity=self._check_home(row[0])
             db.execute("UPDATE homes SET state=? WHERE id=? AND state='idle'",(state,row[0]))
             generation=secrets.token_hex(24) if state=='backup' else None
-            if generation is not None: db.execute('INSERT OR REPLACE INTO backup_generations VALUES(?,?)',(row[0],generation))
+            if generation is not None: db.execute('INSERT OR REPLACE INTO backup_generations(home,generation,identity) VALUES(?,?,?)',(row[0],generation,identity))
             db.execute('COMMIT'); return (row[0],generation,identity) if generation is not None else row[0]
         except Exception: db.execute('ROLLBACK'); raise
+    @contextmanager
+    def _pinned_home(self,home,identity):
+        try: fd=os.open(self.homes/home,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        except OSError: raise SessionError('backup home unavailable') from None
+        try:
+            if _home_identity(os.fstat(fd))!=identity:raise SessionError(_BACKUP_HOME_CHANGED)
+            self._check_home(home,fd)
+            yield f'/proc/{os.getpid()}/fd/{fd}'
+        finally: os.close(fd)
     def backup(self,job,exporter,verify_safe=None):
         if not callable(exporter) or not callable(verify_safe): raise SessionError('trusted export and credential verification required')
         home,generation,identity=self._reserve_idle(job,'backup')
-        original=self.homes/home
-        try: fd=os.open(original,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-        except OSError: raise SessionError('backup home unavailable') from None
-        try:
-            info=os.fstat(fd)
-            if (info.st_dev,info.st_ino)!=identity:raise SessionError(_BACKUP_HOME_CHANGED)
-            self._check_home(home,fd)
-            path=f'/proc/{os.getpid()}/fd/{fd}'
+        with self._pinned_home(home,identity) as path:
             try: verified=verify_safe(path) is True
             except Exception: verified=False
             if not verified:
-                self._finish_backup(home,generation)
+                self._finish_backup(job,home,generation,identity)
                 raise SessionError('credential boundary unverified')
             try: result=exporter(path,generation)
             except Exception: raise SessionError('backup outcome unresolved') from None
-            try: current=original.lstat()
-            except OSError: raise SessionError(_BACKUP_HOME_CHANGED) from None
-            if (current.st_dev,current.st_ino)!=identity:raise SessionError(_BACKUP_HOME_CHANGED)
-            self._finish_backup(home,generation)
+            self._finish_backup(job,home,generation,identity)
             return result
-        finally: os.close(fd)
-    def _finish_backup(self,home,generation):
-        changed=self.db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM backup_generations WHERE home=? AND generation=?)",(home,home,generation)).rowcount
-        if changed!=1: raise SessionError('backup generation changed')
+    def _finish_backup(self,job,home,generation,identity):
+        db=self.db;db.execute('BEGIN IMMEDIATE')
+        try:
+            if self._check_home(home)!=identity:raise SessionError(_BACKUP_HOME_CHANGED)
+            changed=db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM home_claims WHERE job=? AND home=? AND state='released') AND EXISTS(SELECT 1 FROM backup_generations WHERE home=? AND generation=? AND identity=?)",(home,job,home,home,generation,identity)).rowcount
+            if changed!=1:raise SessionError('backup generation changed')
+            db.execute('COMMIT')
+        except Exception:db.execute('ROLLBACK');raise
     def recover_backup(self,job,verify_quiescent,verify_safe):
         if not _name(job) or not callable(verify_quiescent) or not callable(verify_safe): raise SessionError('trusted backup verification required')
-        row=self.db.execute("SELECT h.id,g.generation FROM homes h JOIN home_claims c ON c.home=h.id JOIN backup_generations g ON g.home=h.id WHERE c.job=? AND c.state='released' AND h.state='backup'",(job,)).fetchone()
+        row=self.db.execute("SELECT h.id,g.generation,g.identity FROM homes h JOIN home_claims c ON c.home=h.id JOIN backup_generations g ON g.home=h.id WHERE c.job=? AND c.state='released' AND h.state='backup' AND g.identity IS NOT NULL",(job,)).fetchone()
         if not row: raise SessionError('backup recovery unavailable')
-        home,generation=row; path=str(self.homes/home)
-        try:
-            if verify_quiescent(job,path,generation) is not True or verify_safe(path) is not True: raise SessionError('backup recovery unverified')
-        except Exception: raise SessionError('backup recovery unverified') from None
-        db=self.db; db.execute('BEGIN IMMEDIATE')
-        try:
-            self._check_home(home)
-            changed=db.execute("UPDATE homes SET state='idle' WHERE id=? AND state='backup' AND EXISTS(SELECT 1 FROM home_claims WHERE job=? AND home=? AND state='released') AND EXISTS(SELECT 1 FROM backup_generations WHERE home=? AND generation=?)",(home,job,home,home,generation)).rowcount
-            if changed!=1: raise SessionError('backup recovery stale')
-            db.execute('COMMIT'); return True
-        except Exception: db.execute('ROLLBACK'); raise
+        home,generation,identity=row
+        with self._pinned_home(home,identity) as pinned:
+            try:
+                if verify_quiescent(job,str(self.homes/home),generation) is not True or verify_safe(pinned) is not True: raise SessionError('backup recovery unverified')
+            except Exception: raise SessionError('backup recovery unverified') from None
+            self._finish_backup(job,home,generation,identity)
+            return True
     def delete(self,job,deleter):
         if not callable(deleter): raise SessionError('trusted deletion required')
         home=self._reserve_idle(job,'deleting'); path=self.homes/home
