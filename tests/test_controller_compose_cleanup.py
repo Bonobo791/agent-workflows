@@ -26,15 +26,19 @@ class ControllerComposeCleanupTests(unittest.TestCase):
         from tests.test_controller_compose_integration import ControllerComposeTests
         import tempfile
         from pathlib import Path
-        created=[];real_temporary=tempfile.TemporaryDirectory
+        created=[];real_temporary=tempfile.TemporaryDirectory;real_mkdtemp=tempfile.mkdtemp
+        def legacy_directory(*args,**kwargs):
+            if 'delete' in kwargs:raise TypeError('delete not supported')
+            return real_temporary(*args,**kwargs)
         def temporary(*args,**kwargs):
-            item=real_temporary(*args,**kwargs);created.append(item);return item
+            item=real_mkdtemp(*args,**kwargs);created.append(item);return item
         try:
-            with patch.dict('os.environ',{'CONTROLLER_TEST_IMAGE':'synthetic','CONTROLLER_TEST_DOCKER_HOST':'unix:///synthetic'}),patch('tests.test_controller_compose_integration.tempfile.TemporaryDirectory',side_effect=temporary),patch('pathlib.Path.write_text',side_effect=OSError('setup failed')),patch('tests.test_controller_compose_integration.subprocess.run') as run:
+            with patch.dict('os.environ',{'CONTROLLER_TEST_IMAGE':'synthetic','CONTROLLER_TEST_DOCKER_HOST':'unix:///synthetic'}),patch('tests.test_controller_compose_integration.tempfile.TemporaryDirectory',side_effect=legacy_directory),patch('tests.test_controller_compose_integration.tempfile.mkdtemp',side_effect=temporary),patch('pathlib.Path.write_text',side_effect=OSError('setup failed')),patch('tests.test_controller_compose_integration.subprocess.run') as run:
                 fixture=ControllerComposeTests()
                 with self.assertRaisesRegex(OSError,'setup failed'):
                     fixture.test_private_secret_and_state_survive_stop_and_start()
                 run.assert_called_once()
-                self.assertFalse(Path(created[0].name).exists())
+                self.assertFalse(Path(created[0]).exists())
         finally:
-            for item in created:item.cleanup()
+            import shutil
+            for item in created:shutil.rmtree(item,ignore_errors=True)

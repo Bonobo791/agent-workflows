@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
+from types import SimpleNamespace
 import socket
 import subprocess
 import sys
@@ -67,8 +69,9 @@ class LocalWorkerFixtureTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get('CODEX_TEST_EXECUTABLE') and os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','signed-in local runtime not configured')
 class LocalWorkerSystemdLiveTests(unittest.TestCase):
     def test_local_worker_unit_starts_and_preserves_queue_across_restart(self):
-        temporary=tempfile.TemporaryDirectory(prefix='workflow-local-unit-',dir=os.environ.get('XDG_RUNTIME_DIR'),delete=False)
-        root=Path(temporary.name); name='workflow-local-unit-'+uuid.uuid4().hex; backend=SystemdScopes(dict(os.environ))
+        root=Path(tempfile.mkdtemp(prefix='workflow-local-unit-',dir=os.environ.get('XDG_RUNTIME_DIR')))
+        temporary=SimpleNamespace(name=str(root),cleanup=lambda:shutil.rmtree(root))
+        name='workflow-local-unit-'+uuid.uuid4().hex; backend=SystemdScopes(dict(os.environ))
         started=False
         try:
             runtime=root/'runtime.json'
