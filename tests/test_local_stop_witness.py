@@ -143,3 +143,18 @@ class LocalStopWitnessTests(unittest.TestCase):
             with patch('runner.local_stop_witness.subprocess.run') as command:
                 self.assertFalse(run_stop(path,'run',unit,nonce));command.assert_not_called()
             self.assertEqual(db.execute('SELECT status FROM local_scope_stop_operations').fetchone(),('pending',))
+
+    def test_witness_rejects_untrusted_paths_and_invalid_identifiers(self):
+        from runner.local_stop_witness import run_stop
+        with tempfile.TemporaryDirectory() as root:
+            path,db,unit,group,nonce=self.fixture(root)
+            link=Path(root)/'link.db';link.symlink_to(path)
+            for candidate,run,selected,token in ((str(link),'run',unit,nonce),(path,'../run',unit,nonce),
+                                                   (path,'run','other.scope',nonce),(path,'run',unit,'not-a-token')):
+                with self.subTest(path=candidate,run=run,unit=selected),patch('runner.local_stop_witness.subprocess.run') as command:
+                    self.assertFalse(run_stop(candidate,run,selected,token));command.assert_not_called()
+            Path(root).chmod(0o755)
+            try:
+                with patch('runner.local_stop_witness.subprocess.run') as command:
+                    self.assertFalse(run_stop(path,'run',unit,nonce));command.assert_not_called()
+            finally:Path(root).chmod(0o700)

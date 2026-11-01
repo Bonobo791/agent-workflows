@@ -135,7 +135,7 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
             self.assertEqual(scopes.db.execute('SELECT status FROM local_scope_recovery_audit').fetchone(),('reconciled_stop',))
 
     def test_witnessed_stop_reconciliation_rejects_incomplete_or_changed_evidence(self):
-        mutations=("UPDATE local_scope_stop_operations SET status='active'", "DELETE FROM local_scope_stop_audit WHERE status='completed'",
+        mutations=("UPDATE local_scope_stop_operations SET status='pending'", "UPDATE local_scope_stop_operations SET status='active'", "DELETE FROM local_scope_stop_audit WHERE status='completed'",
                    "DELETE FROM local_scope_stop_audit WHERE status='active'", "DELETE FROM local_scope_stop_audit WHERE status='pending'",
                    "UPDATE local_scope_stop_operations SET cgroup='/wrong'", "UPDATE manual_assignments SET state='running'")
         for mutation in mutations:
