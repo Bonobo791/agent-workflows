@@ -3,6 +3,7 @@ from unittest.mock import patch
 from runner.service import Service
 from runner.source_fetch import SourceFetchError
 from runner.source_snapshots import SourceSnapshots
+from runner.graph import GraphError
 from tests.source_fixture import REGISTER
 
 class Fetcher:
@@ -12,6 +13,36 @@ class Fetcher:
         return {'url':url,'content_type':'text/plain','content':text,'sha256':hashlib.sha256(text.encode()).hexdigest()}
 
 class SnapshotTests(unittest.TestCase):
+    def test_snapshot_does_not_commit_after_claim_loss_or_cancellation_during_storage(self):
+        for reason in ('claim','cancel','policy'):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as root:
+                service=Service(root)
+                try:
+                    service.create('r','marketing','task'); claim=service.claim('r')
+                    register=service.artifacts.put(json.dumps(REGISTER).encode()); snapshots=SourceSnapshots(service,Fetcher())
+                    put=service.artifacts.put; cancelled=[False]
+                    def interrupt(data):
+                        result=put(data)
+                        if b'"policy_hash"' in data:
+                            if reason=='claim': service.graph.db.execute("UPDATE graph_claims SET expires=0 WHERE run='r'")
+                            elif reason=='cancel': cancelled[0]=True
+                            else: snapshots.fetcher.max_bytes=512
+                        return result
+                    with patch.object(service.artifacts,'put',side_effect=interrupt):
+                        with self.assertRaises((GraphError,SourceFetchError)): snapshots.capture('r',claim,register,None,lambda:cancelled[0])
+                    self.assertEqual(service.graph.db.execute('SELECT count(*) FROM source_snapshots').fetchone()[0],0)
+                finally: service.close()
+    def test_snapshot_rolls_back_when_claim_expires_during_insert(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task'); claim=service.claim('r')
+                register=service.artifacts.put(json.dumps(REGISTER).encode()); snapshots=SourceSnapshots(service,Fetcher())
+                service.graph.db.create_function('expire_test_claim',0,lambda: setattr(service.graph,'clock',lambda:10**12))
+                service.graph.db.execute('CREATE TRIGGER expire_test_claim BEFORE INSERT ON source_snapshots BEGIN SELECT expire_test_claim(); END')
+                with self.assertRaises(GraphError): snapshots.capture('r',claim,register,None,lambda:False)
+                self.assertEqual(service.graph.db.execute('SELECT count(*) FROM source_snapshots').fetchone()[0],0)
+            finally: service.close()
     def test_cancellation_during_fetch_does_not_record_a_snapshot(self):
         with tempfile.TemporaryDirectory() as root:
             service=Service(root)
