@@ -121,6 +121,24 @@ class OpenFilmStageTests(unittest.TestCase):
         self.assertEqual(artifact['platform_block_ref'],evidence)
         self.assertEqual(artifact['platform_review']['reason'],'Height is unspecified.')
         self.assertFalse(hasattr(self.backend,'calls'))
+    def test_platform_block_revalidation_binds_evidence_and_brief(self):
+        from runner.openfilm_platform import verify_platform_block
+        service=self.service
+        evidence=service.artifacts.put(json.dumps({'brief_ref':self.brief_ref,'reason':'Height is unspecified.','findings':[]}).encode())
+        authority=service.openfilm_platform_authority
+        authority.check=lambda *_:{'blocked_ref':evidence}; authority.verify_blocked=lambda *args:args[-1]==evidence
+        result=produce(service,'run',self.queue,self.claim,self.backend)
+        record=json.loads(service.artifacts.get(result['artifact_ref']))
+        self.assertTrue(verify_platform_block(service,'run',record))
+        self.assertTrue(verify_platform_block(service,'run',{'status':'blocked','reason':'adapter unavailable'}))
+        self.assertFalse(verify_platform_block(service,'run',{'status':'blocked','platform_review':record['platform_review']}))
+        self.assertFalse(verify_platform_block(service,'run',{**record,'platform_review':{'reason':'altered'}}))
+        authority.verify_blocked=lambda *_:False
+        self.assertFalse(verify_platform_block(service,'run',record))
+        authority.verify_blocked=lambda *_:True
+        replacement=service.artifacts.put(json.dumps({'outputs':[service.artifacts.put(b'{}')]}).encode())
+        service.graph.db.execute("UPDATE graph_stages SET version=? WHERE run='run' AND stage='asset_brief'",(replacement,))
+        self.assertFalse(verify_platform_block(service,'run',record))
     def test_unverified_platform_block_does_not_expose_findings(self):
         evidence=self.service.artifacts.put(json.dumps({'reason':'untrusted'}).encode())
         self.service.openfilm_platform_authority.check=lambda *_:{'blocked_ref':evidence}

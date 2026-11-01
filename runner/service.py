@@ -262,6 +262,8 @@ class Service:
                     for review_stage in ('canonical_review',*[channel+'_review' for channel in CHANNELS]): dispatcher._verify_recorded_review(run,review_stage)
                     asset=self.graph.get(run,'asset_production')
                     asset_record=json.loads(self.artifacts.get(asset['version']))
+                    from runner.openfilm_platform import verify_platform_block
+                    if not verify_platform_block(self,run,asset_record): return False
                     if asset['status']=='passed' and 'manifest_ref' not in asset_record: return False
                     if 'manifest_ref' in asset_record:
                         from runner.openfilm_review import verify_evidence
@@ -384,6 +386,9 @@ class Service:
                             for output in artifact.get('outputs',[]): contents.append(self.artifacts.get(output).decode('utf-8'))
                         except Exception: raise ServiceError('review content unavailable') from None
                         summary[name]={**entry,'artifact':artifact,'contents':contents}
+                        if name=='asset_production':
+                            from runner.openfilm_platform import verify_platform_block
+                            if not verify_platform_block(self,run,artifact): raise ServiceError('platform block evidence unavailable')
                         if name=='asset_production' and 'manifest_ref' in artifact:
                             from runner.openfilm_review import verify_evidence
                             if entry['status']!=artifact.get('status') or not verify_evidence(self,run,artifact): raise ServiceError('asset review evidence unavailable')

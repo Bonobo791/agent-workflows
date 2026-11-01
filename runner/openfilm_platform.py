@@ -6,6 +6,23 @@ from runner.codex_executor import _bounded
 
 MAX_AGE=86400
 
+def verify_platform_block(service,run,record,timeout=30):
+    """Recheck any source-backed block before presenting it as current evidence."""
+    try:
+        if not isinstance(record,dict): return False
+        if 'platform_block_ref' not in record and 'platform_review' not in record: return True
+        if record.get('status')!='blocked' or not isinstance(record.get('platform_block_ref'),str): return False
+        state=service.graph.get(run,'asset_brief')
+        if not state or state['status']!='passed': return False
+        outputs=json.loads(service.artifacts.get(state['version']))['outputs']
+        if not isinstance(outputs,list) or len(outputs)!=1: return False
+        brief_ref=outputs[0]; brief=json.loads(service.artifacts.get(brief_ref))
+        evidence=json.loads(service.artifacts.get(record['platform_block_ref']))
+        authority=service.openfilm_platform_authority
+        if evidence!=record.get('platform_review') or evidence.get('brief_ref')!=brief_ref or not callable(getattr(authority,'verify_blocked',None)): return False
+        return _bounded(lambda:authority.verify_blocked(run,brief_ref,brief,record['platform_block_ref']),time.monotonic()+timeout,lambda:False) is True
+    except Exception: return False
+
 
 def verify_platform(service,run,brief_ref,brief,proof_ref,timeout,cancelled):
     """Require a trusted authority to authenticate every current source."""

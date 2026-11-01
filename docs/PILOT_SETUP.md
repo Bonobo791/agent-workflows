@@ -136,6 +136,9 @@ must not contain private skills, credentials, user data or session histories.
   specifications. The test requires a verified platform block and confirms no
   render container was created. A passing probe proves the evidence gate
   blocked; it does not prove the platform rejects that image.
+  Source-backed block findings are revalidated against the current brief and
+  authority before assembly and again before a human decision. If their proof
+  is missing, changed or stale, the package cannot be approved as verified.
   `WORKFLOW_TEST_DECISION=1` additionally exercises a fixture-only decision on
   the exact assembled version, with synthetic task freshness. It is not a
   human decision on a real package.

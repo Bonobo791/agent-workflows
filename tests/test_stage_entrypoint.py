@@ -22,7 +22,9 @@ class StageEntrypointTests(unittest.TestCase):
         self._run_marketing(with_asset=False,with_snapshots=True)
     def test_review_package_includes_verified_blocked_media_findings(self):
         self._run_marketing(with_asset=True,asset_blocked=True)
-    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False):
+    def test_platform_block_evidence_must_remain_verified(self):
+        self._run_marketing(with_asset=True,platform_blocked=True)
+    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False,platform_blocked=False):
         class External(http.server.BaseHTTPRequestHandler):
             version='v1'; owner=None; available=True
             def log_message(self,*args): pass
@@ -159,11 +161,16 @@ class StageEntrypointTests(unittest.TestCase):
                         with zipfile.ZipFile(project,'w') as archive: archive.writestr('film.html','<html>synthetic project</html>')
                         project_ref=service.artifacts.put(project.getvalue()); terminal=service.artifacts.put(b'synthetic terminal evidence')
                         class Platform:
+                            valid=True
                             def check(self,run,brief_ref,brief):
+                                if platform_blocked:
+                                    self.proof=service.artifacts.put(json.dumps({'brief_ref':brief_ref,'reason':'Exact image requirements unavailable.','findings':[]}).encode())
+                                    return {'blocked_ref':self.proof}
                                 now=time.time(); source=service.artifacts.put(b'synthetic platform requirements')
                                 assets=[{**{key:item[key] for key in ('channel','kind','width','height','duration_seconds')},'source_ref':source,'supported':True} for item in brief['assets']]
                                 return service.artifacts.put(json.dumps({'brief_ref':brief_ref,'checked_at':now,'expires_at':now+300,'assets':assets}).encode())
                             def verify(self,*args): return True
+                            def verify_blocked(self,run,brief_ref,brief,proof): return self.valid and proof==self.proof and json.loads(service.artifacts.get(proof))['brief_ref']==brief_ref
                         class Backend:
                             timeout_seconds=10
                             def ready(self): return True
@@ -212,12 +219,17 @@ class StageEntrypointTests(unittest.TestCase):
                     for _ in range(30):
                         result=control.handle('x'*40,req)
                         if result.get('status')=='awaiting_approval': control.handle('x'*40,{'action':'approve','run':'run-1','approval':'freeze','version':result['version']})
+                        if platform_blocked and result.get('stage')=='instagram_review':
+                            from runner.control import ControlError
+                            service.openfilm_platform_authority.valid=False
+                            with self.assertRaises(ControlError): control.handle('x'*40,req)
+                            service.openfilm_platform_authority.valid=True
                         if result.get('stage')=='assembly' and result.get('status')=='awaiting_review': break
                     self.assertEqual(result['status'],'awaiting_review'); self.assertEqual(Engine.canonical_reviews,2); self.assertEqual(Engine.source_reviews,3); self.assertEqual(len(Engine.resumed),1)
-                    self.assertEqual(service.graph.get('run-1','asset_production')['status'],'passed' if with_asset and not asset_blocked else 'blocked')
+                    self.assertEqual(service.graph.get('run-1','asset_production')['status'],'passed' if with_asset and not asset_blocked and not platform_blocked else 'blocked')
                     self.assertEqual(service.graph.get('run-1','reddit_review')['status'],'passed')
                     package=json.loads(service.artifacts.get(service.graph.get('run-1','assembly')['version']))
-                    if with_asset and not asset_blocked:
+                    if with_asset and not asset_blocked and not platform_blocked:
                         for channel in ('linkedin','x','facebook','instagram','reddit'): self.assertEqual(package['stages'][channel+'_review']['status'],'passed')
                     if asset_blocked:
                         self.assertEqual(package['stages']['instagram_review']['status'],'blocked')
@@ -229,6 +241,15 @@ class StageEntrypointTests(unittest.TestCase):
                     self.assertIn('claim-1',package['stages']['brief']['contents'][1])
                     self.assertIn('synthetic linkedin_draft',package['stages']['linkedin_draft']['contents'][0])
                     self.assertTrue(service.verify_terminal('run-1'))
+                    if platform_blocked:
+                        from runner.control import ControlError
+                        service.openfilm_platform_authority.valid=False
+                        self.assertFalse(service.verify_terminal('run-1'))
+                        decision={'action':'human_review_decision','run':'run-1','queue_claim':q['token'],'graph_claim':g,'version':service.graph.get('run-1','assembly')['version'],'decision':'approved'}
+                        with self.assertRaises(ControlError): control.handle('x'*40,decision)
+                        self.assertEqual(service.graph.db.execute('SELECT count(*) FROM human_review_decisions').fetchone()[0],0)
+                        service.openfilm_platform_authority.valid=True
+                        self.assertTrue(service.verify_terminal('run-1'))
                     if with_snapshots:
                         from runner.control import ControlError
                         service.source_snapshots.fetcher.max_bytes=512
@@ -257,7 +278,7 @@ class StageEntrypointTests(unittest.TestCase):
                     self.assertNotEqual(source_review['review_session'],coverage['review_session'])
                     self.assertNotEqual(coverage['review_session'],package['stages']['canonical_draft']['artifact']['session_id'])
                     refs=[brief['outputs'][1],brief['_source_verification'],brief['_source_review'],source_review['tool_evidence_ref'],review['_source_coverage'],coverage['review_result_ref'],review['_review_evidence'],proof['review_output_ref'],channel['_review_evidence']]
-                    if with_asset:
+                    if with_asset and not platform_blocked:
                         asset=json.loads(service.artifacts.get(service.graph.get('run-1','asset_production')['version']))
                         manifest=json.loads(service.artifacts.get(asset['manifest_ref']))
                         self.assertEqual(service.artifacts.get(manifest['assets'][0]['artifact_ref']),image)
