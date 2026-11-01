@@ -218,6 +218,35 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.registry.release_local('run-1',assignment,unit)
             self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(None,))
         finally:scopes.close()
+    def test_completed_run_releases_only_a_terminated_bound_workspace(self):
+        from types import SimpleNamespace
+        from runner.control import ControlError
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        service=self.service; service.create('run-1','engineering','task'); service.enqueue('run-1')
+        queue=service.lifecycle.claim(); service.claim('run-1')
+        self.registry.register(*self.args,self.registry.binding_hash(*self.args)); assignment='job-'+'a'*48
+        self.registry.claim('run-1',assignment,self.policy)
+        backend=Backend(); service.model_supervisor=SimpleNamespace(backend=backend,engineering_root=str(self.root))
+        scopes=LocalScopes(str(self.root/'state.db'),backend)
+        try:
+            unit=scopes.reserve('run-1'); backend.unit=unit; scopes.bind('run-1',unit)
+            self.registry.bind_local_scope('run-1',assignment,unit)
+            service.queue.finish('run-1',queue['token'],verify_completed=lambda _:True)
+            self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
+            release={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
+            with self.assertRaises(ControlError): self.control.handle('x'*40,release)
+            self.control.handle('x'*40,{'action':'stop_local_scope','run':'run-1','unit':unit})
+            for table,field,value in (('graph_runs','id','cancelled'),('jobs','run','uncertain')):
+                self.registry.db.execute('UPDATE '+table+' SET status=? WHERE '+field+'=?',(value,'run-1'))
+                with self.subTest(table=table), self.assertRaises(ControlError): self.control.handle('x'*40,release)
+                self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
+                self.registry.db.execute('UPDATE '+table+' SET status=? WHERE '+field+'=?',('completed','run-1'))
+            self.assertEqual(self.control.handle('x'*40,release),{'released':True})
+            self.assertEqual(service.lifecycle.confirm_operator_stop('run-1','inc','terminated_and_fenced')['status'],'stopped')
+            self.assertEqual(service.queue.get('run-1')['status'],'completed')
+        finally: scopes.close()
+
     def test_fenced_control_releases_only_exact_terminated_local_workspace(self):
         from types import SimpleNamespace
         from unittest.mock import patch
