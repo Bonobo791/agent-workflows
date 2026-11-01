@@ -275,6 +275,9 @@ class StageEntrypointTests(unittest.TestCase):
                     if complete_job:
                         service.finish_job('run-1',q['token'])
                         self.assertEqual(service.queue.get('run-1')['status'],'completed')
+                        service.request_lifecycle_stop('run-1')
+                        self.assertEqual(service.lifecycle.confirm_operator_stop('run-1','inc','terminated_and_fenced')['status'],'stopped')
+                        self.assertEqual(service.queue.get('run-1')['status'],'completed')
                         return
                     with self.assertRaises(ControlError): control.handle('x'*40,decision)
                     brief=package['stages']['brief']['artifact']; review=package['stages']['canonical_review']['artifact']; channel=package['stages']['linkedin_review']['artifact']

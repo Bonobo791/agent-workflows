@@ -423,4 +423,11 @@ The private metrics snapshot reports an approval wait after the dispatcher reach
 
 The approval alert measures a continuous nonzero aggregate for one hour; it does not measure the age of each individual wait.
 
+After a marketing job completes, the manual worker remains assigned until the
+owner requests `manual_stop` and confirms that exact incarnation stopped and
+was fenced. This preserves the completed job and graph; unresolved scopes or
+workspace claims still block confirmation. Register a distinct replacement
+incarnation before claiming another task. Completion itself is not evidence
+that a worker or external request stopped.
+
 On worker shutdown, an active automatic assignment is fenced before the control process exits. Fencing invalidates its claims and requests a manual lifecycle stop; it does not prove that an in-flight process or remote request has stopped. Inspect unresolved scopes and confirm termination before replacement or recovery.

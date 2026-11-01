@@ -96,8 +96,10 @@ class Service:
             if state['incarnation']!=self.lifecycle.incarnation or state['status'] not in ('running','pending'): raise ServiceError('manual assignment unavailable')
         row=self.graph.db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()
         if not row: raise ServiceError('run unavailable')
-        if row[0]=='active': self._cancel(run)
-        elif row[0]!='cancelled': raise ServiceError('run unavailable')
+        if row[0]=='active':
+            job=self.graph.db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()
+            self._cancel(run,completed=job==('completed',))
+        elif row[0] not in ('cancelled','completed'): raise ServiceError('run unavailable')
         if automatic:
             self.lifecycle.automatic_stop(run)
             return self.lifecycle.status(run)
@@ -164,7 +166,7 @@ class Service:
         state=self.lifecycle.status(run)
         graph=self.graph.db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()
         job=self.graph.db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()
-        if state['incarnation']!=self.lifecycle.incarnation or state['status']!='pending' or graph!=('cancelled',) or not job or job[0] not in ('cancelling','uncertain'): raise ServiceError('run must be fenced for local recovery')
+        if state['incarnation']!=self.lifecycle.incarnation or state['status']!='pending' or not graph or not job or (graph[0],job[0]) not in (('cancelled','cancelling'),('cancelled','uncertain'),('completed','completed')): raise ServiceError('run must be fenced for local recovery')
     def release_local_workspace(self,run,assignment,unit):
         from runner.engineering_workspace import EngineeringWorkspace
         self._require_fenced_local(run)
@@ -195,7 +197,7 @@ class Service:
             else:scopes.reconcile_confirmed(run,unit,fenced)
             return {'unit':unit,'state':'terminated'}
         finally:scopes.close()
-    def _cancel(self,run,token=None,require_job=False):
+    def _cancel(self,run,token=None,require_job=False,completed=False):
         db=self.graph.db; db.execute('BEGIN IMMEDIATE')
         try:
             if token is not None: self.graph._lease(run,token)
@@ -203,9 +205,11 @@ class Service:
             if not row or row[0]!='active': raise ServiceError('run unavailable')
             job=db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()
             if require_job and (not job or job[0] not in ('queued','running')): raise ServiceError('job unavailable')
+            if completed and job!=('completed',): raise ServiceError('job state changed')
+            if not completed and job==('completed',): raise ServiceError('completed job cannot be cancelled')
             if job and job[0] in ('queued','running'):
                 db.execute('UPDATE jobs SET status=? WHERE run=?',('cancelled' if job[0]=='queued' else 'cancelling',run))
-            db.execute("UPDATE graph_runs SET status='cancelled' WHERE id=?",(run,))
+            db.execute("UPDATE graph_runs SET status=? WHERE id=?",('completed' if completed else 'cancelled',run))
             db.execute('DELETE FROM graph_claims WHERE run=?',(run,))
             db.execute('COMMIT')
         except Exception:

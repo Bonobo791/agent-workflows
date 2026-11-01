@@ -366,6 +366,46 @@ class AutoWorkerTests(unittest.TestCase):
                 if worker.thread: worker.thread.join(timeout=5)
                 controller.lifecycle.close(); controller.close()
 
+    def test_completed_job_can_be_fenced_and_worker_replaced(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); service.lifecycle=ManualLifecycle(str(Path(root)/'state.db'),'worker','inc')
+            try:
+                service.create('r','marketing','task'); service.enqueue('r')
+                queue=service.lifecycle.claim(); graph_claim=service.claim('r')
+                service.queue.finish('r',queue['token'],verify_completed=lambda _:True)
+                from runner.service import ServiceError
+                with self.assertRaises(ServiceError): service.cancel('r',graph_claim)
+                service.request_lifecycle_stop('r')
+                self.assertEqual(service.graph.db.execute("SELECT status FROM graph_runs WHERE id='r'").fetchone(),('completed',))
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+                self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_claims WHERE run='r'").fetchone())
+                self.assertEqual(service.lifecycle.confirm_operator_stop('r','inc','terminated_and_fenced')['status'],'stopped')
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+                service.lifecycle.register_replacement('inc','inc-next','replacement_started')
+                service.create('r2','marketing','task-2'); service.enqueue('r2')
+                self.assertEqual(service.lifecycle.claim()['run'],'r2')
+            finally:
+                service.lifecycle.close(); service.close()
+
+    def test_completed_job_cannot_confirm_stop_with_unresolved_scope(self):
+        from runner.local_scope import LocalScopes
+        from runner.manual_lifecycle import ManualLifecycleError
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); service.lifecycle=ManualLifecycle(str(Path(root)/'state.db'),'worker','inc')
+            scopes=LocalScopes(str(Path(root)/'state.db'),Backend())
+            try:
+                service.create('r','marketing','task'); service.enqueue('r')
+                queue=service.lifecycle.claim(); service.claim('r'); scopes.reserve('r')
+                service.queue.finish('r',queue['token'],verify_completed=lambda _:True)
+                service.request_lifecycle_stop('r')
+                with self.assertRaises(ManualLifecycleError): service.lifecycle.confirm_operator_stop('r','inc','terminated_and_fenced')
+                self.assertEqual(service.queue.get('r')['status'],'completed')
+                self.assertEqual(service.lifecycle.status('r')['status'],'pending')
+                scopes._require_recovery_fence('r',('worker','inc'))
+            finally:
+                scopes.close(); service.lifecycle.close(); service.close()
+
     def test_stop_before_claim_prevents_late_assignment(self):
         import threading
         with tempfile.TemporaryDirectory() as root:
