@@ -75,6 +75,26 @@ class ScopeLaunchReceiptTests(unittest.TestCase):
                 self.assertEqual(os.read(self.go_read,1),b'G')
             finally:other.close()
 
+    def test_release_commit_failure_preserves_prior_binding_and_blocks_recovery_while_active(self):
+        import sqlite3
+        class FailCommit:
+            def __init__(self,db):self.db=db
+            def execute(self,sql,*args):
+                if sql=='COMMIT':raise sqlite3.OperationalError('commit unavailable')
+                return self.db.execute(sql,*args)
+            def __getattr__(self,name):return getattr(self.db,name)
+        with tempfile.TemporaryDirectory() as root:
+            backend,scopes,unit,launch=self.fixture(root);scopes.bind_confirmed('run',unit,launch)
+            original=scopes.db;scopes.db=FailCommit(original)
+            try:
+                with self.assertRaises(sqlite3.OperationalError):scopes.release_confirmed('run',unit,launch,lambda:True)
+            finally:scopes.db=original
+            self.assertEqual(os.read(self.go_read,1),b'G')
+            self.assertEqual(scopes.state('run',unit),'running')
+            self.assertEqual(scopes.db.execute('SELECT COUNT(*) FROM local_scope_launch_receipts WHERE unit=?',(unit,)).fetchone(),(1,))
+            self.add_fence(scopes)
+            with self.assertRaises(ScopeError):scopes.reconcile_confirmed('run',unit,('target','inc'))
+
     def test_release_commit_failure_preserves_durable_launch_evidence(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as root:
