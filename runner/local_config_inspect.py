@@ -19,6 +19,9 @@ from runner.protocol import AppServer
 class InspectionError(RuntimeError): pass
 
 
+class ConfigTooLarge(InspectionError): pass
+
+
 def _native_executable(executable):
     path=Path(executable)
     if not path.is_absolute(): raise ValueError('absolute executable required')
@@ -91,7 +94,7 @@ def write_config(executable,workspace,destination,environment):
         else: raise ValueError()
         config=inspect_config(executable,workspace,environment)
         payload=(json.dumps(config,sort_keys=True,indent=2)+'\n').encode('utf-8')
-        if len(payload)>16384:raise ValueError('runtime configuration exceeds worker limit')
+        if len(payload)>16384:raise ConfigTooLarge('runtime configuration exceeds worker limit')
         temporary='.runtime-'+secrets.token_hex(16)+'.tmp'
         fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory_fd)
         with os.fdopen(fd,'wb') as stream:
@@ -101,6 +104,7 @@ def write_config(executable,workspace,destination,environment):
         os.link(temporary,path.name,src_dir_fd=directory_fd,dst_dir_fd=directory_fd,follow_symlinks=False)
         os.unlink(temporary,dir_fd=directory_fd); temporary=None
         os.fsync(directory_fd)
+    except ConfigTooLarge: raise
     except Exception: raise InspectionError('local runtime configuration could not be created; inspect the destination before retrying') from None
     finally:
         if directory_fd is not None:
@@ -121,6 +125,8 @@ def main():
 
 if __name__=='__main__':
     try:main()
+    except ConfigTooLarge:
+        print('Local runtime configuration exceeds the worker size limit; nothing was written.',file=sys.stderr);sys.exit(1)
     except InspectionError:
         message='Local runtime configuration was not confirmed; inspect the destination before retrying.' if len(sys.argv)==5 and sys.argv[3]=='--write' else 'Local runtime inspection failed.'
         print(message,file=sys.stderr);sys.exit(1)

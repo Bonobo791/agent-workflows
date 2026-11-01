@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from runner.local_config_inspect import inspect_config, write_config, InspectionError
+from runner.local_config_inspect import inspect_config, write_config, InspectionError, ConfigTooLarge
 
 
 class LocalConfigInspectionTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class LocalConfigInspectionTests(unittest.TestCase):
             target=Path(root)/'runtime.json'
             result={'codex_executable':'/synthetic/codex','codex_sha256':'a'*64,'disabled_integrations':{'mcp_servers':[str(i).zfill(3)+'a'*253 for i in range(64)],'plugins':[]}}
             with patch('runner.local_config_inspect.inspect_config',return_value=result):
-                with self.assertRaises(InspectionError): write_config('/synthetic/codex',root,str(target),{})
+                with self.assertRaises(ConfigTooLarge): write_config('/synthetic/codex',root,str(target),{})
             self.assertFalse(target.exists())
             self.assertEqual(list(Path(root).iterdir()),[])
 
