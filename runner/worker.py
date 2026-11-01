@@ -7,6 +7,8 @@ from pathlib import Path
 from runner.control import ControlPlane, UnixControlServer
 from runner.service import Service
 
+REQUIRED_SEO_SKILL='plan-seo-geo-growth'
+
 class ConfigurationError(RuntimeError): pass
 
 def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=None, intake_factory=None, docker_socket=None, docker_image=None, docker_config=None, task_config=None, plan_token=None, github_token=None, role_config=None, command_config=None, pr_credentials=None, openfilm_builder_factory=None, openfilm_policy_verifier=None, openfilm_builder_policy_verifier=None, reddit_context_factory=None, page_rules=None, local_supervisor_factory=None, github_http=None, source_config=None, platform_config=None, audio_config=None):
@@ -46,6 +48,8 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
             if any(stage not in stages or not isinstance(names,list) or not names or any(not isinstance(name,str) or not name for name in names) or len(set(names))!=len(names) for stage,names in role_config['required_skills'].items()): raise ConfigurationError('invalid role skill configuration')
             service.skill_resolver=SkillResolver(role_config['skill_roots'])
             service.required_skills={stage:list(names) for stage,names in role_config['required_skills'].items()}
+            for stage in ('canonical_draft','canonical_review'):
+                if stage in stages and REQUIRED_SEO_SKILL not in service.required_skills.setdefault(stage,[]): service.required_skills[stage].append(REQUIRED_SEO_SKILL)
         if docker_config is not None:
             from runner.docker_config import DockerConfig
             from runner.docker_controller import DockerAssignments, UnixEngine

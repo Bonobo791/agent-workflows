@@ -130,7 +130,7 @@ class StageEntrypointTests(unittest.TestCase):
             def request(self,method,path,body=None):
                 conn=http.client.HTTPConnection(host,port,timeout=3); conn.request(method,path); response=conn.getresponse(); result=json.loads(response.read()); conn.close(); return result
         with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700); skillroot=Path(root)/'skills'; (skillroot/'role').mkdir(parents=True); (skillroot/'role'/'SKILL.md').write_text('Synthetic role')
+            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700); skillroot=Path(root)/'skills'; (skillroot/'role').mkdir(parents=True); (skillroot/'role'/'SKILL.md').write_text('Synthetic role'); (skillroot/'plan-seo-geo-growth').mkdir(); (skillroot/'plan-seo-geo-growth'/'SKILL.md').write_text('Synthetic SEO')
             sock=str(Path(root)/'engine.sock'); engine=EngineServer(sock,Engine); engine_thread=threading.Thread(target=engine.serve_forever); engine_thread.start()
             docker={'socket':sock,'image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
             task={'run':'run-1','workflow':'marketing','project':'DEMO','number':1,'task_format':'guide','ready_columns':[10],'completed_columns':[20],'blocker_direction':'inward','plan_endpoint':'https://plan.example.invalid/mcp','github_owner':'owner','github_repo':'repo','github_branch':'task-1'}
