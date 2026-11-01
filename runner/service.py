@@ -102,7 +102,9 @@ class Service:
         if row[0]=='active':
             job=self.graph.db.execute(_JOB_STATUS,(run,)).fetchone()
             self._cancel(run,completed=job==('completed',))
-        elif row[0] not in ('cancelled','completed'): raise ServiceError('run unavailable')
+        elif row[0]=='completed':
+            if self.graph.db.execute(_JOB_STATUS,(run,)).fetchone()!=('completed',): raise ServiceError('run unavailable')
+        elif row[0]!='cancelled': raise ServiceError('run unavailable')
         if automatic:
             self.lifecycle.automatic_stop(run)
             return self.lifecycle.status(run)

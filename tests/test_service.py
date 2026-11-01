@@ -262,6 +262,18 @@ class ServiceTests(unittest.TestCase):
             self.assertTrue(s.verify_terminal('r')); file.write_text('changed')
             self.assertFalse(s.verify_terminal('r')); s.close()
 
+    def test_stop_request_rejects_completed_graph_with_unfinished_job(self):
+        from pathlib import Path
+        from runner.manual_lifecycle import ManualLifecycle
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root); service.lifecycle=ManualLifecycle(str(Path(root)/'state.db'),'worker','inc')
+            try:
+                service.create('r','marketing','task'); service.enqueue('r'); service.lifecycle.claim(); service.claim('r')
+                service.graph.db.execute("UPDATE graph_runs SET status='completed' WHERE id='r'")
+                with self.assertRaises(ServiceError): service.request_lifecycle_stop('r')
+                self.assertEqual(service.graph.db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('running',))
+            finally: service.lifecycle.close(); service.close()
+
     def test_controller_lifecycle_confirmation_preserves_completed_job(self):
         from runner.lifecycle import Lifecycle
         from runner.service import ServiceError
