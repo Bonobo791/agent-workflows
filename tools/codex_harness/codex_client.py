@@ -55,10 +55,11 @@ class CodexClient:
     def models(self):
         return [item['model'] for item in self._request('model/list', {})['data']]
 
-    def run_turn(self, prompt, model, cwd, output_schema=None):
+    def run_turn(self, prompt, model, cwd, output_schema=None, images=()):
         thread = self._request('thread/start', {'model': model, 'cwd': cwd, 'ephemeral': True, 'sandbox': 'read-only', 'approvalPolicy': 'never'})
         thread_id = thread['thread']['id']
-        params = {'threadId': thread_id, 'input': [{'type': 'text', 'text': prompt}], 'model': model, 'cwd': cwd, 'approvalPolicy': 'never'}
+        content = [{'type': 'text', 'text': prompt}] + [{'type': 'image', 'url': url} for url in images]
+        params = {'threadId': thread_id, 'input': content, 'model': model, 'cwd': cwd, 'approvalPolicy': 'never'}
         if output_schema is not None:
             params['outputSchema'] = output_schema
         self.next_id += 1
