@@ -471,11 +471,11 @@ class StageDispatcher:
                     data=service.artifacts.get(result['outputs'][0])
                     if len(data)>1048576: raise ValueError('brief too large')
                     from workflows.marketing.openfilm_brief import social_draft_inputs
-                    social_drafts=social_draft_inputs(service,run)
-                    if not social_drafts: raise ValueError('social drafts unavailable')
+                    current_social_drafts=social_draft_inputs(service,run)
+                    if not current_social_drafts: raise ValueError('social drafts unavailable')
                     brief=json.loads(data)
                     if 'social_drafts' not in brief: raise ValueError('OpenFilm social copy binding missing')
-                    validate_brief(service.artifacts,brief,task_ref,register,social_drafts)
+                    validate_brief(service.artifacts,brief,task_ref,register,current_social_drafts)
                 except Exception:
                     result['_blocked_reason']='asset brief invalid, stale or incomplete'
                     return 'blocked'
