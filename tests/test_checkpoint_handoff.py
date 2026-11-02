@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from runner.local_scope import LocalScopes
 from runner.manual_lifecycle import ManualLifecycle
-from runner.service import Service
+from runner.service import Service,ServiceError
 from tests.test_local_scope import Backend
 
 
@@ -135,7 +135,7 @@ class CheckpointHandoffTests(unittest.TestCase):
         self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='run'").fetchone(),('active',))
         self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='run'").fetchone(),('queued',))
         self.assertEqual(self.service.lifecycle.claim()['run'],'run')
-        with self.assertRaises(Exception):self.service.recover_cancelled_run('run')
+        with self.assertRaises(ServiceError):self.service.recover_cancelled_run('run')
 
     def test_replacement_cannot_be_prepared_before_stop_or_reuse_identity(self):
         from runner.manual_lifecycle import ManualLifecycleError

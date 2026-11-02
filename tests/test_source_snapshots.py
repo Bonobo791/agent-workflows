@@ -125,3 +125,16 @@ class SnapshotTests(unittest.TestCase):
                 self.assertFalse(SourceSnapshots(service,other).verify('r',register,draft,bundle))
                 with self.assertRaises(SourceFetchError): snapshots.capture('r',claim,register,draft,lambda:True)
             finally:service.close()
+
+
+class SourceViewTests(unittest.TestCase):
+    def view(self,html):
+        from runner import source_snapshots as m
+        with patch.object(m,'MAX_MODEL_SOURCE_CHARS',len(html)-1): return m._source_view(html,'text/html')
+    def test_head_without_close_does_not_hide_body_text(self):
+        self.assertEqual(self.view('<html><head><title>t</title><body><p>Visible body text</p></body></html>')[0],'Visible body text')
+        self.assertEqual(self.view('<head><meta charset="utf-8"><p>Visible body text</p>')[0],'Visible body text')
+    def test_inline_markup_does_not_split_words(self):
+        self.assertEqual(self.view('<p>pro<b>hibited</b> Price: <b>$10</b></p><p>Next</p>')[0],'prohibited Price: $10\nNext')
+    def test_nested_hidden_tags_stay_hidden(self):
+        self.assertEqual(self.view('<p>keep</p><svg><svg></svg>hidden</svg><p>also keep</p>')[0],'keep\nalso keep')

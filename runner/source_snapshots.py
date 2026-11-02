@@ -11,20 +11,29 @@ MAX_SOURCE_BUNDLE=4194304
 MAX_MODEL_SOURCE_CHARS=400000
 
 class _SourceText(HTMLParser):
+    HIDDEN=('head','script','style','noscript','template','svg')
+    HEAD_CONTENT=frozenset(('title','meta','link','base','script','style','noscript','template'))
+    BLOCKS=frozenset(('address','article','aside','blockquote','br','dd','div','dl','dt','fieldset','figcaption','figure','footer','form','h1','h2','h3','h4','h5','h6','header','hr','li','main','nav','ol','p','pre','section','table','td','th','tr','ul'))
     def __init__(self):
         super().__init__(convert_charrefs=True);self.hidden=[];self.parts=[]
     def handle_starttag(self,tag,attrs):
-        if tag in ('head','script','style','noscript','template','svg'): self.hidden.append(tag)
+        if self.hidden and self.hidden[-1]=='head' and tag not in self.HEAD_CONTENT:self.hidden.pop()
+        if tag in self.HIDDEN: self.hidden.append(tag)
+        elif tag in self.BLOCKS:self.parts.append('\n')
     def handle_endtag(self,tag):
         if self.hidden and self.hidden[-1]==tag:self.hidden.pop()
+        if tag in self.BLOCKS:self.parts.append('\n')
     def handle_data(self,data):
-        if not self.hidden and data.strip():self.parts.append(data.strip())
+        if not self.hidden:self.parts.append(data)
+    def text(self):
+        lines=(' '.join(line.split()) for line in ''.join(self.parts).split('\n'))
+        return '\n'.join(line for line in lines if line)
 
 def _source_view(content,content_type):
     if len(content)<=MAX_MODEL_SOURCE_CHARS:return content,'original'
     if content_type not in ('text/html','application/xhtml+xml'):raise SourceFetchError('source view too large')
     try:
-        parser=_SourceText();parser.feed(content);parser.close();text='\n'.join(parser.parts)
+        parser=_SourceText();parser.feed(content);parser.close();text=parser.text()
     except (ValueError,RecursionError):raise SourceFetchError('source extraction unavailable') from None
     if not text or len(text)>MAX_MODEL_SOURCE_CHARS:raise SourceFetchError('source view too large or empty')
     return text,'extracted_text'

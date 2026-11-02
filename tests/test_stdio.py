@@ -7,7 +7,7 @@ class StdioTests(unittest.TestCase):
         from runner.stdio import MAX_SEND_LINE
         writer=io.BytesIO();transport=NDJSONTransport(io.BytesIO(),writer)
         transport.send({'prompt':'x'*(3*1024*1024)})
-        self.assertLessEqual(len(writer.getvalue()),MAX_SEND_LINE)
+        self.assertGreater(len(writer.getvalue()),3*1024*1024);self.assertLessEqual(len(writer.getvalue()),MAX_SEND_LINE)
         with self.assertRaises(StdioError):transport.send({'prompt':'x'*MAX_SEND_LINE})
     def test_process_transport_sends_large_prompt_without_raising_receive_limit(self):
         import subprocess,sys,time
