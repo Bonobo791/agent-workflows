@@ -222,10 +222,15 @@ termination evidence; it does not establish actual host isolation.
 
 Suggested handoff: brief reference/version; project reference/version; output reference/hash; attempt and cancellation state; verifier identity and evidence; content/rights review disposition; current-version comparison. Stale, missing, unavailable, or failed evidence blocks readiness. An OpenFilm asset may be omitted from a review package only with an explicit blocked state; other text work can continue. No automatic publication.
 
+The sampled text layout check inspects 12 frames per asset and skips text hidden by a
+clipping ancestor. It cannot detect text still animating in from off-canvas, so human
+playback is required to judge that.
+
 For a human approval containing video, `human_review_decision` and
 `human_review_decision_auto` require `video_playback_refs`: the exact list of
 video artifact hashes in the reviewed package. By submitting it, the local
-owner attests to full playback and listening where audio is present. The
-acknowledgement is recorded against that package version and rechecked at
-completion. Rejections and still-only packages do not require it. Previously
+owner attests to full playback and to listening to every audio track. The
+technical check does not establish whether audio is present, so the
+attestation applies to every video. The acknowledgement is recorded against
+that package version and rechecked at completion. Rejections and still-only packages do not require it. Previously
 approved video packages without this evidence must be reviewed again.

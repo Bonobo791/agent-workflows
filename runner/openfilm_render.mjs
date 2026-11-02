@@ -16,6 +16,7 @@ export async function inspectLayout(folder, open) {
     const duration = film.meta.duration;
     if (!Number.isFinite(duration) || duration <= 0) throw new Error('layout duration unavailable');
     const findings = new Set();
+    let evaluated = 0;
     let inspected = 0;
     for (let i = 0; i < 12; i++) {
       const time = (duration - Math.min(0.001, duration / 2)) * i / 11;
@@ -39,7 +40,17 @@ export async function inspectLayout(folder, open) {
             if (!visible) continue;
             if (!owners.has(el)) owners.set(el, owners.size);
             const range = document.createRange(); range.selectNodeContents(node);
-            for (const r of range.getClientRects()) if (r.width > 1 && r.height > 1) rects.push({x:r.x,y:r.y,right:r.right,bottom:r.bottom,owner:owners.get(el),text:node.textContent.trim().slice(0,80)});
+            for (const r of range.getClientRects()) {
+              if (!(r.width > 1 && r.height > 1)) continue;
+              let clipped = false;
+              for (let p = el.parentElement; p && !clipped; p = p.parentElement) {
+                const s = getComputedStyle(p);
+                if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
+                const b = p.getBoundingClientRect();
+                clipped = r.right <= b.left + 1 || r.left >= b.right - 1 || r.bottom <= b.top + 1 || r.top >= b.bottom - 1;
+              }
+              if (!clipped) rects.push({x:r.x,y:r.y,right:r.right,bottom:r.bottom,owner:owners.get(el),text:node.textContent.trim().slice(0,80)});
+            }
             if (rects.length > 2000) throw new Error('too many text rectangles');
           }
           const problems = [];
@@ -54,10 +65,10 @@ export async function inspectLayout(folder, open) {
           }
           return { count: rects.length, problems: problems.slice(0,20) };
         });
-        if (result) { inspected += result.count; for (const problem of result.problems) findings.add(`${time.toFixed(2)}s: ${problem}`); }
+        if (result) { evaluated += 1; inspected += result.count; for (const problem of result.problems) findings.add(`${time.toFixed(2)}s: ${problem}`); }
       }
     }
-    if (!inspected) throw new Error('layout text inspection unavailable');
+    if (!evaluated) throw new Error('layout text inspection unavailable');
     return [...findings];
   } finally { await session.close(); }
 }

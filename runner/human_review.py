@@ -24,9 +24,10 @@ class HumanReview:
         if db.execute("SELECT status FROM graph_runs WHERE id=?",(run,)).fetchone()!=('active',) or not stage or stage['status']!='awaiting_review' or stage['version']!=version: raise HumanReviewError('review package changed')
     def _video_refs(self,run):
         stage=self.service.graph.get(run,'asset_production')
-        if not stage or stage['status']!='passed': return []
+        if not stage: return []
         try:
             record=json.loads(self.service.artifacts.get(stage['version']))
+            if 'manifest_ref' not in record: return []
             manifest=json.loads(self.service.artifacts.get(record['manifest_ref']))
             assets=manifest['assets']
             if not isinstance(assets,list) or any(not isinstance(a,dict) or a.get('kind') not in ('png','mp4') or not isinstance(a.get('artifact_ref'),str) for a in assets): raise ValueError()
@@ -48,6 +49,11 @@ class HumanReview:
             self._require_current(db,run,queue_claim,graph_claim,version)
             last=db.execute('SELECT COALESCE(MAX(id),0) FROM human_review_audit').fetchone()[0]
             created=time.time()
+            existing=db.execute('SELECT decision FROM human_review_decisions WHERE run=? AND version=?',(run,version)).fetchone()
+            if existing:
+                # Only a legacy approval missing its playback acknowledgement may be superseded; the audit trigger keeps the old row.
+                if decision!='approved' or existing[0]!='approved' or not refs or db.execute('SELECT asset_ref FROM human_review_playback WHERE run=? AND version=? ORDER BY asset_ref',(run,version)).fetchall()==[(ref,) for ref in refs]: raise HumanReviewError('review decision already recorded')
+                db.execute('DELETE FROM human_review_decisions WHERE run=? AND version=?',(run,version))
             inserted=db.execute('INSERT INTO human_review_decisions VALUES(?,?,?,?,?)',(run,version,decision,'local-owner',created))
             if inserted.rowcount!=1 or db.execute('SELECT decision,actor,created FROM human_review_decisions WHERE run=? AND version=?',(run,version)).fetchone()!=(decision,'local-owner',created): raise HumanReviewError('review decision unavailable')
             for ref in refs: db.execute('INSERT INTO human_review_playback VALUES(?,?,?,?,?)',(run,version,ref,'local-owner',created))

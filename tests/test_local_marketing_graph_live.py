@@ -35,7 +35,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
         source_url='https://example.com/'
         for name,content in {
             'brief':'Prepare only the requested fixture brief and exact candidate source register. Do not invent claims.',
-            'writer':'Write the requested note using only supplied verified evidence. Include the required heading and both requested supported statements; do not return only a heading.',
+            'writer':'Write the requested note using only supplied verified evidence. Include the required heading and each requested supported statement; do not return only a heading.',
             'editor':('Review the draft against the supplied source register and page rules. This offline synthetic fixture uses verifier_id synthetic-independent-verifier as its declared test authority and intentionally does not fetch the public URL; check that the draft has the required heading and only registered claims. Report actual material problems only.' if synthetic_source else 'Review the assigned draft against the supplied source and rules. Report actual material problems only.'),
             'source':'Review supplied source snapshots. A page is primary evidence of its own HTML title.',
             'channel-writer':'Adapt the supplied frozen content for the assigned channel. Use supplied source_verification and source_snapshots; do not request duplicate evidence when a verified proof is present. Do not introduce new claims or publish.',
