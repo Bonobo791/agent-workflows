@@ -727,3 +727,12 @@ class AutoWorkerTests(unittest.TestCase):
                 self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='r'").fetchone(),('cancelling',))
                 self.assertEqual(db.execute("SELECT state FROM manual_assignments WHERE run='r'").fetchone(),('pending',))
             finally: db.close()
+
+
+class RecoverCorrectionActionTests(unittest.TestCase):
+    def test_recover_correction_is_an_allowed_action(self):
+        with tempfile.TemporaryDirectory() as root:
+            worker=AutoWorker(lambda:(None,None),Path(root))
+            worker.state={'run':'r','status':'blocked'}
+            self.assertTrue(worker.request_action('r','recover_correction',{})['pending'])
+            self.assertEqual(worker.pending_action['operation'],'recover_correction')

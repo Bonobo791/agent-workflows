@@ -41,9 +41,9 @@ class StageDispatchTests(unittest.TestCase):
                 manifest=service.artifacts.put(json.dumps({'assets':[{'channel':'linkedin','artifact_ref':'media'}]}).encode())
                 record=service.artifacts.put(json.dumps({'status':'passed','manifest_ref':manifest}).encode())
                 with patch.object(service.graph,'get',return_value={'status':'passed','version':record}), patch('runner.openfilm_review.verify_evidence',return_value=True):
-                    self.assertIsNone(StageDispatcher(service)._instagram_asset_inputs('r'))
+                    self.assertIsNone(StageDispatcher(service)._channel_asset_inputs('r','instagram'))
                 with patch.object(service.graph,'get',return_value={'status':'passed','version':record}), patch('runner.openfilm_review.verify_evidence',return_value=False):
-                    with self.assertRaises(StageError): StageDispatcher(service)._instagram_asset_inputs('r')
+                    with self.assertRaises(StageError): StageDispatcher(service)._channel_asset_inputs('r','instagram')
             finally: service.close()
     def test_binary_canonical_output_is_blocked_before_review(self):
         from pathlib import Path
