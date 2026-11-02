@@ -20,6 +20,7 @@ class OpenFilmStageError(RuntimeError): pass
 class PlatformReviewUncertain(OpenFilmStageError): pass
 class TextCutoffError(OpenFilmStageError): pass
 class MissingAudioError(OpenFilmStageError): pass
+class StaticVideoError(OpenFilmStageError): pass
 
 
 def _verify_project(store, ref, asset_count):
@@ -153,6 +154,7 @@ def produce(service, run, queue_claim, graph_claim, backend):
                     report_data=json.loads(service.artifacts.get(report_ref))
                     if not isinstance(report_data,dict) or set(report_data)!={'ok','lines'} or report_data['ok'] is not True or not isinstance(report_data['lines'],list) or any(not isinstance(line,str) for line in report_data['lines']) or '✓ sampled text layout inspected' not in report_data['lines'] or not any(line.startswith('✓ ') and 'same picture' in line for line in report_data['lines']): raise OpenFilmStageError('visual check unavailable')
                     if any(line.startswith('! text cut off ') for line in report_data['lines']): raise TextCutoffError()
+                    if spec['kind']=='mp4' and any(line.startswith('! every frame looks the same') for line in report_data['lines']): raise StaticVideoError()
                     assets.append({'channel':spec['channel'],'kind':spec['kind'],**checked,'previews':preview_refs,'look_report_ref':report_ref})
                 manifest={'status':'awaiting_review','brief_ref':brief_ref,'content_ref':content_ref,'platform_ref':platform_ref,'attempt_id':attempt_id,'project_ref':result['project_ref'],'terminal_ref':result['terminal_ref'],'supervisor_ref':supervisor_ref,'assets':assets,'outputs':[]}
                 status='awaiting_review'
@@ -161,6 +163,9 @@ def produce(service, run, queue_claim, graph_claim, backend):
                 status='blocked'
             except TextCutoffError:
                 manifest={'status':'blocked','reason':'repeated text cutoff detected','brief_ref':brief_ref,'attempt_id':attempt_id,'terminal_ref':result['terminal_ref'],'project_ref':result['project_ref'],'look_report_ref':report_ref,'previews':preview_refs,'outputs':[]}
+                status='blocked'
+            except StaticVideoError:
+                manifest={'status':'blocked','reason':'video has no visible motion','brief_ref':brief_ref,'attempt_id':attempt_id,'terminal_ref':result['terminal_ref'],'project_ref':result['project_ref'],'asset_ref':checked['artifact_ref'],'look_report_ref':report_ref,'previews':preview_refs,'outputs':[]}
                 status='blocked'
             except (ValueError,KeyError,TypeError,OSError,zipfile.BadZipFile,ArtifactError,AdapterError,OpenFilmStageError):
                 manifest={'status':'blocked','reason':'render output or project failed technical verification','brief_ref':brief_ref,'attempt_id':attempt_id,'terminal_ref':result['terminal_ref'],'outputs':[]}

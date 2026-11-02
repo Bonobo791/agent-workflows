@@ -139,7 +139,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                     still=next(item for item in assets if item['channel']=='instagram' and item['kind']=='png')['alt_text'].lower()
                     reel=next(item for item in assets if item['channel']=='instagram' and item['kind']=='mp4')['alt_text'].lower()
                     self.assertTrue('ring' in still and 'upper-right' in still and 'away from every letter' in still)
-                    self.assertTrue('shape' in reel and ('upper 20%' in reel or 'upper 20 percent' in reel) and 'center band' in reel and 'letter' in reel and ('away' in reel or 'never touch' in reel))
+                    self.assertTrue('shape' in reel and 'upper 20%' in reel and 'clear center band' in reel and 'away from every letter' in reel)
                 outcome=dispatcher.step('r',queue['token'],claim)
                 if platform_source:
                     self.assertEqual((outcome['stage'],outcome['status']),('asset_production','blocked'))

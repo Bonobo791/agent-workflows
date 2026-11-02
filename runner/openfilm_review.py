@@ -20,7 +20,7 @@ def _media_references(service,assets,brief_ref,project_ref):
             if preview['artifact_ref']!=preview['sha256']: raise ValueError('preview binding changed')
             service.artifacts.get(preview['artifact_ref']); previews.append(preview['artifact_ref'])
         report_ref=item['look_report_ref']; report=json.loads(service.artifacts.get(report_ref))
-        if not isinstance(report,dict) or set(report)!={'ok','lines'} or report['ok'] is not True or not isinstance(report['lines'],list) or '✓ sampled text layout inspected' not in report['lines'] or any(not isinstance(line,str) or line.startswith('! text cut off ') for line in report['lines']) or not any(line.startswith('✓ ') and 'same picture' in line for line in report['lines']): raise ValueError('visual check unavailable')
+        if not isinstance(report,dict) or set(report)!={'ok','lines'} or report['ok'] is not True or not isinstance(report['lines'],list) or '✓ sampled text layout inspected' not in report['lines'] or any(not isinstance(line,str) or line.startswith('! text cut off ') for line in report['lines']) or not any(line.startswith('✓ ') and 'same picture' in line for line in report['lines']) or (item['kind']=='mp4' and any(line.startswith('! every frame looks the same') for line in report['lines'])): raise ValueError('visual check unavailable')
         reports.append(report_ref)
     return refs,previews,reports
 

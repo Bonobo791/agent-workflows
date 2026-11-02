@@ -344,7 +344,9 @@ class OpenFilmStageTests(unittest.TestCase):
         self._multiple_assets('silent')
     def test_supplied_audio_allows_video_with_decodable_audio(self):
         self._multiple_assets('audible')
-    def _multiple_assets(self,audio_mode):
+    def test_static_video_blocks_and_preserves_preview_evidence(self):
+        self._multiple_assets(None,static_video=True)
+    def _multiple_assets(self,audio_mode,static_video=False):
         video=self.render_root/'video.mp4'
         command=['ffmpeg','-v','error','-f','lavfi','-i','color=c=red:s=32x48:r=5:d=1']
         if audio_mode=='audible': command+=['-f','lavfi','-i','sine=frequency=440:duration=1','-c:a','aac','-shortest']
@@ -356,6 +358,7 @@ class OpenFilmStageTests(unittest.TestCase):
             audio=self.service.artifacts.put(wav.read_bytes()); rights=self.service.artifacts.put(b'synthetic audio rights')
             media=[{'artifact_ref':audio,'rights_ref':rights}]
         self.brief['assets'].append({'channel':'instagram','kind':'mp4','width':32,'height':48,'duration_seconds':1,'approved_text':['Approved synthetic statement.'],'claim_ids':['claim-1'],'media':media,'captions':'Synthetic caption','alt_text':'Synthetic video'})
+        if static_video: (self.render_root/'look.json').write_text(json.dumps({'ok':True,'lines':['✓ sampled text layout inspected','! every frame looks the same: frame(t) may not draw anything that changes with t','✓ drawn again: same picture']}))
         self.brief_ref=self.service.artifacts.put(json.dumps(self.brief).encode())
         record=self.service.artifacts.put(json.dumps({'outputs':[self.brief_ref]}).encode())
         graph=self.service.graph
@@ -377,6 +380,13 @@ class OpenFilmStageTests(unittest.TestCase):
         if audio_mode=='silent':
             self.assertEqual(result['status'],'blocked')
             self.assertEqual(manifest['reason'],'supplied audio missing from video')
+            return
+        if static_video:
+            self.assertEqual(result['status'],'blocked')
+            self.assertEqual(manifest['reason'],'video has no visible motion')
+            self.assertTrue(self.service.artifacts.get(manifest['asset_ref']).startswith(b'\x00\x00\x00'))
+            self.assertIn('! every frame looks the same',self.service.artifacts.get(manifest['look_report_ref']).decode())
+            self.assertTrue(manifest['previews'])
             return
         self.assertEqual([item['kind'] for item in manifest['assets']],['png','mp4'])
         self.assertEqual(result['status'],'awaiting_review')
@@ -508,8 +518,7 @@ class OpenFilmStageTests(unittest.TestCase):
         produce(self.service,'run',self.queue,self.claim,self.backend)
         graph=self.service.graph
         for channel in ('linkedin','x','facebook','reddit'):
-            stage=channel+'_draft'
-            graph.finish('run',stage,graph.prepare('run',stage,self.claim),'passed',self.content,self.claim)
+            graph.finish('run',channel+'_draft',graph.prepare('run',channel+'_draft',self.claim),'passed',self.content,self.claim)
         graph.finish('run','instagram_draft',graph.prepare('run','instagram_draft',self.claim),'passed',self.content,self.claim)
         dispatcher=StageDispatcher(self.service)
         self.assertEqual(dispatcher.next_stage('run',self.claim),'awaiting_review')
