@@ -8,8 +8,10 @@ class CodexError(RuntimeError):
 
 
 class CodexClient:
-    def __init__(self, codex='codex'):
-        self.proc = subprocess.Popen([codex, 'app-server', '--listen', 'stdio://'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+    def __init__(self, codex='codex', stderr_path=None):
+        # stdout carries only JSON-RPC; stderr (MCP and tool logs) goes to a file, never the terminal.
+        self.stderr = open(stderr_path, 'w') if stderr_path else subprocess.DEVNULL
+        self.proc = subprocess.Popen([codex, 'app-server', '--listen', 'stdio://'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True, bufsize=1)
         self.next_id = 0
         self._request('initialize', {'clientInfo': {'name': 'agent_workflows', 'title': 'Agent Workflows', 'version': '0.1.0'}})
         self._send({'method': 'initialized'})
@@ -17,6 +19,8 @@ class CodexClient:
     def close(self):
         self.proc.terminate()
         self.proc.wait(timeout=10)
+        if hasattr(self.stderr, 'close'):
+            self.stderr.close()
 
     def __enter__(self):
         return self

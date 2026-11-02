@@ -75,10 +75,15 @@ def check_result(parsed):
 
 
 def run_codex(stage, prompt, model, run_dir, input_versions, images=()):
-    with CodexClient() as client:
-        if model not in client.models():
-            raise SystemExit(f'model {model} not in catalog')
-        result = client.run_turn(prompt, model, str(run_dir), output_schema=OUTPUT_SCHEMA, images=images)
+    log = run_dir / 'codex-stderr.log'
+    try:
+        with CodexClient(stderr_path=log) as client:
+            if model not in client.models():
+                raise SystemExit(f'model {model} not in catalog')
+            result = client.run_turn(prompt, model, str(run_dir), output_schema=OUTPUT_SCHEMA, images=images)
+    except CodexError as error:
+        tail = '\n'.join(log.read_text().splitlines()[-20:]) if log.exists() else ''
+        raise CodexError(f'{error}\n--- last lines of {log} ---\n{tail}') from None
     (run_dir / 'raw.txt').write_text(result['text'])
     try:
         parsed = json.loads(result['text'])
