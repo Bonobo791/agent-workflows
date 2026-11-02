@@ -7,6 +7,32 @@ from runner.stage_dispatch import StageDispatcher, StageError
 from tests.source_fixture import outputs as fixture_outputs, verifier as fixture_verifier
 
 class StageDispatchTests(unittest.TestCase):
+    def test_awaiting_draft_advances_only_with_matching_completed_turn(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');service.enqueue('r')
+                queue=service.queue.claim('worker',60);claim=service.claim('r')
+                subject=service.artifacts.put(b'brief');draft=service.artifacts.put(b'# Draft')
+                raw={'stage':'canonical_draft','status':'awaiting_review','input_versions':[subject],'outputs':[draft],'findings':[]}
+                response=service.artifacts.put(json.dumps(raw).encode());record=service.artifacts.put(json.dumps({**raw,'session_id':'session','_gate_status':'awaiting_review'}).encode())
+                brief=service.artifacts.put(json.dumps({'outputs':[subject]}).encode())
+                for stage,ref,status in [('intake',subject,'passed'),('brief',brief,'passed'),('canonical_draft',record,'awaiting_review')]:service.graph.finish('r',stage,service.graph.prepare('r',stage,claim),status,ref,claim)
+                db=service.graph.db;db.execute("INSERT INTO graph_sessions VALUES('r','canonical_draft','session')")
+                db.execute('CREATE TABLE execution_turn_audit(run TEXT,role TEXT,session TEXT,status TEXT,input_versions TEXT,output_refs TEXT,response_ref TEXT)')
+                db.execute("INSERT INTO execution_turn_audit VALUES('r','canonical_draft','session','completed',?,?,?)",(json.dumps([subject]),json.dumps([draft]),response))
+                service.provenance=Mock();service.provenance.completed.return_value=True;service.provenance.completion_hash.return_value=response;service.provenance.verify.return_value=True
+                service.skill_resolver=Mock();service.skill_resolver.resolve.return_value={};service.required_skills={'canonical_draft':[]}
+                dispatcher=StageDispatcher(service)
+                db.execute("UPDATE execution_turn_audit SET input_versions='[]'")
+                with self.assertRaises(StageError):dispatcher._advance_awaiting_draft('r',queue['token'],claim)
+                self.assertEqual(service.graph.get('r','canonical_draft')['status'],'awaiting_review')
+                db.execute('UPDATE execution_turn_audit SET input_versions=?',(json.dumps([subject]),))
+                dispatcher._advance_awaiting_draft('r',queue['token'],claim)
+                self.assertEqual(service.graph.get('r','canonical_draft')['status'],'passed')
+                self.assertEqual(dispatcher.next_stage('r',claim),'canonical_review')
+            finally:service.close()
     def test_verified_other_channel_asset_does_not_supply_instagram_media(self):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as root:
@@ -15,9 +41,9 @@ class StageDispatchTests(unittest.TestCase):
                 manifest=service.artifacts.put(json.dumps({'assets':[{'channel':'linkedin','artifact_ref':'media'}]}).encode())
                 record=service.artifacts.put(json.dumps({'status':'passed','manifest_ref':manifest}).encode())
                 with patch.object(service.graph,'get',return_value={'status':'passed','version':record}), patch('runner.openfilm_review.verify_evidence',return_value=True):
-                    self.assertIsNone(StageDispatcher(service)._instagram_asset_inputs('r'))
+                    self.assertIsNone(StageDispatcher(service)._channel_asset_inputs('r','instagram'))
                 with patch.object(service.graph,'get',return_value={'status':'passed','version':record}), patch('runner.openfilm_review.verify_evidence',return_value=False):
-                    with self.assertRaises(StageError): StageDispatcher(service)._instagram_asset_inputs('r')
+                    with self.assertRaises(StageError): StageDispatcher(service)._channel_asset_inputs('r','instagram')
             finally: service.close()
     def test_binary_canonical_output_is_blocked_before_review(self):
         from pathlib import Path
@@ -306,6 +332,64 @@ class StageDispatchTests(unittest.TestCase):
                 self.assertIsNone(service.graph.db.execute("SELECT 1 FROM graph_attempts WHERE run='r' AND status='uncertain'").fetchone())
                 self.assertEqual(service.graph.db.execute("SELECT state FROM correction_attempts WHERE run='r'").fetchall(),[('completed',)])
                 service.lifecycle.close(); service.close()
+
+    def test_completed_awaiting_correction_requires_matching_turn_before_review(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as root:
+            service,dispatcher,queue,claim=self._blocked_canonical_review_fixture(root)
+            try:
+                service.docker_executor.writer_status='awaiting_review'
+                dispatcher.step('r',queue['token'],claim)
+                db=service.graph.db;ref=db.execute("SELECT result_version FROM correction_attempts WHERE run='r'").fetchone()[0]
+                record=json.loads(service.artifacts.get(ref));raw={key:record[key] for key in ('stage','status','input_versions','outputs','findings')}
+                response=service.artifacts.put(json.dumps(raw).encode())
+                db.execute('CREATE TABLE execution_turn_audit(run TEXT,role TEXT,session TEXT,status TEXT,input_versions TEXT,output_refs TEXT,response_ref TEXT)')
+                db.execute("INSERT INTO execution_turn_audit VALUES('r','canonical_draft',?,'completed',?,?,?)",(record['session_id'],json.dumps([]),json.dumps(record['outputs']),response))
+                service.provenance=Mock();service.provenance.completed.return_value=True;service.provenance.completion_hash.return_value=response;service.provenance.verify.return_value=True
+                dispatcher._advance_awaiting_correction('r',queue['token'],claim)
+                self.assertEqual(service.graph.get('r','canonical_review')['status'],'blocked')
+                db.execute('UPDATE execution_turn_audit SET input_versions=?',(json.dumps(record['input_versions']),))
+                dispatcher._advance_awaiting_correction('r',queue['token'],claim)
+                self.assertEqual(service.graph.get('r','canonical_draft')['version'],ref)
+                self.assertIsNone(service.graph.get('r','canonical_review'))
+                self.assertEqual(dispatcher.next_stage('r',claim),'canonical_review')
+            finally:service.lifecycle.close();service.close()
+
+    def test_refresh_brief_requires_changed_skill_and_preserves_old_artifacts(self):
+        from pathlib import Path
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            service,dispatcher,queue,claim=self._blocked_canonical_review_fixture(root)
+            try:
+                scopes=LocalScopes(root+'/state.db',Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                old=service.graph.get('r','brief')['version']
+                with self.assertRaises(StageError):dispatcher.refresh_brief('r',queue['token'],claim)
+                (Path(root)/'skills'/'brief'/'SKILL.md').write_text('New approved sources')
+                self.assertEqual(dispatcher.refresh_brief('r',queue['token'],claim),{'stage':'brief','status':'invalidated'})
+                self.assertIsNone(service.graph.get('r','brief'))
+                self.assertIsNone(service.graph.get('r','canonical_review'))
+                self.assertTrue(service.artifacts.get(old))
+            finally:service.lifecycle.close();service.close()
+
+    def test_retry_unavailable_source_coverage_preserves_draft(self):
+        from runner.local_scope import LocalScopes
+        from tests.test_local_scope import Backend
+        with tempfile.TemporaryDirectory() as root:
+            service,dispatcher,queue,claim=self._blocked_canonical_review_fixture(root)
+            try:
+                scopes=LocalScopes(root+'/state.db',Backend());scopes.close()
+                service.graph.db.execute('CREATE TABLE local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
+                with self.assertRaises(StageError):dispatcher.retry_source_coverage('r',queue['token'],claim)
+                writer=service.graph.get('r','canonical_draft');prior=service.graph.get('r','canonical_review')
+                data=json.loads(service.artifacts.get(prior['version']));data['_blocked_reason']='source coverage review unavailable or incomplete'
+                ref=service.artifacts.put(json.dumps(data).encode());service.graph.finish('r','canonical_review',service.graph.prepare('r','canonical_review',claim),'blocked',ref,claim)
+                self.assertEqual(dispatcher.retry_source_coverage('r',queue['token'],claim),{'stage':'canonical_review','status':'invalidated'})
+                self.assertEqual(service.graph.get('r','canonical_draft'),writer)
+                self.assertIsNone(service.graph.get('r','canonical_review'))
+                self.assertTrue(service.artifacts.get(ref))
+            finally:service.lifecycle.close();service.close()
 
     def test_unadopted_record_commits_with_correction_close_or_not_at_all(self):
         with tempfile.TemporaryDirectory() as root:

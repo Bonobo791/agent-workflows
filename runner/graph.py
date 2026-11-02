@@ -39,10 +39,20 @@ class Definition:
         return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 def marketing_definition():
-    return Definition('marketing', STAGE_DEPENDENCIES, frozenset({'assembly', 'asset_production'} | {channel + '_review' for channel in CHANNELS}))
+    dependencies=dict(STAGE_DEPENDENCIES)
+    return Definition('marketing', dependencies, frozenset({'assembly','asset_production'} | {channel+'_review' for channel in CHANNELS}))
+
+def _previous_marketing_definition():
+    dependencies=dict(STAGE_DEPENDENCIES)
+    for channel in CHANNELS: dependencies[channel+'_review']=(channel+'_draft',)
+    dependencies['asset_brief']=('freeze',)
+    dependencies['instagram_review']=('instagram_draft','asset_production')
+    return Definition('marketing',dependencies,frozenset({'assembly','asset_production'} | {channel+'_review' for channel in CHANNELS}))
 
 def _legacy_marketing_definition():
     dependencies=dict(STAGE_DEPENDENCIES)
+    for channel in CHANNELS: dependencies[channel+'_review']=(channel+'_draft',)
+    dependencies['asset_brief']=('freeze',)
     dependencies['instagram_review']=('instagram_draft',)
     return Definition('marketing',dependencies,frozenset({'assembly','asset_production'} | {channel+'_review' for channel in CHANNELS}))
 
@@ -127,13 +137,14 @@ class GraphStore:
             if row[0]!='marketing': self.db.execute('COMMIT'); return False
             target=marketing_definition().fingerprint()
             if row[1]==target: self.db.execute('COMMIT'); return False
-            if row[1]!=_legacy_marketing_definition().fingerprint(): raise GraphError('unknown workflow definition; migration required')
+            if row[1] not in {_legacy_marketing_definition().fingerprint(),_previous_marketing_definition().fingerprint()}: raise GraphError('unknown workflow definition; migration required')
             if self.db.execute("SELECT 1 FROM graph_attempts WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved stage attempt')
             actions=self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_actions'").fetchone()
             if actions and self.db.execute("SELECT 1 FROM external_actions WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved external action')
             mapping=self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone()
             if mapping and self.db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated')",(run,)).fetchone(): raise GraphError('unresolved worker execution')
-            self._invalidate_stages(run,{'instagram_review','assembly'},'graph_migration')
+            affected={'asset_brief','asset_production','assembly'} | {channel+'_review' for channel in CHANNELS}
+            self._invalidate_stages(run,affected,'graph_migration')
             self.db.execute('UPDATE graph_runs SET definition_hash=? WHERE id=?',(target,run))
             self.db.execute('INSERT INTO graph_migrations VALUES(?,?,?,?)',(run,row[1],target,time.time()))
             self.db.execute('COMMIT'); return True
@@ -316,7 +327,7 @@ class GraphStore:
             self.db.execute('COMMIT')
         except Exception:
             self.db.execute('ROLLBACK'); raise
-    def finish(self, run, stage, snapshot, status, version, token, completion_input=None, skill_fingerprint=None, session_record=None, quota_scope=None, correction_id=None, pr_reconcile=None, queue_claim=None):
+    def finish(self, run, stage, snapshot, status, version, token, completion_input=None, skill_fingerprint=None, session_record=None, quota_scope=None, correction_id=None, pr_reconcile=None, queue_claim=None, completed_correction=None):
         if status not in OUTCOMES or not isinstance(version,str) or not version: raise GraphError('invalid outcome')
         self.db.execute('BEGIN IMMEDIATE')
         try:
@@ -326,6 +337,10 @@ class GraphStore:
                 if not job or job[0]!='running' or not isinstance(queue_claim,str) or not isinstance(job[1],str) or not secrets.compare_digest(job[1],queue_claim) or job[2] is None or job[2]<=time.time(): raise GraphError('queue claim unavailable')
             definition=self._definition(run)
             if self._snapshot(run,stage)!=snapshot: raise GraphError('stale stage inputs')
+            if completed_correction is not None:
+                correction=self.db.execute("SELECT writer_version,review_stage,review_version,state,result_version FROM correction_attempts WHERE id=? AND run=? AND writer_stage=?",(completed_correction,run,stage)).fetchone()
+                writer=self.get(run,stage);review=self.get(run,correction[1]) if correction else None
+                if stage!='canonical_draft' or status!='passed' or not correction or correction[3:]!=('completed',version) or not writer or writer['status']!='passed' or writer['version']!=correction[0] or not review or review['status']!='blocked' or review['version']!=correction[2]: raise GraphError('completed correction changed')
             if stage != 'assembly' and status in ('passed', 'awaiting_review'):
                 for dep in definition.dependencies[stage]:
                     if self.get(run,dep)['status'] != 'passed': raise GraphError('cannot pass with a blocked dependency')

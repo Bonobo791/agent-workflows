@@ -1,5 +1,10 @@
 # OpenFilm asset adapter contract
 
+For marketing workflows, OpenFilm is the required path for every final social
+copy item and visual asset. Channel drafts are bound input material; OpenFilm
+projects contain the final channel copy and its rendered media. A channel review
+cannot pass without matching, verified OpenFilm output.
+
 The opt-in adapter accepts a private run ID and versioned brief, builds a
 versioned project and returns references to the project, outputs and terminal
 evidence. The runner persists these privately; customer assets, project

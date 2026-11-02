@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from runner.local_scope import LocalScopes
 from runner.manual_lifecycle import ManualLifecycle
-from runner.service import Service
+from runner.service import Service,ServiceError
 from tests.test_local_scope import Backend
 
 
@@ -19,6 +19,168 @@ class CheckpointHandoffTests(unittest.TestCase):
         self.service.graph.db.execute('CREATE TABLE local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
         self.service.create('run','marketing','task');self.service.enqueue('run')
         self.queue=self.service.lifecycle.claim()['token'];self.graph=self.service.claim('run')
+
+    def test_retry_asset_brief_requires_changed_skill_and_preserves_freeze(self):
+        from unittest.mock import Mock
+        from runner.stage_dispatch import StageDispatcher,StageError
+        db=self.service.graph.db
+        db.execute("INSERT INTO graph_stages VALUES('run','freeze','passed','frozen',1)")
+        db.execute("INSERT INTO graph_stages VALUES('run','asset_brief','blocked','old',2)")
+        db.execute("INSERT INTO graph_skill_state VALUES('run','asset_brief','old-fingerprint')")
+        self.service.required_skills={'asset_brief':['asset_brief']}
+        self.service.skill_resolver=Mock();self.service.skill_resolver.resolve.return_value={'asset_brief':{'sha256':'new'}}
+        dispatcher=StageDispatcher(self.service)
+        self.assertEqual(dispatcher.refresh_asset_brief('run',self.queue,self.graph),{'stage':'asset_brief','status':'invalidated'})
+        self.assertEqual(self.service.graph.get('run','freeze')['version'],'frozen')
+        self.assertIsNone(self.service.graph.get('run','asset_brief'))
+        with self.assertRaises(StageError):dispatcher.refresh_asset_brief('run',self.queue,self.graph)
+
+    def test_invalid_draft_recovery_rejects_unverified_turn(self):
+        from runner.service import ServiceError
+        self.service.task_intake=SimpleNamespace(revalidate=lambda run:True)
+        self.service.request_lifecycle_stop('run')
+        self.service.lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced')
+        self.service.lifecycle.prepare_replacement('inc','next')
+        self.service.lifecycle=ManualLifecycle(str(self.root/'state.db'),'worker','next');self.addCleanup(self.service.lifecycle.close)
+        with self.assertRaises(ServiceError):self.service.recover_invalid_draft('run','missing')
+        self.assertEqual(self.service.graph.db.execute("SELECT status FROM graph_runs WHERE id='run'").fetchone(),('cancelled',))
+
+    def test_invalid_draft_recovery_requires_matching_proof_and_rolls_back(self):
+        import json
+        from runner.service import ServiceError
+        db=self.service.graph.db;store=self.service.artifacts
+        source=store.put(b'source');output=store.put(b'draft')
+        response=store.put(json.dumps({'stage':'canonical_draft','status':'passed','input_versions':['wrong'],'outputs':[output],'findings':[]}).encode())
+        inputs=json.dumps([source]);outputs=json.dumps([output])
+        db.executescript('''CREATE TABLE local_execution_scopes(run TEXT,role TEXT,execution TEXT,session TEXT,unit TEXT,binding TEXT);
+        CREATE TABLE local_turn_scopes(run TEXT,role TEXT,session TEXT,turn TEXT,unit TEXT,binding TEXT);
+        CREATE TABLE execution_turn_audit(run TEXT,role TEXT,session TEXT,turn TEXT,status TEXT,input_versions TEXT,output_refs TEXT,response_ref TEXT);
+        CREATE TABLE completed_turn_outputs(run TEXT,role TEXT,session TEXT,turn TEXT,input_versions TEXT,output_refs TEXT);
+        CREATE TABLE IF NOT EXISTS execution_completions(run TEXT,role TEXT,session TEXT,output_hash TEXT);''')
+        db.execute("INSERT INTO graph_stages VALUES('run','brief','passed','brief',1)")
+        db.execute("INSERT INTO graph_attempts VALUES('run','canonical_draft','attempt',1,'uncertain')")
+        db.execute("INSERT INTO local_scopes(run,unit,invocation,cgroup,state) VALUES('run','test.scope',?,'/test.scope','terminated')",('a'*32,))
+        db.execute("INSERT INTO local_execution_scopes VALUES('run','canonical_draft','exec','session','test.scope','binding')")
+        db.execute("INSERT INTO local_sessions VALUES('run','canonical_draft','session','binding','idle')")
+        db.execute("INSERT INTO local_turn_scopes VALUES('run','canonical_draft','session','turn','test.scope','binding')")
+        db.execute("INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,'run','canonical_draft','exec','completed','model',1)")
+        db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,'run','canonical_draft','exec','session','turn','completed',1)")
+        db.execute("INSERT INTO execution_turn_audit VALUES('run','canonical_draft','session','turn','completed',?,?,?)",(inputs,outputs,response))
+        db.execute("INSERT INTO completed_turn_outputs VALUES('run','canonical_draft','session','turn',?,?)",(inputs,outputs))
+        db.execute("INSERT INTO execution_completions VALUES('run','canonical_draft','session',?)",(response,))
+        self.service.task_intake=SimpleNamespace(revalidate=lambda run:True)
+        self.service.request_lifecycle_stop('run');self.service.lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced');self.service.lifecycle.prepare_replacement('inc','next')
+        self.service.lifecycle=ManualLifecycle(str(self.root/'state.db'),'worker','next');self.addCleanup(self.service.lifecycle.close)
+        db.execute("UPDATE local_turn_scopes SET binding='wrong'")
+        with self.assertRaises(ServiceError):self.service.recover_invalid_draft('run','exec')
+        db.execute("UPDATE local_turn_scopes SET binding='binding'")
+        db.execute("CREATE TRIGGER reject_draft_recovery BEFORE INSERT ON invalid_draft_recovery_audit BEGIN SELECT RAISE(ABORT,'unavailable'); END")
+        with self.assertRaises(ServiceError):self.service.recover_invalid_draft('run','exec')
+        self.assertEqual(db.execute("SELECT status FROM graph_attempts WHERE run='run'").fetchone(),('uncertain',))
+        db.execute('DROP TRIGGER reject_draft_recovery')
+        self.assertEqual(self.service.recover_invalid_draft('run','exec'),{'run':'run','status':'queued'})
+        self.assertEqual(db.execute("SELECT status FROM graph_attempts WHERE run='run'").fetchone(),('failed',))
+        self.assertEqual(db.execute("SELECT status FROM graph_stages WHERE run='run' AND stage='brief'").fetchone(),('passed',))
+        self.assertEqual(db.execute("SELECT session FROM graph_sessions WHERE run='run' AND role='canonical_draft'").fetchone(),('session',))
+        self.assertEqual(db.execute('SELECT response_ref FROM invalid_draft_recovery_audit').fetchone(),(response,))
+        self.service.lifecycle.claim();self.service.claim('run')
+        db.execute("UPDATE graph_attempts SET status='uncertain',count=2 WHERE run='run' AND stage='canonical_draft'")
+        db.execute("DELETE FROM graph_sessions WHERE run='run' AND role='canonical_draft'")
+        db.execute("INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,'run','canonical_draft','next-exec','uncertain','model',9999999999)")
+        self.service.request_lifecycle_stop('run');self.service.lifecycle.confirm_operator_stop('run','next','terminated_and_fenced');self.service.lifecycle.prepare_replacement('next','third')
+        self.service.lifecycle=ManualLifecycle(str(self.root/'state.db'),'worker','third');self.addCleanup(self.service.lifecycle.close)
+        db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,'run','canonical_draft','next-exec','session','other','observed',1)")
+        with self.assertRaises(ServiceError):self.service.retry_unbound_draft('run','next-exec')
+        db.execute("DELETE FROM execution_link_audit WHERE execution='next-exec'")
+        self.assertEqual(self.service.retry_unbound_draft('run','next-exec')['prior_outcome'],'uncertain')
+        self.assertEqual(db.execute("SELECT status,count FROM graph_attempts WHERE run='run' AND stage='canonical_draft'").fetchone(),('abandoned_uncertain',1))
+        self.assertEqual(db.execute('SELECT original_status FROM unbound_draft_retry_audit').fetchone(),('uncertain',))
+
+    def test_uncertain_source_retry_preserves_original_and_rejects_observed_turn(self):
+        from runner.service import ServiceError
+        db=self.service.graph.db
+        db.execute('CREATE TABLE task_input_versions(run TEXT PRIMARY KEY,source_version TEXT,artifact_ref TEXT)')
+        db.execute("INSERT INTO task_input_versions VALUES('run','version','artifact')")
+        db.execute('CREATE TABLE local_execution_scopes(run TEXT,role TEXT,execution TEXT,session TEXT,unit TEXT,binding TEXT)')
+        db.execute("INSERT INTO graph_attempts VALUES('run','brief','attempt',1,'uncertain')")
+        db.execute("INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,'run','source_review','exec','uncertain','model',1)")
+        db.execute("INSERT INTO local_scopes(run,unit,invocation,cgroup,state) VALUES('run','test.scope',?,'/test.scope','terminated')",('a'*32,))
+        db.execute("INSERT INTO local_execution_scopes VALUES('run','source_review','exec','session','test.scope','binding')")
+        self.service.task_intake=SimpleNamespace(revalidate=lambda run:True)
+        self.service.request_lifecycle_stop('run')
+        self.service.lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced')
+        self.service.lifecycle.prepare_replacement('inc','next')
+        self.service.lifecycle=ManualLifecycle(str(self.root/'state.db'),'worker','next');self.addCleanup(self.service.lifecycle.close)
+        db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,'run','source_review','exec','session','turn','started',1)")
+        with self.assertRaises(ServiceError): self.service.retry_uncertain_source_review('run','retry','exec')
+        db.execute("DELETE FROM execution_link_audit WHERE execution='exec'")
+        db.execute("CREATE TRIGGER reject_retry BEFORE INSERT ON source_review_retry_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+        with self.assertRaises(ServiceError): self.service.retry_uncertain_source_review('run','retry','exec')
+        self.assertFalse(db.execute("SELECT 1 FROM graph_runs WHERE id='retry'").fetchone())
+        db.execute('DROP TRIGGER reject_retry')
+        self.assertEqual(self.service.retry_uncertain_source_review('run','retry','exec'),{'run':'retry','status':'queued'})
+        self.assertEqual(db.execute("SELECT status FROM graph_attempts WHERE run='run'").fetchone(),('uncertain',))
+        self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='run'").fetchone(),('cancelled',))
+        self.assertEqual(db.execute("SELECT old_run,new_run,execution FROM source_review_retry_audit").fetchone(),('run','retry','exec'))
+        with self.assertRaises(ServiceError): self.service.retry_uncertain_source_review('run','again','exec')
+
+    def test_confirmed_stopped_prebrief_run_can_be_recovered_once(self):
+        self.service.task_intake=SimpleNamespace(revalidate=lambda run:True)
+        self.service.request_lifecycle_stop('run')
+        self.service.lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced')
+        self.assertEqual(self.service.lifecycle.prepare_replacement('inc','next'),{'incarnation':'next','confirmation':'prepared'})
+        result=self.service.recover_cancelled_run('run')
+        self.assertEqual(result,{'run':'run','status':'queued'})
+        db=self.service.graph.db
+        self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='run'").fetchone(),('active',))
+        self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='run'").fetchone(),('queued',))
+        self.assertEqual(self.service.lifecycle.claim()['run'],'run')
+        with self.assertRaises(ServiceError):self.service.recover_cancelled_run('run')
+
+    def test_replacement_cannot_be_prepared_before_stop_or_reuse_identity(self):
+        from runner.manual_lifecycle import ManualLifecycleError
+        lifecycle=self.service.lifecycle
+        with self.assertRaises(ManualLifecycleError):lifecycle.prepare_replacement('inc','next')
+        self.service.request_lifecycle_stop('run');lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced')
+        with self.assertRaises(ManualLifecycleError):lifecycle.prepare_replacement('inc','inc')
+        lifecycle.db.execute("INSERT INTO manual_incarnation_history VALUES('worker','used')")
+        with self.assertRaises(ManualLifecycleError):lifecycle.prepare_replacement('inc','used')
+        self.assertEqual(lifecycle.prepare_replacement('inc','next')['confirmation'],'prepared')
+
+    def test_replacement_preparation_rolls_back_if_audit_insert_fails(self):
+        import sqlite3
+        lifecycle=self.service.lifecycle;self.service.request_lifecycle_stop('run');lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced')
+        db=self.service.graph.db
+        db.execute('CREATE TABLE replacement_preparation_audit(id INTEGER PRIMARY KEY,target TEXT NOT NULL,old_incarnation TEXT NOT NULL,new_incarnation TEXT NOT NULL,created REAL NOT NULL)')
+        db.execute("CREATE TRIGGER fail_prepare BEFORE INSERT ON replacement_preparation_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+        with self.assertRaises(sqlite3.IntegrityError):lifecycle.prepare_replacement('inc','next')
+        self.assertEqual(db.execute("SELECT incarnation,state FROM manual_workers WHERE target='worker'").fetchone(),('inc','stopped'))
+        self.assertFalse(db.execute("SELECT 1 FROM manual_incarnation_history WHERE target='worker' AND incarnation='next'").fetchone())
+
+    def test_recovery_rejects_unresolved_attempt_or_stale_task(self):
+        from runner.service import ServiceError
+        self.service.request_lifecycle_stop('run')
+        self.service.lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced')
+        self.service.lifecycle.register_replacement('inc','next','replacement_started')
+        self.service.task_intake=SimpleNamespace(revalidate=lambda run:False)
+        with self.assertRaises(ServiceError):self.service.recover_cancelled_run('run')
+        self.service.task_intake=SimpleNamespace(revalidate=lambda run:True)
+        self.service.graph.db.execute("INSERT INTO graph_attempts VALUES('run','brief','pending',1,'uncertain')")
+        with self.assertRaises(ServiceError):self.service.recover_cancelled_run('run')
+        self.assertEqual(self.service.graph.db.execute("SELECT status FROM graph_runs WHERE id='run'").fetchone(),('cancelled',))
+
+    def test_recovery_rejects_external_action_and_rolls_back_on_audit_failure(self):
+        import sqlite3
+        from runner.service import ServiceError
+        self.service.request_lifecycle_stop('run');self.service.lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced');self.service.lifecycle.register_replacement('inc','next','replacement_started')
+        self.service.task_intake=SimpleNamespace(revalidate=lambda run:True);db=self.service.graph.db
+        self.service.actions.approve('run','external','version','owner')
+        with self.assertRaises(ServiceError):self.service.recover_cancelled_run('run')
+        db.execute("DELETE FROM external_actions WHERE run='run'")
+        db.execute("CREATE TRIGGER reject_recovery BEFORE INSERT ON stopped_run_recovery_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+        with self.assertRaises(ServiceError):self.service.recover_cancelled_run('run')
+        self.assertEqual(db.execute("SELECT status FROM graph_runs WHERE id='run'").fetchone(),('cancelled',))
+        self.assertEqual(db.execute("SELECT status FROM jobs WHERE run='run'").fetchone(),('cancelled',))
 
     def test_clean_checkpoint_preserves_run_and_rejects_old_claims(self):
         from runner.checkpoint import checkpoint

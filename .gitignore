@@ -8,6 +8,10 @@ __pycache__/
 .codex/
 .agents/
 /data/
+# Explicit workflow-generated run outputs; /data/ also keeps all local state private.
+/data/*/artifacts/
+/data/*/local-outputs/
+/data/*/local-workspaces/
 /secrets/
 /control-secret
 credentials.json

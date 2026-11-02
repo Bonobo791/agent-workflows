@@ -54,6 +54,9 @@ acknowledgment, or delivery from an installed receiver service.
 Each token must be a distinct 32–128 character string containing only ASCII
 letters, digits, underscore, or hyphen, stored in an owner-only regular file.
 Do not put token values in a unit, environment file, image, or repository.
+For a running worker, `CONTROL_SECRET_FILE` must point to the secret that worker
+loaded. Replacing the file alone does not rotate the worker's in-memory secret;
+coordinate a worker restart and inspect unresolved executions before rotation.
 The example user units in `observability/systemd` read paths and ports from
 `%h/.config/agent-workflows/monitor.env`; the operator must also provide an
 absolute `PYTHONPATH` pointing to the checkout, and the desktop service needs
@@ -67,7 +70,7 @@ replace its placeholders in a private copy, without putting token values in it.
 `observability/local/prometheus.yml` and `alertmanager.yml` provide a matching
 loopback-only configuration: metrics on 19190, Alertmanager on 19093, and the
 receiver on 19192. Set the two endpoint ports in `monitor.env` accordingly.
-These examples have not been installed or enabled.
+The repository does not install or enable these examples.
 
 Prepare separate owner-only configuration and persistent data directories for
 Prometheus and Alertmanager. Copy the corresponding example into each config

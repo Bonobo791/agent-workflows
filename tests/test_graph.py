@@ -101,12 +101,12 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(self.db.db.execute('SELECT status FROM graph_attempts').fetchone(),('uncertain',))
     def test_parallel_fanout_assembly_and_scoped_invalidation(self):
         for stage in ('intake','brief','canonical_draft','canonical_review','freeze'): self.put('m',stage)
+        self.put('m','linkedin_draft')
+        with self.assertRaises(GraphError): self.db.prepare('m','linkedin_review',self.tokens['m'])
+        self.put('m','asset_brief'); self.put('m','asset_production')
         for channel in ('linkedin','x','facebook','reddit'):
             self.put('m',channel+'_draft'); self.put('m',channel+'_review')
-        self.put('m','instagram_draft')
-        with self.assertRaises(GraphError): self.db.prepare('m','instagram_review',self.tokens['m'])
-        self.put('m','asset_brief'); self.put('m','asset_production','blocked')
-        self.put('m','instagram_review','blocked')
+        self.put('m','instagram_draft'); self.put('m','instagram_review')
         self.put('m','assembly','awaiting_review')
         self.db.db.execute("CREATE TRIGGER reject_auto_invalidation BEFORE INSERT ON invalidation_audit BEGIN SELECT RAISE(ABORT,'synthetic failure'); END")
         with self.assertRaises(sqlite3.IntegrityError): self.put('m','linkedin_draft',version='v2')
@@ -120,8 +120,7 @@ class GraphTests(unittest.TestCase):
         self.assertIsNone(self.db.get('m','assembly'))
         self.assertEqual(self.db.get('m','x_review')['status'],'passed')
         self.put('m','asset_production','passed','asset-v2')
-        self.assertIsNone(self.db.get('m','instagram_review'))
-        self.assertEqual(self.db.get('m','x_review')['status'],'passed')
+        for channel in ('instagram','x','facebook','reddit'): self.assertIsNone(self.db.get('m',channel+'_review'))
     def test_legacy_marketing_migration_preserves_unaffected_work(self):
         graph=self.db; token=self.tokens['m']
         graph.definitions['marketing']=_legacy_marketing_definition()
@@ -134,10 +133,11 @@ class GraphTests(unittest.TestCase):
         try:
             queue.enqueue('m'); claim=queue.claim('worker',60)['token']
             self.assertTrue(graph.migrate_marketing_assets('m',token,claim))
-            self.assertEqual(graph.db.execute("SELECT stage,reason FROM invalidation_audit ORDER BY stage").fetchall(),[('assembly','graph_migration'),('instagram_review','graph_migration')])
-            self.assertIsNone(graph.get('m','instagram_review'))
-            self.assertIsNone(graph.get('m','assembly'))
-            self.assertEqual(graph.get('m','linkedin_review')['status'],'passed')
+            affected=sorted(['asset_brief','asset_production','assembly']+[c+'_review' for c in ('instagram','linkedin','x','facebook','reddit')])
+            self.assertEqual(graph.db.execute("SELECT stage,reason FROM invalidation_audit ORDER BY stage").fetchall(),[(stage,'graph_migration') for stage in affected])
+            for stage in affected: self.assertIsNone(graph.get('m',stage))
+            self.assertEqual(graph.get('m','x_draft')['status'],'passed')
+            self.put('m','asset_brief'); self.put('m','asset_production','blocked')
             snapshot=graph.prepare('m','instagram_review',token)
             self.assertEqual(snapshot['dependencies']['asset_production'],graph.get('m','asset_production')['revision'])
             with self.assertRaises(GraphError): graph.finish('m','instagram_review',snapshot,'passed','v1',token)
@@ -163,7 +163,7 @@ class GraphTests(unittest.TestCase):
 
     def test_blocked_draft_can_propagate_but_cannot_become_passed_review(self):
         for stage in ('intake','brief','canonical_draft','canonical_review','freeze'): self.put('m',stage)
-        self.put('m','reddit_draft','blocked')
+        self.put('m','reddit_draft','blocked'); self.put('m','asset_brief'); self.put('m','asset_production','blocked')
         snapshot=self.db.prepare('m','reddit_review',self.tokens['m'])
         with self.assertRaises(GraphError): self.db.finish('m','reddit_review',snapshot,'passed','v1',self.tokens['m'])
         self.db.finish('m','reddit_review',snapshot,'blocked','v1',self.tokens['m'])

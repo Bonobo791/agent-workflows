@@ -12,12 +12,18 @@ class AdmissionUncertain(ConfigurationError): pass
 class CheckpointUncertain(ConfigurationError): pass
 class ReplacementUncertain(ConfigurationError): pass
 class WithdrawalUncertain(ConfigurationError): pass
+class RecoveryUncertain(ConfigurationError): pass
 
 _UNCERTAIN_RESPONSES={
     'submit_configured':(AdmissionUncertain,'admission outcome unknown; inspect run status before retrying'),
     'checkpoint_configured_auto':(CheckpointUncertain,'checkpoint outcome unknown; inspect worker status before retrying'),
     'register_checkpoint_replacement':(ReplacementUncertain,'replacement outcome unknown; inspect lifecycle status before retrying'),
+    'manual_prepare_replacement':(ReplacementUncertain,'replacement outcome unknown; inspect lifecycle status before retrying'),
     'pr_withdraw':(WithdrawalUncertain,'withdrawal outcome unknown; inspect approval records before retrying'),
+    'recover_cancelled_run':(RecoveryUncertain,'recovery outcome unknown; inspect run status before retrying'),
+    'recover_invalid_draft':(RecoveryUncertain,'recovery outcome unknown; inspect run status before retrying'),
+    'retry_unbound_draft':(RecoveryUncertain,'recovery outcome unknown; inspect run status before retrying'),
+    'retry_uncertain_source_review':(RecoveryUncertain,'recovery outcome unknown; inspect run status before retrying'),
 }
 _UNCERTAIN_RESPONSES['submit_task']=_UNCERTAIN_RESPONSES['submit_configured']
 _UNCERTAIN_RESPONSES['revoke_freeze_approval']=_UNCERTAIN_RESPONSES['pr_withdraw']
@@ -41,7 +47,7 @@ def request_control(request):
     try:
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
             client.settimeout(5); client.connect(str(path)); transmitting=True; client.sendall(payload)
-            if uncertain and uncertain[0] is AdmissionUncertain: client.settimeout(ADMISSION_RESPONSE_TIMEOUT)
+            if uncertain and uncertain[0] in (AdmissionUncertain,RecoveryUncertain): client.settimeout(ADMISSION_RESPONSE_TIMEOUT)
             with client.makefile('rb') as stream:
                 raw=stream.readline(MAX_CONTROL_RESPONSE+1)
                 if not raw.endswith(b'\n') or len(raw)>MAX_CONTROL_RESPONSE: raise ConfigurationError('invalid response')
@@ -69,5 +75,7 @@ if __name__=='__main__':
         print('Replacement outcome unknown; inspect lifecycle status before retrying.',file=sys.stderr); sys.exit(1)
     except WithdrawalUncertain:
         print('Withdrawal outcome unknown; inspect approval records before retrying.',file=sys.stderr); sys.exit(1)
+    except RecoveryUncertain:
+        print('Recovery outcome unknown; inspect run status before retrying.',file=sys.stderr); sys.exit(1)
     except (OSError,ValueError,ConfigurationError):
         print('Control request failed.',file=sys.stderr); sys.exit(1)

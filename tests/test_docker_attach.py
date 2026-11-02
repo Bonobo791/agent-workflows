@@ -7,6 +7,27 @@ from runner.docker_attach import DockerAttachTransport
 from runner.stdio import StdioError
 
 class DockerAttachTests(unittest.TestCase):
+    def test_send_accepts_large_prompt_up_to_send_limit(self):
+        from runner.stdio import MAX_SEND_LINE,StdioError
+        left,right=socket.socketpair()
+        try:
+            import threading
+            received=[]
+            def drain():
+                while True:
+                    chunk=right.recv(1<<20)
+                    if not chunk: return
+                    received.append(len(chunk))
+            reader=threading.Thread(target=drain,daemon=True); reader.start()
+            transport=DockerAttachTransport(left,time.monotonic()+10,lambda:False)
+            transport.send({'prompt':'x'*(3*1024*1024)})
+            left.shutdown(socket.SHUT_WR); reader.join(5)
+            self.assertGreater(sum(received),3*1024*1024)
+        finally: left.close(); right.close()
+        oversized,peer=socket.socketpair()
+        try:
+            with self.assertRaises(StdioError): DockerAttachTransport(oversized,time.monotonic()+1,lambda:False).send({'prompt':'x'*MAX_SEND_LINE})
+        finally: oversized.close(); peer.close()
     def test_multiplexed_stdout_and_stderr(self):
         left,right=socket.socketpair()
         try:

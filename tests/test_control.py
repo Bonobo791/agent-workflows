@@ -4,6 +4,24 @@ from runner.control import ControlPlane, ControlError
 from runner.service import Service
 
 class ControlTests(unittest.TestCase):
+    def test_prepared_replacement_lost_response_is_classified_as_uncertain(self):
+        from runner.cli import ReplacementUncertain,_uncertain_response
+        self.assertIs(_uncertain_response({'action':'manual_prepare_replacement'})[0],ReplacementUncertain)
+    def test_lost_stopped_run_recovery_response_is_uncertain(self):
+        import socket,threading
+        from pathlib import Path
+        from unittest.mock import patch
+        from runner.cli import RecoveryUncertain,request_control
+        with tempfile.TemporaryDirectory() as root:
+            secret=Path(root)/'secret';secret.write_text('x'*40);secret.chmod(0o600)
+            listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);listener.bind(str(Path(root)/'control.sock'));listener.listen()
+            def respond():
+                with listener.accept()[0] as client:client.recv(65536);client.sendall(b'not-json\n')
+            thread=threading.Thread(target=respond);thread.start()
+            try:
+                with patch.dict('os.environ',{'CONTROL_SECRET_FILE':str(secret),'WORKFLOW_DATA_DIR':root}):
+                    with self.assertRaises(RecoveryUncertain):request_control({'action':'recover_cancelled_run','run':'run'})
+            finally:thread.join(2);listener.close()
     def test_checkpoint_request_requires_owner_and_exact_run(self):
         from types import SimpleNamespace
         from unittest.mock import Mock

@@ -7,7 +7,7 @@ import json
 import select
 import struct
 import time
-from runner.stdio import MAX_LINE, StdioError
+from runner.stdio import MAX_LINE, MAX_SEND_LINE, StdioError
 
 class DockerAttachTransport:
     def __init__(self,sock,deadline,cancelled):
@@ -24,7 +24,7 @@ class DockerAttachTransport:
     def send(self,message):
         try: data=json.dumps(message,separators=(',',':'),allow_nan=False).encode()+b'\n'
         except (TypeError,ValueError): raise StdioError('invalid request') from None
-        if len(data)>MAX_LINE: raise StdioError('message too large')
+        if len(data)>MAX_SEND_LINE: raise StdioError('message too large')
         try:
             while data:
                 self._wait(True); count=self.sock.send(data)
