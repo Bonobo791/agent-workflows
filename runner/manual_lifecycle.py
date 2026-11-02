@@ -110,6 +110,22 @@ class ManualLifecycle:
             return {'incarnation':new,'confirmation':'operator-attested'}
         except Exception: db.execute('ROLLBACK'); raise
 
+    def prepare_replacement(self,old,new):
+        if old!=self.incarnation or not isinstance(new,str) or not new.strip() or len(new)>200 or new==old: raise ManualLifecycleError('exact old and distinct replacement identities required')
+        db=self.db;target=self.target['manual_target']
+        db.execute('CREATE TABLE IF NOT EXISTS replacement_preparation_audit(id INTEGER PRIMARY KEY,target TEXT NOT NULL,old_incarnation TEXT NOT NULL,new_incarnation TEXT NOT NULL,created REAL NOT NULL)')
+        db.execute('BEGIN IMMEDIATE')
+        try:
+            if db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()!=(old,'stopped') or db.execute('SELECT 1 FROM manual_incarnation_history WHERE target=? AND incarnation=?',(target,new)).fetchone(): raise ManualLifecycleError('replacement unavailable')
+            assignments=db.execute('SELECT run,state,attestation FROM manual_assignments WHERE target=? AND incarnation=?',(target,old)).fetchall()
+            if not assignments or any(state!='stopped' or attestation!='terminated_and_fenced' for _,state,attestation in assignments): raise ManualLifecycleError('confirmed stops required')
+            for run,_,_ in assignments:
+                self._require_stopped_resources(db,run)
+                if db.execute('SELECT status FROM graph_runs WHERE id=?',(run,)).fetchone()!=('cancelled',) or db.execute('SELECT status FROM jobs WHERE run=?',(run,)).fetchone()!=('cancelled',) or db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone(): raise ManualLifecycleError('stopped run is not fenced')
+            if db.execute('INSERT INTO manual_incarnation_history VALUES(?,?)',(target,new)).rowcount!=1 or db.execute("UPDATE manual_workers SET incarnation=?,state='available' WHERE target=? AND incarnation=? AND state='stopped'",(new,target,old)).rowcount!=1 or db.execute('INSERT INTO replacement_preparation_audit(target,old_incarnation,new_incarnation,created) VALUES(?,?,?,?)',(target,old,new,time.time())).rowcount!=1: raise ManualLifecycleError('replacement preparation unavailable')
+            db.execute('COMMIT');self.incarnation=new;return {'incarnation':new,'confirmation':'prepared'}
+        except Exception:db.execute('ROLLBACK');raise
+
     def register_checkpoint_replacement(self,run,old,new):
         if old!=self.incarnation or not isinstance(new,str) or not new.strip() or len(new)>200 or new==old: raise ManualLifecycleError('exact old and distinct replacement identities required')
         from runner.checkpoint import ensure_quiescent

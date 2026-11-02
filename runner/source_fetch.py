@@ -61,8 +61,8 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
         raise failure
 
 class SourceFetcher:
-    def __init__(self,urls,*,max_bytes=524288,timeout=10):
-        if not isinstance(urls,list) or not urls or len(urls)>100 or any(not isinstance(url,str) for url in urls) or len(set(urls))!=len(urls) or type(max_bytes) is not int or not 1<=max_bytes<=1048576 or type(timeout) is not int or not 1<=timeout<=30: raise SourceFetchError('invalid source fetch policy')
+    def __init__(self,urls,*,max_bytes=3145728,timeout=10):
+        if not isinstance(urls,list) or not urls or len(urls)>100 or any(not isinstance(url,str) for url in urls) or len(set(urls))!=len(urls) or type(max_bytes) is not int or not 1<=max_bytes<=3145728 or type(timeout) is not int or not 1<=timeout<=30: raise SourceFetchError('invalid source fetch policy')
         hosts=set()
         for url in urls:
             try:

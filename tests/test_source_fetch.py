@@ -15,6 +15,13 @@ class Connection:
     def close(self): self.closed=True
 
 class SourceFetchTests(unittest.TestCase):
+    def test_large_official_page_fits_bounded_fetch_policy(self):
+        fetcher=SourceFetcher(['https://docs.example.com/'],max_bytes=3*1024*1024)
+        body=b'x'*(2200*1024)
+        connection=Connection(Response(body=body))
+        with patch('runner.source_fetch.socket.getaddrinfo',return_value=[(2,1,6,'',('93.184.216.34',443))]),patch.object(fetcher,'_connection',return_value=connection):
+            self.assertEqual(fetcher._fetch_direct('https://docs.example.com/')['content'],body.decode())
+        with self.assertRaises(SourceFetchError): SourceFetcher(['https://docs.example.com/'],max_bytes=3*1024*1024+1)
     def test_successful_connection_restores_remaining_response_timeout(self):
         from runner.source_fetch import _PinnedHTTPS
         class Sock:

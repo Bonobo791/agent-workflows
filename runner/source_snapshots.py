@@ -2,10 +2,32 @@
 import hashlib
 import json
 import time
+from html.parser import HTMLParser
 from pathlib import Path
 from runner.source_fetch import SourceFetchError, validate_content
 
 MAX_AGE=86400
+MAX_SOURCE_BUNDLE=4194304
+MAX_MODEL_SOURCE_CHARS=400000
+
+class _SourceText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True);self.hidden=[];self.parts=[]
+    def handle_starttag(self,tag,attrs):
+        if tag in ('head','script','style','noscript','template','svg'): self.hidden.append(tag)
+    def handle_endtag(self,tag):
+        if self.hidden and self.hidden[-1]==tag:self.hidden.pop()
+    def handle_data(self,data):
+        if not self.hidden and data.strip():self.parts.append(data.strip())
+
+def _source_view(content,content_type):
+    if len(content)<=MAX_MODEL_SOURCE_CHARS:return content,'original'
+    if content_type not in ('text/html','application/xhtml+xml'):raise SourceFetchError('source view too large')
+    try:
+        parser=_SourceText();parser.feed(content);parser.close();text='\n'.join(parser.parts)
+    except (ValueError,RecursionError):raise SourceFetchError('source extraction unavailable') from None
+    if not text or len(text)>MAX_MODEL_SOURCE_CHARS:raise SourceFetchError('source view too large or empty')
+    return text,'extracted_text'
 
 class SourceSnapshots:
     def __init__(self,service,fetcher):
@@ -31,7 +53,7 @@ class SourceSnapshots:
             seen.add(source['id']); fetched=self.fetcher.fetch(source['url'],cancelled=cancelled); content=fetched['content'].encode('utf-8');total+=len(content)
             try: validate_content(fetched['content_type'],content)
             except (ValueError,UnicodeError): raise SourceFetchError('source content invalid') from None
-            if fetched['url']!=source['url'] or len(content)>self.fetcher.max_bytes or total>1048576 or hashlib.sha256(content).hexdigest()!=fetched['sha256']: raise SourceFetchError('source content invalid')
+            if fetched['url']!=source['url'] or len(content)>self.fetcher.max_bytes or total>MAX_SOURCE_BUNDLE or hashlib.sha256(content).hexdigest()!=fetched['sha256']: raise SourceFetchError('source content invalid')
             items.append({**source,'content_type':fetched['content_type'],'content_ref':store.put(content)})
         if cancelled() or self._policy()!=self.policy_hash: raise SourceFetchError('source request cancelled or policy changed')
         graph._lease(run,claim)
@@ -60,11 +82,19 @@ class SourceSnapshots:
             for source,item in zip(sources,items):
                 if not isinstance(item,dict) or set(item)!={'id','url','evidence_id','content_type','content_ref'} or any(item[k]!=source[k] for k in ('id','url','evidence_id')): return False
                 content=store.get(item['content_ref']);total+=len(content)
-                if not content or len(content)>self.fetcher.max_bytes or total>1048576: return False
+                if not content or len(content)>self.fetcher.max_bytes or total>MAX_SOURCE_BUNDLE: return False
                 validate_content(item['content_type'],content)
             if draft_ref is not None: store.get(draft_ref)
             return True
         except Exception: return False
     def contents(self,reference):
         bundle=json.loads(self.service.artifacts.get(reference))
-        return [{**item,'content':self.service.artifacts.get(item['content_ref']).decode('utf-8')} for item in bundle['sources']]
+        views=[];total=0
+        for item in bundle['sources']:
+            original=self.service.artifacts.get(item['content_ref']).decode('utf-8')
+            content,view_format=_source_view(original,item['content_type']);total+=len(content)
+            if total>MAX_MODEL_SOURCE_CHARS:raise SourceFetchError('source views too large')
+            view={**item,'content':content,'view_format':view_format,'view_sha256':hashlib.sha256(content.encode('utf-8')).hexdigest()}
+            if view_format=='extracted_text':view['view_note']='Derived text excludes markup, scripts, styles, head content, and other non-text elements; it may omit evidence or include hidden or auxiliary text. The content_ref identifies the full original source. Block claims that cannot be verified from the supplied view.'
+            views.append(view)
+        return views

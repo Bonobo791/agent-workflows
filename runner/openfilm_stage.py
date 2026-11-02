@@ -13,7 +13,7 @@ from runner.graph_runner import GraphRunner
 from runner.source_register import validate as validate_sources
 from workflows.marketing.assets import ingest_verified_asset, ingest_verified_preview
 from workflows.marketing.adapters import MarketingAdapter, AdapterError
-from workflows.marketing.openfilm_brief import validate_brief
+from workflows.marketing.openfilm_brief import validate_brief, social_draft_inputs
 
 
 class OpenFilmStageError(RuntimeError): pass
@@ -64,7 +64,7 @@ def produce(service, run, queue_claim, graph_claim, backend):
         source_record=json.loads(service.artifacts.get(source['version']))
         register_ref=source_record['outputs'][1]
         validate_sources(service.artifacts,register_ref,source_record['_source_verification'])
-        validate_brief(service.artifacts,brief,content_ref,register_ref)
+        validate_brief(service.artifacts,brief,content_ref,register_ref,social_draft_inputs(service,run))
         canonical_text=service.artifacts.get(content_ref).decode('utf-8')
     except Exception: raise OpenFilmStageError('asset brief or approved source unavailable') from None
     if callable(getattr(backend,'blocker',None)):

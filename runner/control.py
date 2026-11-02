@@ -61,6 +61,10 @@ class ControlPlane:
                 from runner.manual_lifecycle import ManualLifecycle
                 if not isinstance(self.service.lifecycle,ManualLifecycle): raise ControlError('manual provider unavailable')
                 return self.service.lifecycle.register_replacement(request['old_incarnation'],request['new_incarnation'],request['attestation'])
+            if action=='manual_prepare_replacement':
+                from runner.manual_lifecycle import ManualLifecycle
+                if not isinstance(self.service.lifecycle,ManualLifecycle): raise ControlError('manual provider unavailable')
+                return self.service.lifecycle.prepare_replacement(request['old_incarnation'],request['new_incarnation'])
             if action=='create': self.service.create(request['run'],request['workflow'],request['task']); return {'created':True}
             if action in ('manual_stop','manual_restart','automatic_stop','automatic_restart','lifecycle_status','confirm_stopped','confirm_restarted','resolve_lifecycle_call'):
                 lifecycle=self.service.lifecycle
@@ -125,6 +129,19 @@ class ControlPlane:
             if action=='recover_correction':
                 if self.service.stage_dispatcher is None: raise ControlError('stage dispatcher unavailable')
                 return self.service.stage_dispatcher.recover_correction(request['run'],request['queue_claim'],request['graph_claim'])
+            if action=='refresh_brief':
+                if self.service.stage_dispatcher is None: raise ControlError('stage dispatcher unavailable')
+                return self.service.stage_dispatcher.refresh_brief(request['run'],request['queue_claim'],request['graph_claim'])
+            if action=='refresh_asset_brief':
+                if self.service.stage_dispatcher is None: raise ControlError('stage dispatcher unavailable')
+                return self.service.stage_dispatcher.refresh_asset_brief(request['run'],request['queue_claim'],request['graph_claim'])
+            if action=='retry_source_coverage':
+                if self.service.stage_dispatcher is None: raise ControlError('stage dispatcher unavailable')
+                return self.service.stage_dispatcher.retry_source_coverage(request['run'],request['queue_claim'],request['graph_claim'])
+            if action=='recover_cancelled_run': return self.service.recover_cancelled_run(request['run'])
+            if action=='recover_invalid_draft': return self.service.recover_invalid_draft(request['run'],request['execution'])
+            if action=='retry_unbound_draft': return self.service.retry_unbound_draft(request['run'],request['execution'])
+            if action=='retry_uncertain_source_review': return self.service.retry_uncertain_source_review(request['run'],request['new_run'],request['execution'])
             if action=='human_review_decision':
                 if self.service.human_review is None: raise ControlError('human review unavailable')
                 return self.service.human_review.decide(request['run'],request['queue_claim'],request['graph_claim'],request['version'],request['decision'])

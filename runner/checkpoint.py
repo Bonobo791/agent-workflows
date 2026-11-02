@@ -10,11 +10,16 @@ from runner.manual_lifecycle import ManualLifecycle
 class CheckpointError(RuntimeError): pass
 
 
-def ensure_quiescent(db,run):
+def ensure_quiescent(db,run,permitted_attempt=None):
     tables={value[0] for value in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {'local_scopes','local_sessions','graph_attempts','external_actions','action_scopes','action_followups'}<=tables or unresolved_scope_rows(db,run): raise CheckpointError('local state unavailable or unresolved')
     checks=(('local_sessions',"SELECT 1 FROM local_sessions WHERE run=? AND state IS NOT 'idle'"),('engineering_workspaces','SELECT 1 FROM engineering_workspaces WHERE run=? AND assignment IS NOT NULL'),('graph_attempts',"SELECT 1 FROM graph_attempts WHERE run=? AND (status IS NULL OR status NOT IN ('failed','completed','not_executed'))"),('external_actions',"SELECT 1 FROM external_actions WHERE run=? AND (status IS NULL OR status NOT IN ('executed','not_executed','desired_state_observed','revoked'))"),('action_scopes','SELECT 1 FROM action_scopes WHERE run=?'),('action_followups','SELECT 1 FROM action_followups WHERE run=?'),('pr_bridge_operations',"SELECT 1 FROM pr_bridge_operations WHERE run=? AND (state IS NULL OR state NOT IN ('proposed','not_executed','executed','desired_state_observed','reconciled'))"),('supervised_commands',"SELECT 1 FROM supervised_commands WHERE run=? AND (state IS NULL OR state NOT IN ('passed','failed'))"),('correction_attempts',"SELECT 1 FROM correction_attempts WHERE run=? AND (state IS NULL OR state NOT IN ('completed','recovered'))"),('openfilm_render_jobs',"SELECT 1 FROM openfilm_render_jobs WHERE task_run=? AND state IS NOT 'exited'"))
     for table,query in checks:
+        if table=='graph_attempts' and permitted_attempt is not None:
+            stage,version=permitted_attempt if isinstance(permitted_attempt,tuple) else ('brief',permitted_attempt)
+            query="SELECT 1 FROM graph_attempts WHERE run=? AND (status IS NULL OR status NOT IN ('failed','completed','not_executed')) AND NOT (stage=? AND version=? AND status='uncertain')"
+            if db.execute(query,(run,stage,version)).fetchone(): raise CheckpointError('work remains unresolved')
+            continue
         if table in tables and db.execute(query,(run,)).fetchone(): raise CheckpointError('work remains unresolved')
     if 'docker_execution_map' in tables:
         if not {'docker_assignments','docker_terminal_evidence'}<=tables or db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated' OR e.run IS NULL)",(run,)).fetchone(): raise CheckpointError('container outcome unresolved')

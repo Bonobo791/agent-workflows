@@ -13,6 +13,45 @@ class Fetcher:
         return {'url':url,'content_type':'text/plain','content':text,'sha256':hashlib.sha256(text.encode()).hexdigest()}
 
 class SnapshotTests(unittest.TestCase):
+    def test_large_source_snapshot_remains_bounded_and_verifiable(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');claim=service.claim('r');register=service.artifacts.put(json.dumps(REGISTER).encode())
+                fetcher=Fetcher();fetcher.max_bytes=2*1024*1024;payload='<html><head><script>'+('a'*(1600*1024))+'</script></head><body><main><h1>Actual guidance</h1><p>Hold comments for review.</p></main></body></html>'
+                fetcher.fetch=lambda url,**_:{'url':url,'content_type':'text/html','content':payload,'sha256':hashlib.sha256(payload.encode()).hexdigest()}
+                snapshots=SourceSnapshots(service,fetcher);bundle=snapshots.capture('r',claim,register,None,lambda:False)
+                self.assertTrue(snapshots.verify('r',register,None,bundle));view=snapshots.contents(bundle)[0]
+                self.assertEqual(service.artifacts.get(view['content_ref']).decode(),payload)
+                self.assertEqual(view['view_format'],'extracted_text');self.assertIn('Hold comments for review.',view['content']);self.assertLess(len(view['content']),1000)
+                self.assertEqual(view['view_sha256'],hashlib.sha256(view['content'].encode()).hexdigest())
+            finally:service.close()
+    def test_large_visible_text_blocks_instead_of_silent_truncation(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');claim=service.claim('r');register=service.artifacts.put(json.dumps(REGISTER).encode())
+                fetcher=Fetcher();fetcher.max_bytes=2*1024*1024;payload='<html><body>'+('a'*600000)+'</body></html>'
+                fetcher.fetch=lambda url,**_:{'url':url,'content_type':'text/html','content':payload,'sha256':hashlib.sha256(payload.encode()).hexdigest()}
+                snapshots=SourceSnapshots(service,fetcher);bundle=snapshots.capture('r',claim,register,None,lambda:False)
+                with self.assertRaises(SourceFetchError):snapshots.contents(bundle)
+            finally:service.close()
+    def test_unmatched_hidden_end_tag_cannot_expose_head_content(self):
+        from runner.source_snapshots import _source_view
+        html='<html><head></script>hidden head text</head><body><p>Public evidence</p><script>'+('x'*400001)+'</script></body></html>'
+        content,kind=_source_view(html,'text/html')
+        self.assertEqual(kind,'extracted_text');self.assertIn('Public evidence',content);self.assertNotIn('hidden head text',content)
+    def test_snapshot_rejects_sources_over_total_bundle_limit(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');claim=service.claim('r');register=service.artifacts.put(json.dumps(REGISTER).encode())
+                fetcher=Fetcher();fetcher.max_bytes=5*1024*1024;payload='a'*(4*1024*1024+1)
+                fetcher.fetch=lambda url,**_:{'url':url,'content_type':'text/plain','content':payload,'sha256':hashlib.sha256(payload.encode()).hexdigest()}
+                snapshots=SourceSnapshots(service,fetcher)
+                with self.assertRaises(SourceFetchError):snapshots.capture('r',claim,register,None,lambda:False)
+                self.assertEqual(service.graph.db.execute('SELECT COUNT(*) FROM source_snapshots').fetchone()[0],0)
+            finally:service.close()
     def test_snapshot_does_not_commit_after_claim_loss_or_cancellation_during_storage(self):
         for reason in ('claim','cancel','policy'):
             with self.subTest(reason=reason), tempfile.TemporaryDirectory() as root:

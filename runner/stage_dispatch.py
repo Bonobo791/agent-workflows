@@ -76,6 +76,92 @@ class StageDispatcher:
         if result.get('status')!='awaiting_approval' or result.get('stage') not in ('freeze','open_draft','triage','ready','post_ready'):
             self.service.graph.db.execute('DELETE FROM approval_waits WHERE run=?',(run,))
         return result
+    def refresh_brief(self,run,queue_claim,graph_claim):
+        from runner.checkpoint import ensure_quiescent
+        from runner.graph_runner import GraphRunner,ExecutionError
+        service=self.service;graph=service.graph
+        if not service.queue.may_start(run,queue_claim) or graph._definition(run).name!='marketing' or graph.get(run,'freeze') or graph.db.execute('SELECT 1 FROM external_actions WHERE run=?',(run,)).fetchone(): raise StageError('brief refresh unavailable')
+        if service.task_intake is not None and service.task_intake.revalidate(run) is not True: raise StageError('fresh task required')
+        ensure_quiescent(graph.db,run)
+        runner=GraphRunner(graph,service.artifacts,None,None,skill_resolver=service.skill_resolver,required_skills=service.required_skills)
+        try:runner._verify_upstream_skills(run,'canonical_draft',graph_claim)
+        except ExecutionError as exc:
+            if str(exc)=='upstream skill inputs changed' and graph.get(run,'brief') is None:return {'stage':'brief','status':'invalidated'}
+            raise StageError('brief refresh unavailable') from exc
+        raise StageError('brief skill unchanged')
+    def refresh_asset_brief(self,run,queue_claim,graph_claim):
+        import hashlib,json
+        from runner.checkpoint import ensure_quiescent
+        service=self.service;graph=service.graph
+        try:
+            if graph.migrate_marketing_assets(run,graph_claim,queue_claim): return {'stage':'asset_brief','status':'invalidated'}
+            freeze=graph.get(run,'freeze');current=graph.get(run,'asset_brief')
+            if not service.queue.may_start(run,queue_claim) or graph._definition(run).name!='marketing' or not freeze or freeze['status']!='passed' or not current or current['status']!='blocked': raise StageError('asset brief refresh unavailable')
+            if service.task_intake is not None and service.task_intake.revalidate(run) is not True: raise StageError('fresh task required')
+            ensure_quiescent(graph.db,run)
+            names=service.required_skills.get('asset_brief')
+            if not isinstance(names,list) or not names or service.skill_resolver is None: raise StageError('asset brief skill unavailable')
+            skills=service.skill_resolver.resolve(names)
+            fingerprint=hashlib.sha256(json.dumps({key:value['sha256'] for key,value in skills.items()},sort_keys=True).encode()).hexdigest()
+            prior=graph.db.execute('SELECT fingerprint FROM graph_skill_state WHERE run=? AND stage=\'asset_brief\'',(run,)).fetchone()
+            if not prior or prior[0]==fingerprint: raise StageError('asset brief skill unchanged')
+            graph.invalidate(run,'asset_brief',graph.prepare(run,'asset_brief',graph_claim),graph_claim,reason='skills_unavailable')
+            return {'stage':'asset_brief','status':'invalidated'}
+        except StageError: raise
+        except Exception as exc: raise StageError('asset brief refresh unavailable') from exc
+    def retry_source_coverage(self,run,queue_claim,graph_claim):
+        import json
+        from runner.checkpoint import ensure_quiescent
+        service=self.service;graph=service.graph
+        if not service.queue.may_start(run,queue_claim) or graph._definition(run).name!='marketing' or graph.get(run,'freeze') or graph.db.execute('SELECT 1 FROM external_actions WHERE run=?',(run,)).fetchone(): raise StageError('coverage retry unavailable')
+        if service.task_intake is not None and service.task_intake.revalidate(run) is not True: raise StageError('fresh task required')
+        ensure_quiescent(graph.db,run)
+        review=graph.get(run,'canonical_review')
+        try:
+            record=json.loads(service.artifacts.get(review['version']))
+            if review['status']!='blocked' or record.get('_blocked_reason')!='source coverage review unavailable or incomplete': raise ValueError()
+        except Exception: raise StageError('coverage retry unavailable') from None
+        graph.invalidate(run,'canonical_review',graph.prepare(run,'canonical_review',graph_claim),graph_claim,reason='upstream_unavailable')
+        return {'stage':'canonical_review','status':'invalidated'}
+    def _verify_awaiting_draft(self,run,version,feedback=None):
+        import json
+        from runner.structured import parse_marketing_result
+        service=self.service;graph=service.graph;stage='canonical_draft'
+        try:
+            record=json.loads(service.artifacts.get(version));session=record['session_id']
+            if record.get('_gate_status')!='awaiting_review' or graph.session(run,stage)!=session: raise ValueError()
+            names=service.required_skills.get(stage,[]);resolved=service.skill_resolver.resolve(names)
+            skills={name:value['sha256'] for name,value in resolved.items()}
+            response_ref=service.provenance.completion_hash(run,stage,session)
+            if not service.provenance.completed(run,stage,session) or not service.provenance.verify(run,stage,session,skills): raise ValueError()
+            response=parse_marketing_result(service.artifacts.get(response_ref).decode('utf-8'),stage)
+            if response['status']!='awaiting_review' or any(item['severity']=='blocking' and item['resolution']=='open' for item in response['findings']): raise ValueError()
+            if any(record.get(key)!=response.get(key) for key in ('stage','status','input_versions','outputs','findings')): raise ValueError()
+            rows=graph.db.execute("SELECT input_versions,output_refs,response_ref FROM execution_turn_audit WHERE run=? AND role=? AND session=? AND status='completed' AND response_ref=?",(run,stage,session,response_ref)).fetchall()
+            if len(rows)!=1 or json.loads(rows[0][0])!=response['input_versions'] or json.loads(rows[0][1])!=response['outputs']: raise ValueError()
+            brief=json.loads(service.artifacts.get(graph.get(run,'brief')['version']))
+            if not response['input_versions'] or response['input_versions'][0]!=brief['outputs'][0] or len(response['outputs'])!=1 or not service.artifacts.get(response['outputs'][0]).decode('utf-8').strip(): raise ValueError()
+            if feedback is not None and feedback not in response['input_versions']: raise ValueError()
+            for ref in response['input_versions']:service.artifacts.get(ref)
+        except Exception as exc: raise StageError('draft handoff evidence unavailable') from exc
+    def _advance_awaiting_draft(self,run,queue_claim,graph_claim):
+        graph=self.service.graph;stage='canonical_draft'
+        try:
+            current=graph.get(run,stage)
+            if not current or current['status']!='awaiting_review': raise ValueError()
+            self._verify_awaiting_draft(run,current['version'])
+            snapshot=graph.prepare(run,stage,graph_claim)
+            graph.finish(run,stage,snapshot,'passed',current['version'],graph_claim,queue_claim=queue_claim)
+        except Exception as exc: raise StageError('draft handoff evidence unavailable') from exc
+    def _advance_awaiting_correction(self,run,queue_claim,graph_claim):
+        graph=self.service.graph;stage='canonical_draft'
+        row=graph.db.execute("SELECT id,writer_version,review_version,result_version FROM correction_attempts WHERE run=? AND writer_stage=? AND review_stage='canonical_review' AND state='completed' ORDER BY id DESC LIMIT 1",(run,stage)).fetchone()
+        writer=graph.get(run,stage);review=graph.get(run,'canonical_review')
+        if not row or not writer or not review or writer['version']!=row[1] or review['status']!='blocked' or review['version']!=row[2] or not row[3]: return
+        try: self._verify_awaiting_draft(run,row[3],row[2])
+        except StageError: return
+        snapshot=graph.prepare(run,stage,graph_claim)
+        graph.finish(run,stage,snapshot,'passed',row[3],graph_claim,queue_claim=queue_claim,completed_correction=row[0])
     def _step(self,run,queue_claim,graph_claim):
         if not self.service.queue.may_start(run,queue_claim): raise StageError('queue claim unavailable')
         self.service.graph.migrate_marketing_assets(run,graph_claim,queue_claim)
@@ -93,6 +179,15 @@ class StageDispatcher:
         if self.service.graph._definition(run).name=='marketing':
             import json
             from workflows.marketing.gates import CHANNELS
+            brief=self.service.graph.get(run,'asset_brief')
+            if brief and brief['status'] in ('passed','blocked','failed'):
+                try:
+                    from workflows.marketing.openfilm_brief import social_draft_inputs
+                    record=json.loads(self.service.artifacts.get(brief['version']))
+                    current={channel:item['ref'] for channel,item in social_draft_inputs(self.service,run).items()}
+                    if record.get('_social_draft_refs')!=current:
+                        self.service.graph.invalidate(run,'asset_brief',self.service.graph.prepare(run,'asset_brief',graph_claim),graph_claim,reason='upstream_unavailable')
+                except Exception: raise StageError('OpenFilm social inputs unavailable') from None
             legacy={}; freeze=self.service.graph.get(run,'freeze'); bound_task=None
             for channel in CHANNELS:
                 name=channel+'_review'; state=self.service.graph.get(run,name)
@@ -107,6 +202,9 @@ class StageDispatcher:
                 except Exception: raise StageError('review migration evidence unavailable') from None
             if legacy:
                 self.service.graph.invalidate_legacy_channel_reviews(run,graph_claim,queue_claim,legacy,freeze['version'],bound_task)
+            draft=self.service.graph.get(run,'canonical_draft')
+            if draft and draft['status']=='awaiting_review': self._advance_awaiting_draft(run,queue_claim,graph_claim)
+            self._advance_awaiting_correction(run,queue_claim,graph_claim)
         stage=self.next_stage(run,graph_claim)
         if stage is None:
             if self.service.graph._definition(run).name=='engineering':
@@ -245,11 +343,12 @@ class StageDispatcher:
                 snapshots=_source_snapshot_inputs(service,run,upstream)
                 if snapshots: refs.append(snapshots[0]);artifacts['source_snapshots']=snapshots[1]
             except Exception: raise StageError('verified source evidence unavailable') from None
-        if stage=='instagram_review':
-            asset_inputs=self._instagram_asset_inputs(run)
+        if stage.endswith('_review') and stage.removesuffix('_review') in CHANNELS:
+            channel=stage.removesuffix('_review')
+            asset_inputs=self._channel_asset_inputs(run,channel)
             if asset_inputs:
                 refs.extend(asset_inputs['refs'])
-                artifacts['asset_review']=asset_inputs['review']
+                artifacts['openfilm_asset']=asset_inputs['review']
         if stage=='canonical_review':
             try:
                 brief=json.loads(service.artifacts.get(service.graph.get(run,'brief')['version']))['outputs'][0]
@@ -276,10 +375,14 @@ class StageDispatcher:
                 brief_record=json.loads(service.artifacts.get(service.graph.get(run,'brief')['version']))
                 register=brief_record['outputs'][1]; proof=brief_record['_source_verification']
                 from runner.source_register import validate
+                from workflows.marketing.openfilm_brief import social_draft_inputs
                 validate(service.artifacts,register,proof)
                 artifacts['source_register']=service.artifacts.get(register).decode('utf-8')
                 artifacts['admitted_task']=service.artifacts.get(row[0]).decode('utf-8')
+                social_drafts=social_draft_inputs(service,run)
+                artifacts['social_drafts']=social_drafts
                 refs.extend([register,proof,row[0]])
+                refs.extend(item['ref'] for item in social_drafts.values())
             except Exception: raise StageError('verified source register unavailable') from None
         feedback=None
         if feedback_ref is not None:
@@ -338,7 +441,7 @@ class StageDispatcher:
             if review_stage: instructions=instructions.replace('passed, blocked, failed, or awaiting_review','passed or blocked')
             prompt=instructions+'\n'+json.dumps(payload,ensure_ascii=False)
             if name=='asset_brief':
-                prompt+='\nWrite result.txt as JSON: {"content_ref": input_versions[0], "assets": [{"channel": "linkedin", "x", "facebook", "instagram", or "reddit", "kind": "png" or "mp4", "width": integer, "height": integer, "duration_seconds": null for png or seconds for mp4, "approved_text": [exact excerpts from the subject], "claim_ids": [IDs from the source register], "media": [{"artifact_ref": hash, "rights_ref": hash}], "captions": string, "alt_text": string}]}. Use the admitted task for requested channels and formats, and the subject for approved text. Select an exact channel, not a generic label; include an Instagram asset when it is requested. Use empty media when no supplied media is needed. Video captions and alt text are required. Do not invent artifact references.'
+                prompt+='\nWrite result.txt as JSON: {"content_ref": input_versions[0], "social_drafts": {"channel": "draft artifact hash"}, "assets": [{"channel": "linkedin", "x", "facebook", "instagram", or "reddit", "kind": "png" or "mp4", "width": integer, "height": integer, "duration_seconds": null for png or seconds for mp4, "approved_text": [exact excerpts from the subject or the matching social_drafts text], "claim_ids": [IDs from the source register], "media": [{"artifact_ref": hash, "rights_ref": hash}], "captions": string, "alt_text": string}]}. Use only requested channels in the admitted task. Bind social_drafts to the supplied artifact refs and include the exact full text for each channel in its matching asset approved_text. Every final visual and social deliverable must be composed through OpenFilm. Use empty media when no supplied rights-cleared media is needed. Video captions and alt text are required. Do not invent artifact references.'
             args=dict(run=run,role=name,claim=graph_claim,skills=hashes,prompt=prompt,model=model,input_versions=refs,output_paths=['result.txt','sources.json'] if name=='brief' else ['result.txt'],cancelled=lambda:not active())
             if service.model_executor is not None: args['instruction_length']=len(instructions)
             if review_stage:
@@ -354,6 +457,7 @@ class StageDispatcher:
             return parsed
         def gate(name,result):
             if not isinstance(result,dict): return False
+            if name=='asset_brief': result['_social_draft_refs']={channel:item['ref'] for channel,item in social_drafts.items()}
             if name=='canonical_draft' and result.get('status')=='passed':
                 try:
                     text=service.artifacts.get(result['outputs'][0]).decode('utf-8')
@@ -366,7 +470,12 @@ class StageDispatcher:
                     from workflows.marketing.openfilm_brief import validate_brief
                     data=service.artifacts.get(result['outputs'][0])
                     if len(data)>1048576: raise ValueError('brief too large')
-                    validate_brief(service.artifacts,json.loads(data),task_ref,register)
+                    from workflows.marketing.openfilm_brief import social_draft_inputs
+                    social_drafts=social_draft_inputs(service,run)
+                    if not social_drafts: raise ValueError('social drafts unavailable')
+                    brief=json.loads(data)
+                    if 'social_drafts' not in brief: raise ValueError('OpenFilm social copy binding missing')
+                    validate_brief(service.artifacts,brief,task_ref,register,social_drafts)
                 except Exception:
                     result['_blocked_reason']='asset brief invalid, stale or incomplete'
                     return 'blocked'
@@ -423,8 +532,8 @@ class StageDispatcher:
                 except Exception:
                     result['_blocked_reason']='page structure rules unavailable or unmet'
                     return 'blocked'
-            if name=='instagram_review' and result.get('status')=='passed' and self._instagram_asset_inputs(run) is None:
-                result['_blocked_reason']='verified asset unavailable'
+            if name.endswith('_review') and name.removesuffix('_review') in CHANNELS and result.get('status')=='passed' and self._channel_asset_inputs(run,name.removesuffix('_review')) is None:
+                result['_blocked_reason']='verified OpenFilm asset unavailable for this channel'
                 return 'blocked'
             if name=='reddit_review' and result.get('status')=='passed':
                 try:
@@ -581,10 +690,11 @@ class StageDispatcher:
                         if state['status']=='unsuitable' and checked['context']['relevant'] is not False: raise ValueError('community suitability changed')
                     expected.extend([context_ref,context['rules_ref']])
                 elif state['status'] in ('passed','unsuitable'): raise ValueError('community evidence unavailable')
-            if stage=='instagram_review':
-                asset_inputs=self._instagram_asset_inputs(run)
+            if stage.endswith('_review') and stage.removesuffix('_review') in CHANNELS:
+                channel=stage.removesuffix('_review')
+                asset_inputs=self._channel_asset_inputs(run,channel)
                 if asset_inputs: expected.extend(asset_inputs['refs'])
-                elif state['status']=='passed': raise ValueError('verified media unavailable')
+                elif state['status']=='passed': raise ValueError('verified OpenFilm media unavailable')
             if stage=='canonical_review':
                 brief=json.loads(service.artifacts.get(service.graph.get(run,'brief')['version']))
                 from runner.source_register import validate
@@ -614,7 +724,7 @@ class StageDispatcher:
             return True
         except Exception: raise StageError('verified review evidence unavailable') from None
 
-    def _instagram_asset_inputs(self,run):
+    def _channel_asset_inputs(self,run,channel):
         import json
         service=self.service
         state=service.graph.get(run,'asset_production')
@@ -624,8 +734,8 @@ class StageDispatcher:
             record=json.loads(service.artifacts.get(state['version']))
             if record.get('status')!='passed' or not verify_evidence(service,run,record): raise ValueError('asset evidence unavailable')
             manifest=json.loads(service.artifacts.get(record['manifest_ref']))
-            refs=[item['artifact_ref'] for item in manifest['assets'] if item['channel']=='instagram']
+            refs=[item['artifact_ref'] for item in manifest['assets'] if item['channel']==channel]
             if not refs: return None
             return {'refs':[state['version'],record['manifest_ref'],record['report_ref'],*refs],
                     'review':{'manifest':manifest,'report':json.loads(service.artifacts.get(record['report_ref'])),'coverage':record.get('review_coverage')}}
-        except Exception: raise StageError('verified Instagram media unavailable') from None
+        except Exception: raise StageError(f'verified {channel} media unavailable') from None

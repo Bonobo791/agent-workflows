@@ -18,6 +18,16 @@ compliance. Markdown page headings are checked against explicitly configured,
 version-bound format rules; semantic claim checking still requires independent
 review.
 
+All final social copy and visual assets go through OpenFilm. Channel drafts are
+provisional source material for the OpenFilm project. A channel review cannot
+pass until it checks the channel copy together with that channel's independently
+verified OpenFilm output. Missing platform, rights or render evidence keeps that
+channel blocked in the human-review package.
+
+After a person approves the exact package, publication is performed through the
+designated third-party posting tool outside this workflow. The runner does not
+invoke that tool or mark content as published.
+
 Reddit review can pass only with fresh, draft-bound community context and rule
 artifacts authenticated by an independent trusted authority. Missing evidence
 blocks the channel, an irrelevant community is unsuitable, and product mentions

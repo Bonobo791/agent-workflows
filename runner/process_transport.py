@@ -3,7 +3,7 @@ import json
 import os
 import select
 import time
-from runner.stdio import MAX_LINE, StdioError
+from runner.stdio import MAX_LINE, MAX_SEND_LINE, StdioError
 
 class ProcessTransport:
     def __init__(self,process,deadline,cancelled):
@@ -20,7 +20,7 @@ class ProcessTransport:
     def send(self,message):
         try: data=json.dumps(message,separators=(',',':'),allow_nan=False).encode()+b'\n'
         except (TypeError,ValueError): raise StdioError('invalid request') from None
-        if len(data)>MAX_LINE: raise StdioError('message too large')
+        if len(data)>MAX_SEND_LINE: raise StdioError('message too large')
         fd=self.process.stdin.fileno()
         try:
             while data:

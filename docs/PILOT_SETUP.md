@@ -229,6 +229,43 @@ must not contain private skills, credentials, user data or session histories.
 
 ## Missing trusted boundaries
 
+An explicitly cancelled local marketing run can be recovered only before any
+stage after `brief`, and only after the original incarnation is confirmed
+stopped and a distinct replacement is registered. The owner-only control
+request `{"action":"recover_cancelled_run","run":"<run>"}` revalidates the
+configured task, rejects unresolved work or task-side actions, invalidates the
+old brief, and atomically queues the same run for a fresh brief and source
+review. It does not recover engineering, downstream, or uncertain actions.
+If the response is lost, inspect the run and job before retrying. Confirm the
+source policy and all prior termination evidence before invoking recovery.
+
+If a read-only source review has an uncertain outcome, an owner may explicitly
+authorize a separate retry with `retry_uncertain_source_review`, supplying the
+original `run`, a distinct `new_run`, and its `execution` identifier. This
+requires a fresh task, a fenced stopped incarnation, a prepared replacement,
+and a terminated review scope with no recorded turn. The original attempt
+remains uncertain and the new run is linked to it in the retry audit. A retry
+may duplicate the model call; inspect state before repeating a lost response.
+Point the private task configuration at the new run before starting it.
+
+For a completed canonical draft whose response has mismatched input hashes,
+`recover_invalid_draft` requires the run and execution identifier. It verifies
+the completed turn, terminated scope, recorded inputs and response, records
+the validation failure, and resumes the original writer session. A later
+unbound uncertain launch can be retried with `retry_unbound_draft`; its
+uncertain outcome is retained in the audit and the model call may be duplicated.
+Both operations require fresh task validation and a fenced replacement worker.
+
+Source retrieval accepts up to 3 MiB per source and 4 MiB per snapshot bundle. The
+full source is retained and hash-checked; a larger input is blocked. When an
+HTML source exceeds the model-view limit, the reviewer receives a labeled,
+deterministic text extraction and its hash alongside the original source hash.
+The extraction can omit evidence; it must not be treated as the full page, and
+claims without support in the view remain blocked. Oversized extracted or
+non-HTML views block rather than silently truncate. Outgoing model frames are
+capped separately at 16 MiB; incoming frames retain their 2 MiB cap. These
+limits do not establish source support or model review.
+
 For a local OpenFilm image, build the base with `podman build -f
 containers/openfilm/Dockerfile -t localhost/agent-workflows-openfilm-base:0.2.6 .`.
 Pass its full `sha256:` image ID as `OPENFILM_BASE_IMAGE` when building
