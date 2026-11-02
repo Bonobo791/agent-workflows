@@ -47,6 +47,7 @@ class AutoWorker:
         if decision not in ('approved','rejected') or not isinstance(version,str) or len(version)!=64 or any(c not in '0123456789abcdef' for c in version): raise AutoWorkerError('invalid human decision')
         with self.guard:
             if self.state.get('run')!=run or self.state.get('status')!='awaiting_review' or self.state.get('version')!=version or self.pending_decision is not None or self.checkpoint_pending or self.stop_event.is_set(): raise AutoWorkerError('current review unavailable')
+            if video_playback_refs is not None and (not isinstance(video_playback_refs,list) or any(not isinstance(ref,str) for ref in video_playback_refs)): raise AutoWorkerError('invalid human decision')
             self.pending_decision={'run':run,'version':version,'decision':decision,'video_playback_refs':video_playback_refs}; self.wake.set()
         return {'pending':True,'version':version}
     def request_action(self,run,operation,parameters):
