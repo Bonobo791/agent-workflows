@@ -334,6 +334,17 @@ class StageDispatcher:
             artifacts['frozen_content']=service.artifacts.get(content).decode('utf-8')
             artifacts['admitted_task']=service.artifacts.get(admitted).decode('utf-8')
             refs.extend([content,admitted])
+            try:
+                brief_record=json.loads(service.artifacts.get(service.graph.get(run,'brief')['version']))
+                register=brief_record['outputs'][1]; proof=brief_record['_source_verification']
+                from runner.source_register import validate
+                validate(service.artifacts,register,proof)
+                artifacts['source_register']=service.artifacts.get(register).decode('utf-8')
+                artifacts['source_verification']=service.artifacts.get(proof).decode('utf-8')
+                refs.extend([register,proof])
+                snapshots=_source_snapshot_inputs(service,run,brief_record)
+                if snapshots: refs.append(snapshots[0]); artifacts['source_snapshots']=snapshots[1]
+            except Exception: raise StageError('verified channel source evidence unavailable') from None
         if stage=='canonical_draft':
             try:
                 register=upstream['outputs'][1];proof=upstream['_source_verification']
@@ -378,7 +389,11 @@ class StageDispatcher:
                 from workflows.marketing.openfilm_brief import social_draft_inputs
                 validate(service.artifacts,register,proof)
                 artifacts['source_register']=service.artifacts.get(register).decode('utf-8')
+                artifacts['source_verification']=service.artifacts.get(proof).decode('utf-8')
                 artifacts['admitted_task']=service.artifacts.get(row[0]).decode('utf-8')
+                snapshots=_source_snapshot_inputs(service,run,brief_record)
+                if snapshots:
+                    refs.append(snapshots[0]); artifacts['source_snapshots']=snapshots[1]
                 social_drafts=social_draft_inputs(service,run)
                 artifacts['social_drafts']=social_drafts
                 refs.extend([register,proof,row[0]])
@@ -441,7 +456,8 @@ class StageDispatcher:
             if review_stage: instructions=instructions.replace('passed, blocked, failed, or awaiting_review','passed or blocked')
             prompt=instructions+'\n'+json.dumps(payload,ensure_ascii=False)
             if name=='asset_brief':
-                prompt+='\nWrite result.txt as JSON: {"content_ref": input_versions[0], "social_drafts": {"linkedin": "draft artifact hash"}, "assets": [{"channel": "linkedin", "kind": "png", "width": 1200, "height": 627, "duration_seconds": null, "approved_text": ["exact excerpt"], "claim_ids": ["source register ID"], "media": [{"artifact_ref": "hash", "rights_ref": "hash"}], "captions": "", "alt_text": ""}]}. Replace the example values; channel is one of linkedin, x, facebook, instagram, or reddit; kind is png or mp4; duration_seconds is null for png or seconds for mp4; approved_text holds exact excerpts from the subject or the matching social_drafts text. Use only requested channels in the admitted task. Bind social_drafts to the supplied artifact refs and include the exact full text for each channel in its matching asset approved_text. Every final visual and social deliverable must be composed through OpenFilm. Use empty media when no supplied rights-cleared media is needed. Video captions and alt text are required. Do not invent artifact references.'
+                prompt+='\nWrite result.txt as JSON with exactly these top-level keys: {"content_ref": input_versions[0], "social_drafts": {"linkedin": "draft artifact hash"}, "assets": [{"channel": "linkedin", "kind": "png", "width": 1200, "height": 627, "duration_seconds": null, "approved_text": ["short exact excerpt", "exact full channel draft"], "claim_ids": ["source register ID"], "media": [{"artifact_ref": "hash", "rights_ref": "hash"}], "captions": "", "alt_text": ""}]}. Each asset must contain exactly the listed keys; do not add fields. Replace the example values; channel is one of linkedin, x, facebook, instagram, or reddit; kind is png or mp4; duration_seconds is null for png or seconds for mp4. Bind every supplied social draft channel to its exact artifact ref, including channels without a requested visual. Include the exact full text for each channel in its matching asset approved_text for traceability, plus any short exact excerpt requested for display. The full draft is not a requirement to render every word: use the short requested excerpt and leave source notes, claim IDs and metadata off the visual. Use only requested asset channels and kinds from the admitted task, with one asset entry per requested file. An Instagram Reel uses the existing Instagram draft; there is no separate Reel draft stage. For multiple Instagram assets, bind each to the same exact Instagram draft. Use the supplied source_verification and any source_snapshots as upstream evidence; do not request a duplicate evidence artifact when a verified proof is present. Use alt_text to describe the requested visual treatment; assets for different channels must have distinct compositions even when their approved text is the same. Every final visual and social deliverable must be composed through OpenFilm. Keep text readable with clear spacing, high contrast and safe margins. Use empty media when no supplied rights-cleared media is needed. Video captions and alt text are required. Do not invent artifact references.'
+                prompt+='\nPreserve explicit placement and no-overlap constraints from the task in alt_text. No shape, border, ring, arc or animation may touch, cross or sit behind text.'
             args=dict(run=run,role=name,claim=graph_claim,skills=hashes,prompt=prompt,model=model,input_versions=refs,output_paths=['result.txt','sources.json'] if name=='brief' else ['result.txt'],cancelled=lambda:not active())
             if service.model_executor is not None: args['instruction_length']=len(instructions)
             if review_stage:
@@ -676,7 +692,15 @@ class StageDispatcher:
             public={key:value for key,value in record.items() if not key.startswith('_') and key!='session_id'}
             expected=[subject]
             from workflows.marketing.gates import CHANNELS
-            if stage in {channel+'_review' for channel in CHANNELS}: expected.extend(_channel_review_inputs(service,run))
+            if stage in {channel+'_review' for channel in CHANNELS}:
+                expected.extend(_channel_review_inputs(service,run))
+                brief_record=json.loads(service.artifacts.get(service.graph.get(run,'brief')['version']))
+                register=brief_record['outputs'][1]; source_proof=brief_record['_source_verification']
+                from runner.source_register import validate
+                validate(service.artifacts,register,source_proof)
+                expected.extend([register,source_proof])
+                snapshots=_source_snapshot_inputs(service,run,brief_record)
+                if snapshots: expected.append(snapshots[0])
             if stage.endswith('_review') and stage.removesuffix('_review') in CHANNELS:
                 channel=stage.removesuffix('_review')
                 asset_inputs=self._channel_asset_inputs(run,channel)
@@ -734,8 +758,19 @@ class StageDispatcher:
             record=json.loads(service.artifacts.get(state['version']))
             if record.get('status')!='passed' or not verify_evidence(service,run,record): raise ValueError('asset evidence unavailable')
             manifest=json.loads(service.artifacts.get(record['manifest_ref']))
-            refs=[item['artifact_ref'] for item in manifest['assets'] if item['channel']==channel]
-            if not refs: return None
-            return {'refs':[state['version'],record['manifest_ref'],record['report_ref'],*refs],
-                    'review':{'manifest':manifest,'report':json.loads(service.artifacts.get(record['report_ref'])),'coverage':record.get('review_coverage')}}
+            if not any(item.get('channel')==channel for item in manifest.get('assets',[])): return None
+            brief=json.loads(service.artifacts.get(manifest['brief_ref']))
+            report=json.loads(service.artifacts.get(record['report_ref']))
+            draft=json.loads(service.artifacts.get(service.graph.get(run,channel+'_draft')['version']))['outputs'][0]
+            if 'social_drafts' in brief and brief['social_drafts'].get(channel)!=draft: raise ValueError('channel draft binding changed')
+            assets=[];refs=[]
+            for spec,item,checks in zip(brief['assets'],manifest['assets'],report['assets']):
+                if spec['channel']!=item['channel']: raise ValueError('channel asset mapping changed')
+                if item['channel']!=channel: continue
+                if item['artifact_ref']!=checks['artifact_ref'] or not all(value is True for key,value in checks.items() if key!='artifact_ref'): raise ValueError('channel asset review failed')
+                assets.append({'artifact_ref':item['artifact_ref'],'brief_asset':spec,'checks':checks})
+                refs.append(item['artifact_ref'])
+            if not assets: return None
+            return {'refs':[state['version'],record['manifest_ref'],manifest['brief_ref'],record['report_ref'],*refs],
+                    'review':{'status':record['status'],'manifest_ref':record['manifest_ref'],'brief_ref':manifest['brief_ref'],'social_draft_ref':draft,'assets':assets,'coverage':record.get('review_coverage')}}
         except Exception: raise StageError(f'verified {channel} media unavailable') from None

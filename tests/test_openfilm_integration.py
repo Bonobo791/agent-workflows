@@ -44,7 +44,7 @@ const [helper,packageRoot,project,output]=process.argv.slice(1);
 const {renderAssets}=await import(helper);
 const {look}=await import(pathToFileURL(packageRoot+'/src/look.mjs'));
 const {render}=await import(pathToFileURL(packageRoot+'/src/render.mjs'));
-await renderAssets({assets:[{kind:'png'}]},project,output,{look,render});
+await renderAssets({assets:[{kind:'png'}]},project,output,{look,render,layout:async()=>[]});
 """
             env={**os.environ,'PLAYWRIGHT_BROWSERS_PATH':str(browser),'OPENFILM_HOME':str(root/'home'),'OPENFILM_NO_BROWSER':'1','OPENFILM_NO_UPDATE_CHECK':'1'}
             result=subprocess.run(['node','--input-type=module','-e',script,helper,str(package),str(project),str(output)],env=env,capture_output=True,text=True,timeout=30)
@@ -66,7 +66,7 @@ const [helper,packageRoot,project,output]=process.argv.slice(1);
 const {renderAssets}=await import(helper);
 const {look}=await import(pathToFileURL(packageRoot+'/src/look.mjs'));
 const {render}=await import(pathToFileURL(packageRoot+'/src/render.mjs'));
-process.stdout.write(JSON.stringify(await renderAssets({assets:[{kind:'png'}]},project,output,{look,render})));
+process.stdout.write(JSON.stringify(await renderAssets({assets:[{kind:'png'}]},project,output,{look,render,layout:async()=>[]})));
 """
             env={**os.environ,'OPENFILM_HOME':str(root/'openfilm-home'),'OPENFILM_NO_BROWSER':'1','OPENFILM_NO_UPDATE_CHECK':'1'}
             result=subprocess.run(['node','--input-type=module','-e',script,helper,str(package),str(project),str(output)],env=env,capture_output=True,text=True,timeout=120,check=True)
@@ -94,7 +94,7 @@ const [helper,packageRoot,project,output]=process.argv.slice(1);
 const {renderAssets}=await import(helper);
 const {look}=await import(pathToFileURL(packageRoot+'/src/look.mjs'));
 const {render}=await import(pathToFileURL(packageRoot+'/src/render.mjs'));
-process.stdout.write(JSON.stringify(await renderAssets({assets:[{kind:'png'}]},project,output,{look,render})));
+process.stdout.write(JSON.stringify(await renderAssets({assets:[{kind:'png'}]},project,output,{look,render,layout:async()=>[]})));
 """
             env={**os.environ,'OPENFILM_HOME':str(root/'openfilm-home'),'OPENFILM_NO_BROWSER':'1','OPENFILM_NO_UPDATE_CHECK':'1'}
             result=subprocess.run(['node','--input-type=module','-e',script,helper,str(package),str(project),str(output)],env=env,capture_output=True,text=True,timeout=120,check=True)
@@ -117,7 +117,7 @@ const [helper,packageRoot,project,output]=process.argv.slice(1);
 const {renderAssets}=await import(helper);
 const {look}=await import(pathToFileURL(packageRoot+'/src/look.mjs'));
 const {render}=await import(pathToFileURL(packageRoot+'/src/render.mjs'));
-const result=await renderAssets({assets:[{kind:'png'},{kind:'mp4'}]},project,output,{look,render});
+const result=await renderAssets({assets:[{kind:'png'},{kind:'mp4'}]},project,output,{look,render,layout:async()=>[]});
 process.stdout.write(JSON.stringify(result));
 """
             env={**os.environ,'OPENFILM_HOME':str(root/'openfilm-home'),'OPENFILM_NO_BROWSER':'1','OPENFILM_NO_UPDATE_CHECK':'1'}

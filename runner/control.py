@@ -28,7 +28,7 @@ class ControlPlane:
                 return self.auto_worker.request_checkpoint(request['run'])
             if action=='human_review_decision_auto':
                 if self.auto_worker is None: raise ControlError('automatic worker unavailable')
-                return self.auto_worker.request_decision(request['run'],request['version'],request['decision'])
+                return self.auto_worker.request_decision(request['run'],request['version'],request['decision'],request.get('video_playback_refs'))
             if action=='automatic_control':
                 if self.auto_worker is None: raise ControlError('automatic worker unavailable')
                 return self.auto_worker.request_action(request['run'],request['operation'],request['parameters'])
@@ -144,7 +144,7 @@ class ControlPlane:
             if action=='retry_uncertain_source_review': return self.service.retry_uncertain_source_review(request['run'],request['new_run'],request['execution'])
             if action=='human_review_decision':
                 if self.service.human_review is None: raise ControlError('human review unavailable')
-                return self.service.human_review.decide(request['run'],request['queue_claim'],request['graph_claim'],request['version'],request['decision'])
+                return self.service.human_review.decide(request['run'],request['queue_claim'],request['graph_claim'],request['version'],request['decision'],request.get('video_playback_refs'))
             if action=='human_review_status':
                 if self.service.human_review is None: raise ControlError('human review unavailable')
                 return {'decision':self.service.human_review.current(request['run'])}

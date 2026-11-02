@@ -56,7 +56,7 @@ class MarketingGatesTests(unittest.TestCase):
     def test_graph_keeps_channel_reviews_independent(self):
         deps = gates.STAGE_DEPENDENCIES
         self.assertEqual(('freeze',), deps['linkedin_draft'])
-        self.assertEqual(('linkedin_draft',), deps['linkedin_review'])
+        self.assertEqual(('linkedin_draft','asset_production'), deps['linkedin_review'])
         self.assertNotIn('reddit_review', deps['linkedin_review'])
 
 if __name__ == '__main__': unittest.main()

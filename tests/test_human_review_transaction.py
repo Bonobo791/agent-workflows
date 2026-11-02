@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from types import SimpleNamespace
 
 from runner.human_review import HumanReview, HumanReviewError
@@ -7,6 +8,26 @@ from runner.service import Service
 
 
 class HumanReviewTransactionTests(unittest.TestCase):
+    def test_video_approval_requires_exact_playback_acknowledgement(self):
+        with tempfile.TemporaryDirectory() as root:
+            service=Service(root)
+            try:
+                service.create('r','marketing','task');service.enqueue('r');queue=service.queue.claim('worker',60);claim=service.claim('r')
+                manifest=service.artifacts.put(json.dumps({'assets':[{'kind':'mp4','artifact_ref':'video-a'},{'kind':'png','artifact_ref':'still'}]}).encode())
+                record=service.artifacts.put(json.dumps({'manifest_ref':manifest}).encode())
+                service.graph.db.execute("INSERT INTO graph_stages VALUES('r','asset_production','passed',?,1)",(record,))
+                service.graph.db.execute("INSERT INTO graph_stages VALUES('r','assembly','awaiting_review','package',1)")
+                service.task_intake=SimpleNamespace(revalidate=lambda _:True);service.verify_terminal=lambda _:True
+                review=HumanReview(service)
+                for refs in (None,[],['other'],['video-a','video-a']):
+                    with self.subTest(refs=refs), self.assertRaises(HumanReviewError): review.decide('r',queue['token'],claim,'package','approved',refs)
+                self.assertEqual(service.graph.db.execute('SELECT count(*) FROM human_review_decisions').fetchone()[0],0)
+                review.decide('r',queue['token'],claim,'package','approved',['video-a'])
+                self.assertEqual(review.current('r')['decision'],'approved')
+                service.graph.db.execute("DELETE FROM human_review_playback WHERE run='r'")
+                with self.assertRaises(HumanReviewError): review.current('r')
+            finally: service.close()
+
     def test_decision_requires_matching_audit_and_current_queue_fence(self):
         triggers=(
             "CREATE TRIGGER fail_test AFTER INSERT ON human_review_audit BEGIN UPDATE human_review_audit SET created=created+1 WHERE id=NEW.id; END",
