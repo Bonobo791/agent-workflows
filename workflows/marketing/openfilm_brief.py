@@ -43,7 +43,7 @@ def validate_brief(store, brief, content_ref, register_ref, social_drafts=None):
             draft=social_drafts.get(asset['channel']) if social_drafts is not None else None
             if not isinstance(texts,list) or len(texts)>100 or any(not isinstance(v,str) or not v.strip() or (v not in content and not (draft and v==draft['text'])) for v in texts): raise ValueError('text not in approved content')
             if refs:
-                if draft is None or draft['ref']!=refs[asset['channel']] or draft['text'] not in texts: raise ValueError('social copy not routed through OpenFilm')
+                if draft is None or asset['channel'] not in refs or draft['ref']!=refs[asset['channel']] or draft['text'] not in texts: raise ValueError('social copy not routed through OpenFilm')
             if not isinstance(ids,list) or len(ids)>100 or any(not isinstance(v,str) or v not in claims for v in ids) or len(ids)!=len(set(ids)): raise ValueError('claim unavailable')
             if not isinstance(asset['alt_text'],str) or not asset['alt_text'].strip() or not isinstance(asset['captions'],str) or (asset['kind']=='mp4' and not asset['captions'].strip()): raise ValueError('accessibility text unavailable')
             if not isinstance(asset['media'],list) or len(asset['media'])>100: raise ValueError('media list invalid')
