@@ -187,7 +187,7 @@ class StageDispatcher:
                     current={channel:item['ref'] for channel,item in social_draft_inputs(self.service,run).items()}
                     if record.get('_social_draft_refs')!=current:
                         self.service.graph.invalidate(run,'asset_brief',self.service.graph.prepare(run,'asset_brief',graph_claim),graph_claim,reason='upstream_unavailable')
-                except Exception: raise StageError('OpenFilm social inputs unavailable') from None
+                except Exception: return {'status':'blocked','reason':'OpenFilm social inputs unavailable'}
             legacy={}; freeze=self.service.graph.get(run,'freeze'); bound_task=None
             for channel in CHANNELS:
                 name=channel+'_review'; state=self.service.graph.get(run,name)
