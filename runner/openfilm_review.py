@@ -20,7 +20,7 @@ def _media_references(service,assets,brief_ref,project_ref):
             if preview['artifact_ref']!=preview['sha256']: raise ValueError('preview binding changed')
             service.artifacts.get(preview['artifact_ref']); previews.append(preview['artifact_ref'])
         report_ref=item['look_report_ref']; report=json.loads(service.artifacts.get(report_ref))
-        if not isinstance(report,dict) or set(report)!={'ok','lines'} or report['ok'] is not True or not isinstance(report['lines'],list) or any(not isinstance(line,str) or line.startswith('! text cut off ') for line in report['lines']) or not any(line.startswith('✓ ') and 'same picture' in line for line in report['lines']): raise ValueError('visual check unavailable')
+        if not isinstance(report,dict) or set(report)!={'ok','lines'} or report['ok'] is not True or not isinstance(report['lines'],list) or '✓ sampled text layout inspected' not in report['lines'] or any(not isinstance(line,str) or line.startswith('! text cut off ') for line in report['lines']) or not any(line.startswith('✓ ') and 'same picture' in line for line in report['lines']): raise ValueError('visual check unavailable')
         reports.append(report_ref)
     return refs,previews,reports
 
@@ -33,6 +33,8 @@ def _validate_report(report, refs, parsed, inputs):
         if not isinstance(item,dict) or set(item)!=checks or item['artifact_ref']!=ref or any(type(item[k]) is not bool for k in checks-{'artifact_ref'}): raise ValueError('asset checks unavailable')
     if parsed['status']=='passed' and any(not all(item[k] for k in checks-{'artifact_ref'}) for item in report['assets']): raise ValueError('asset checks failed')
     if parsed['status']=='blocked' and not any(item['severity']=='blocking' and item['resolution']=='open' for item in parsed['findings']): raise ValueError('blocking finding unavailable')
+    for item in report['assets']:
+        if not all(item[k] for k in checks-{'artifact_ref'}) and not any(f['severity']=='blocking' and f['resolution']=='open' and f['evidence']==item['artifact_ref'] and isinstance(f.get('location'),str) and f['location'].strip() for f in parsed['findings']): raise ValueError('asset-specific blocking finding unavailable')
 
 def _review_inputs(service,reviewer,run,session,subject,refs,access,inputs,timeout,cancelled):
     if _bounded(lambda:reviewer.verify_access(run,session,subject,refs,access),time.monotonic()+timeout,cancelled) is not True: raise ValueError('media access unverified')

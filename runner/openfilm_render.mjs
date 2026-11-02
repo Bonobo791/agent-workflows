@@ -8,6 +8,60 @@ import { createRequire } from 'node:module';
 const MAX_BYTES = 100 * 1024 * 1024;
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
+// Inspects rendered text boxes in the same isolated browser used by OpenFilm.
+export async function inspectLayout(folder, open) {
+  const session = await open(folder, { offline: true, network: false, playable: true });
+  try {
+    const { film } = session;
+    const duration = film.meta.duration;
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error('layout duration unavailable');
+    const findings = new Set();
+    let inspected = 0;
+    for (let i = 0; i < 12; i++) {
+      const time = (duration - Math.min(0.001, duration / 2)) * i / 11;
+      await film.seek(time);
+      for (const frame of film.page.frames()) {
+        if (session.isFilm && frame === film.page.mainFrame()) continue;
+        const owner = await frame.frameElement().catch(() => null);
+        if (owner && !(await owner.isVisible())) continue;
+        const result = await frame.evaluate(() => {
+          if (!window.film || typeof window.film.frame !== 'function') return null;
+          const rects = [], owners = new Map();
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode, el = node.parentElement;
+            if (!node.textContent.trim() || !el) continue;
+            let visible = true;
+            for (let p = el; p; p = p.parentElement) {
+              const s = getComputedStyle(p);
+              if (s.display === 'none' || s.visibility !== 'visible' || Number(s.opacity) < 0.05) { visible = false; break; }
+            }
+            if (!visible) continue;
+            if (!owners.has(el)) owners.set(el, owners.size);
+            const range = document.createRange(); range.selectNodeContents(node);
+            for (const r of range.getClientRects()) if (r.width > 1 && r.height > 1) rects.push({x:r.x,y:r.y,right:r.right,bottom:r.bottom,owner:owners.get(el),text:node.textContent.trim().slice(0,80)});
+            if (rects.length > 2000) throw new Error('too many text rectangles');
+          }
+          const problems = [];
+          for (let a = 0; a < rects.length; a++) {
+            const r = rects[a];
+            if (r.x < -1 || r.y < -1 || r.right > innerWidth + 1 || r.bottom > innerHeight + 1) problems.push(`text outside frame: ${r.text}`);
+            for (let b = 0; b < a; b++) {
+              const q = rects[b];
+              if (r.owner === q.owner) continue;
+              if (Math.min(r.right,q.right)-Math.max(r.x,q.x)>2 && Math.min(r.bottom,q.bottom)-Math.max(r.y,q.y)>2) problems.push(`overlapping text: ${q.text} / ${r.text}`);
+            }
+          }
+          return { count: rects.length, problems: problems.slice(0,20) };
+        });
+        if (result) { inspected += result.count; for (const problem of result.problems) findings.add(`${time.toFixed(2)}s: ${problem}`); }
+      }
+    }
+    if (!inspected) throw new Error('layout text inspection unavailable');
+    return [...findings];
+  } finally { await session.close(); }
+}
+
 async function confinedFile(root, path) {
   const resolvedRoot = await realpath(root);
   const resolvedPath = await realpath(path);
@@ -19,7 +73,7 @@ async function confinedFile(root, path) {
 }
 
 export async function renderAssets(brief, projectRoot, outputRoot, api) {
-  if (!brief || !Array.isArray(brief.assets) || brief.assets.length < 1 || brief.assets.length > 10 || !api || typeof api.look !== 'function' || typeof api.render !== 'function') throw new Error('invalid render request');
+  if (!brief || !Array.isArray(brief.assets) || brief.assets.length < 1 || brief.assets.length > 10 || !api || typeof api.look !== 'function' || typeof api.render !== 'function' || typeof api.layout !== 'function') throw new Error('invalid render request');
   const project = await realpath(projectRoot);
   const output = await realpath(outputRoot);
   if ((await readdir(output)).length) throw new Error('output directory must be empty');
@@ -28,6 +82,14 @@ export async function renderAssets(brief, projectRoot, outputRoot, api) {
     if (!asset || !['png', 'mp4'].includes(asset.kind)) throw new Error('unsupported asset kind');
     const folder = brief.assets.length === 1 ? project : join(project, 'projects', String(index));
     await confinedFile(project, join(folder, 'film.html'));
+    let layout;
+    try { layout = await api.layout(folder); }
+    catch { layout = ['layout inspection unavailable']; }
+    if (!Array.isArray(layout) || layout.some(x => typeof x !== 'string')) layout = ['layout inspection unavailable'];
+    if (layout.length) {
+      await writeFile(join(output, 'look-failure.json'), JSON.stringify({ok:false,lines:layout.map(x => `asset ${index}: ${x}`)}), {flag:'wx',mode:0o600});
+      throw new Error('layout inspection failed');
+    }
     const check = async (args) => {
       const inspected = await api.look(args, { count: 12 });
       if (inspected && inspected.ok === false && Array.isArray(inspected.lines) && inspected.lines.every((line) => typeof line === 'string')) {
@@ -52,7 +114,7 @@ export async function renderAssets(brief, projectRoot, outputRoot, api) {
     const assetPath = await confinedFile(output, join(output, name));
     const bytes = await readFile(assetPath);
     const reportName = `look-${index}.json`;
-    const report = Buffer.from(JSON.stringify({ ok: true, lines: [...inspected.lines, ...(still ? still.lines : [])] }));
+    const report = Buffer.from(JSON.stringify({ ok: true, lines: ['✓ sampled text layout inspected', ...inspected.lines, ...(still ? still.lines : [])] }));
     if (report.length > 1024 * 1024) throw new Error('visual report too large');
     await writeFile(join(output, reportName), report, { flag: 'wx', mode: 0o600 });
     outputs.push({ path: name, sha256: hash(bytes), previews: [{ path: previewName, sha256: hash(previewBytes) }], report: { path: reportName, sha256: hash(report) } });
@@ -69,9 +131,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
     const require = createRequire(import.meta.url);
     if (require('openfilm/package.json').version !== '0.2.6') throw new Error('OpenFilm 0.2.6 required');
-    const [{ look }, { render }] = await Promise.all([import('openfilm/look'), import('openfilm/render')]);
+    const [{ look }, { render }, { open }] = await Promise.all([import('openfilm/look'), import('openfilm/render'), import('openfilm/shared')]);
     const brief = JSON.parse(await readFile('/workspace/brief.json', 'utf8'));
-    const result = await renderAssets(brief, '/workspace/project', '/output', { look, render });
+    const result = await renderAssets(brief, '/workspace/project', '/output', { look, render, layout: folder => inspectLayout(folder, open) });
     await writeFile('/output/render-result.json', JSON.stringify(result), { flag: 'wx', mode: 0o600 });
   } catch {
     process.stderr.write('OpenFilm render or verification failed.\n');

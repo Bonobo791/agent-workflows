@@ -13,7 +13,7 @@ const {renderAssets}=await import(process.argv[1]);
 const {writeFile}=await import('node:fs/promises');
 const {join}=await import('node:path');
 const [project,out]=process.argv.slice(2), calls=[];
-const api={look:async(args)=>{calls.push(args.length); const file=join(project,args.length===1?'sheet.png':'frame.png'); await writeFile(file,args.length===1?'sheet':'frame'); return {ok:true,lines:['✓ same picture'],files:[file]}},render:async()=>{throw Error('unexpected video render')}};
+const api={layout:async()=>[],look:async(args)=>{calls.push(args.length); const file=join(project,args.length===1?'sheet.png':'frame.png'); await writeFile(file,args.length===1?'sheet':'frame'); return {ok:true,lines:['✓ same picture'],files:[file]}},render:async()=>{throw Error('unexpected video render')}};
 const result=await renderAssets({assets:[{kind:'png'}]},project,out,api); console.log(JSON.stringify({result,calls}));
 """
         with tempfile.TemporaryDirectory() as root:
@@ -31,7 +31,7 @@ import {renderAssets} from process.argv[1];
 import {writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 const [project,out,mode]=process.argv.slice(2);
-const api={look:async()=>{const file=join(project,'preview.png'); await writeFile(file,'synthetic preview'); return {ok:mode!=='bad',lines:mode==='cutoff' ? ['! text cut off by the edge of the frame at 0, 0.5', '✓ drawn again: same picture'] : [mode==='spoof' ? '! text cut off: same picture' : '✓ drawn again: same picture'],files:[file]}},
+const api={layout:async()=>{if(mode==='unavailable') throw Error('no browser'); return mode==='overlap'?['0.00s: overlapping text']:[]},look:async()=>{const file=join(project,'preview.png'); await writeFile(file,'synthetic preview'); return {ok:mode!=='bad',lines:mode==='cutoff' ? ['! text cut off by the edge of the frame at 0, 0.5', '✓ drawn again: same picture'] : [mode==='spoof' ? '! text cut off: same picture' : '✓ drawn again: same picture'],files:[file]}},
   render:async(_args,opts)=>{await writeFile(opts.out,'synthetic video'); return {out:opts.out}}};
 try {console.log(JSON.stringify(await renderAssets({assets:[{kind:'mp4'}]},project,out,api)))} catch {process.exitCode=1}
 """
@@ -57,3 +57,12 @@ try {console.log(JSON.stringify(await renderAssets({assets:[{kind:'mp4'}]},proje
             cropped=subprocess.run(['node','--input-type=module','-e',script,helper,str(project),str(cutoff),'cutoff'],capture_output=True,text=True,timeout=10,check=True)
             report=json.loads((cutoff/json.loads(cropped.stdout)['outputs'][0]['report']['path']).read_text())
             self.assertTrue(any(line.startswith('! text cut off ') for line in report['lines']))
+            overlap=Path(root)/'overlap'; overlap.mkdir()
+            blocked=subprocess.run(['node','--input-type=module','-e',script,helper,str(project),str(overlap),'overlap'],capture_output=True,text=True,timeout=10)
+            self.assertNotEqual(blocked.returncode,0)
+            self.assertIn('overlapping text',json.loads((overlap/'look-failure.json').read_text())['lines'][0])
+            self.assertFalse((overlap/'asset-0.mp4').exists())
+            unavailable=Path(root)/'unavailable'; unavailable.mkdir()
+            blocked=subprocess.run(['node','--input-type=module','-e',script,helper,str(project),str(unavailable),'unavailable'],capture_output=True,text=True,timeout=10)
+            self.assertNotEqual(blocked.returncode,0)
+            self.assertIn('layout inspection unavailable',json.loads((unavailable/'look-failure.json').read_text())['lines'][0])

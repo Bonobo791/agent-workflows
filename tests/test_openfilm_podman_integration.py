@@ -161,6 +161,23 @@ class RenderFixtureCleanupTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('OPENFILM_PODMAN_IMAGE') and os.environ.get('OPENFILM_PODMAN_SOCKET'), 'rootless Podman render not configured')
 class PodmanRenderIntegrationTests(unittest.TestCase):
+    def test_overlapping_text_is_blocked_and_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); workspace=root/'workspace'; output=root/'output'
+            workspace.mkdir(); output.mkdir()
+            shutil.copytree(Path(__file__).parent/'fixtures'/'openfilm',workspace/'project')
+            (workspace/'project'/'scene.html').write_text('''<!doctype html><html><body style="margin:0"><div style="position:absolute;top:80px">First line</div><div style="position:absolute;top:80px">Overlapping line</div><script>window.film={duration:1,width:180,height:320,frame(t){}}</script></body></html>''')
+            (workspace/'brief.json').write_text(json.dumps({'assets':[{'kind':'png'}]}))
+            command=['podman','run','--rm','--network','none','--read-only','--cap-drop','all',
+                     '--security-opt','no-new-privileges','--userns','keep-id','--user',f'{os.geteuid()}:{os.getegid()}',
+                     '--tmpfs','/tmp:rw,nosuid,nodev','-e','OPENFILM_HOME=/tmp/openfilm',
+                     '-v',str(workspace)+':/workspace:rw,Z','-v',str(output)+':/output:rw,Z',os.environ['OPENFILM_PODMAN_IMAGE']]
+            completed=subprocess.run(command,capture_output=True,timeout=120)
+            self.assertNotEqual(completed.returncode,0)
+            report=json.loads((output/'look-failure.json').read_text())
+            self.assertFalse(report['ok']); self.assertTrue(any('asset 0:' in line and 'overlapping text' in line for line in report['lines']))
+            self.assertFalse((output/'asset-0.png').exists())
+
     def test_credential_free_still_and_vertical_video(self):
         from runner.artifacts import ArtifactStore
         from workflows.marketing.assets import ingest_verified_asset, ingest_verified_preview

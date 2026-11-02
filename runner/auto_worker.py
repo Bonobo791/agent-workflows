@@ -43,11 +43,11 @@ class AutoWorker:
             if self.thread is not None: raise AutoWorkerError('automatic worker already started')
             self.state={'status':'starting'}; self.thread=threading.Thread(target=self._run,daemon=True); self.thread.start()
         return {'started':True}
-    def request_decision(self,run,version,decision):
+    def request_decision(self,run,version,decision,video_playback_refs=None):
         if decision not in ('approved','rejected') or not isinstance(version,str) or len(version)!=64 or any(c not in '0123456789abcdef' for c in version): raise AutoWorkerError('invalid human decision')
         with self.guard:
             if self.state.get('run')!=run or self.state.get('status')!='awaiting_review' or self.state.get('version')!=version or self.pending_decision is not None or self.checkpoint_pending or self.stop_event.is_set(): raise AutoWorkerError('current review unavailable')
-            self.pending_decision={'run':run,'version':version,'decision':decision}; self.wake.set()
+            self.pending_decision={'run':run,'version':version,'decision':decision,'video_playback_refs':video_playback_refs}; self.wake.set()
         return {'pending':True,'version':version}
     def request_action(self,run,operation,parameters):
         allowed={'recover_correction','refresh_brief','refresh_asset_brief','retry_source_coverage','engineering_workspace_binding','bind_engineering_workspace','pr_propose','pr_approve','pr_execute','pr_review','pr_request_qa','pr_post_ready','pr_reconcile','pr_reauthorize','pr_withdraw'}
@@ -142,7 +142,10 @@ class AutoWorker:
                         pending=self.pending_decision; self.pending_decision=None
                         if pending is not None:self.state={**self.state,'status':'deciding'}
                     if pending is not None:
-                        try: service.human_review.decide(run,queue['token'],claim,pending['version'],pending['decision'])
+                        try:
+                            args=(run,queue['token'],claim,pending['version'],pending['decision'])
+                            if pending['video_playback_refs'] is None: service.human_review.decide(*args)
+                            else: service.human_review.decide(*args,pending['video_playback_refs'])
                         except Exception: self._set(status=state,stage=stage,run=run,version=version,reason='human decision rejected; review package changed or evidence unavailable')
                     decision=service.human_review.current(run)
                     if decision and decision['decision']=='approved':

@@ -584,11 +584,15 @@ class Service:
                         if name=='asset_production':
                             from runner.openfilm_platform import verify_platform_block
                             if not verify_platform_block(self,run,artifact): raise ServiceError('platform block evidence unavailable')
+                            if 'look_report_ref' in artifact:
+                                try: summary[name]['visual_report']=json.loads(self.artifacts.get(artifact['look_report_ref']))
+                                except Exception: raise ServiceError('visual report unavailable') from None
                         if name=='asset_production' and 'manifest_ref' in artifact:
                             from runner.openfilm_review import verify_evidence
                             if entry['status']!=artifact.get('status') or not verify_evidence(self,run,artifact): raise ServiceError('asset review evidence unavailable')
                             summary[name]['asset_manifest']=json.loads(self.artifacts.get(artifact['manifest_ref']))
                             summary[name]['asset_review']=json.loads(self.artifacts.get(artifact['response_ref']))
+                            summary[name]['asset_report']=json.loads(self.artifacts.get(artifact['report_ref']))
                         if name=='brief' and artifact.get('_source_verification'):
                             try: summary[name]['source_verification']=json.loads(self.artifacts.get(artifact['_source_verification']))
                             except Exception: raise ServiceError('source verification unavailable') from None

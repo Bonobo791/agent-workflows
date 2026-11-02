@@ -122,6 +122,7 @@ def produce(service, run, queue_claim, graph_claim, backend):
                     report_ref=failure[0]['look_report_ref']; report=json.loads(service.artifacts.get(report_ref))
                     if isinstance(report,dict) and set(report)=={'ok','lines'} and report['ok'] is False and isinstance(report['lines'],list) and all(isinstance(line,str) for line in report['lines']):
                         manifest.update(look_report_ref=report_ref,project_ref=result['project_ref'])
+                        if any(line.startswith('asset ') for line in report['lines']): manifest['reason']='text layout check failed; see visual report'
             except (TypeError,ValueError,KeyError,ArtifactError): pass
             status='blocked'
         else:
@@ -150,7 +151,7 @@ def produce(service, run, queue_claim, graph_claim, backend):
                     report_ref=MarketingAdapter(service.artifacts,None).ingest(result['root'],report['path'],max_bytes=1048576)
                     if report_ref!=report['sha256']: raise OpenFilmStageError('visual report changed')
                     report_data=json.loads(service.artifacts.get(report_ref))
-                    if not isinstance(report_data,dict) or set(report_data)!={'ok','lines'} or report_data['ok'] is not True or not isinstance(report_data['lines'],list) or any(not isinstance(line,str) for line in report_data['lines']) or not any(line.startswith('✓ ') and 'same picture' in line for line in report_data['lines']): raise OpenFilmStageError('visual check unavailable')
+                    if not isinstance(report_data,dict) or set(report_data)!={'ok','lines'} or report_data['ok'] is not True or not isinstance(report_data['lines'],list) or any(not isinstance(line,str) for line in report_data['lines']) or '✓ sampled text layout inspected' not in report_data['lines'] or not any(line.startswith('✓ ') and 'same picture' in line for line in report_data['lines']): raise OpenFilmStageError('visual check unavailable')
                     if any(line.startswith('! text cut off ') for line in report_data['lines']): raise TextCutoffError()
                     assets.append({'channel':spec['channel'],'kind':spec['kind'],**checked,'previews':preview_refs,'look_report_ref':report_ref})
                 manifest={'status':'awaiting_review','brief_ref':brief_ref,'content_ref':content_ref,'platform_ref':platform_ref,'attempt_id':attempt_id,'project_ref':result['project_ref'],'terminal_ref':result['terminal_ref'],'supervisor_ref':supervisor_ref,'assets':assets,'outputs':[]}

@@ -37,7 +37,7 @@ class OpenFilmStageTests(unittest.TestCase):
             graph.finish('run',stage,graph.prepare('run',stage,self.claim),'passed',ref,self.claim)
         self.render_root=self.root/'render'; self.render_root.mkdir(); (self.render_root/'asset.png').write_bytes(png())
         (self.render_root/'preview.png').write_bytes(png(3,2))
-        (self.render_root/'look.json').write_text(json.dumps({'ok':True,'lines':['✓ drawn again: same picture']}))
+        (self.render_root/'look.json').write_text(json.dumps({'ok':True,'lines':['✓ sampled text layout inspected','✓ drawn again: same picture']}))
         project=io.BytesIO()
         with zipfile.ZipFile(project,'w') as archive: archive.writestr('film.html','<html>synthetic film</html>')
         self.project=store.put(project.getvalue()); self.terminal=store.put(b'synthetic terminated process evidence')
@@ -72,7 +72,7 @@ class OpenFilmStageTests(unittest.TestCase):
         with self.assertRaises(OpenFilmStageError): produce(self.service,'run',self.queue,self.claim,self.backend)
         self.assertEqual(self.backend.calls,1)
     def test_production_rejects_repeated_text_cutoff_warning(self):
-        (self.render_root/'look.json').write_text(json.dumps({'ok':True,'lines':['! text cut off by its box at 0, 0.5','✓ drawn again: same picture']}))
+        (self.render_root/'look.json').write_text(json.dumps({'ok':True,'lines':['✓ sampled text layout inspected','! text cut off by its box at 0, 0.5','✓ drawn again: same picture']}))
         result=produce(self.service,'run',self.queue,self.claim,self.backend)
         self.assertEqual(result['status'],'blocked')
         manifest=json.loads(self.service.artifacts.get(result['artifact_ref']))
@@ -265,6 +265,16 @@ class OpenFilmStageTests(unittest.TestCase):
         item={'artifact_ref':'asset','content_fidelity':True,'brand_fidelity':True,'rights':True,'platform_suitability':True,'readability':True,'captions':True,'safe_zones':True}
         parsed={'input_versions':['input'],'status':'passed','outputs':['report'],'findings':[]}
         with self.assertRaises(ValueError): _validate_report({'assets':[item]},['asset'],parsed,['input'])
+    def test_failed_asset_requires_its_own_located_blocking_finding(self):
+        from runner.openfilm_review import _validate_report
+        item={'artifact_ref':'asset','content_fidelity':True,'brand_fidelity':True,'rights':True,'platform_suitability':True,'readability':False,'captions':True,'safe_zones':True,'audio':True}
+        finding={'severity':'blocking','resolution':'open','evidence':'other','location':'bottom'}
+        parsed={'input_versions':['asset','other'],'status':'blocked','outputs':['report'],'findings':[finding]}
+        with self.assertRaises(ValueError): _validate_report({'assets':[item]},['asset'],parsed,parsed['input_versions'])
+        finding['evidence']='asset'; finding['location']=' '
+        with self.assertRaises(ValueError): _validate_report({'assets':[item]},['asset'],parsed,parsed['input_versions'])
+        finding['location']='bottom: footer overlaps the body text'
+        _validate_report({'assets':[item]},['asset'],parsed,parsed['input_versions'])
     def test_instagram_review_binds_independently_reviewed_media(self):
         produce(self.service,'run',self.queue,self.claim,self.backend)
         reviewer=self.make_reviewer(); service=self.service
@@ -401,7 +411,7 @@ class OpenFilmStageTests(unittest.TestCase):
                         Path(output,'look-failure.json').write_text(json.dumps({'ok':False,'lines':['✗ synthetic missing font']}))
                         self.exit_code=1; self.state='exited'; return 204,None
                     Path(output,'asset.png').write_bytes(png()); Path(output,'preview.png').write_bytes(png(3,2))
-                    Path(output,'look.json').write_text(json.dumps({'ok':True,'lines':['✓ same picture']}))
+                    Path(output,'look.json').write_text(json.dumps({'ok':True,'lines':['✓ sampled text layout inspected','✓ same picture']}))
                     def entry(name): return {'path':name,'sha256':hashlib.sha256(Path(output,name).read_bytes()).hexdigest()}
                     asset=entry('asset.png'); asset.update(previews=[entry('preview.png')],report=entry('look.json'))
                     Path(output,'render-result.json').write_text(json.dumps({'outputs':[asset]}))
@@ -498,9 +508,8 @@ class OpenFilmStageTests(unittest.TestCase):
         produce(self.service,'run',self.queue,self.claim,self.backend)
         graph=self.service.graph
         for channel in ('linkedin','x','facebook','reddit'):
-            for suffix in ('_draft','_review'):
-                stage=channel+suffix
-                graph.finish('run',stage,graph.prepare('run',stage,self.claim),'passed',self.content,self.claim)
+            stage=channel+'_draft'
+            graph.finish('run',stage,graph.prepare('run',stage,self.claim),'passed',self.content,self.claim)
         graph.finish('run','instagram_draft',graph.prepare('run','instagram_draft',self.claim),'passed',self.content,self.claim)
         dispatcher=StageDispatcher(self.service)
         self.assertEqual(dispatcher.next_stage('run',self.claim),'awaiting_review')

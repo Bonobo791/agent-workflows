@@ -23,10 +23,22 @@ OPIK_VERSION="$OPIK_RELEASE" ./opik.sh
 ./opik.sh --verify
 ```
 
-The UI is available at `http://127.0.0.1:5173` after the frontend port mapping
-in `deployment/docker-compose/docker-compose.yaml` is restricted to host
-loopback. Upstream Compose publishes host ports on all interfaces by default;
-verify every published port before starting the stack. Upstream documents
+The local loopback, ClickHouse, Podman, and frontend-resolver changes that made
+this stack run are saved as
+`observability/local/opik-2.2.120-local.patch`. They are not committed upstream
+and exist only as this patch. Apply the patch to a clean `2.2.120` checkout
+before starting the stack:
+
+```sh
+cd opik
+git apply /absolute/path/to/agent-workflows/observability/local/opik-2.2.120-local.patch
+```
+
+The UI is available at `http://127.0.0.1:5173`. Upstream Compose publishes host
+ports on all interfaces by default. The patch restricts the frontend, backend,
+MySQL, Redis, MinIO, ClickHouse, Zookeeper, and the Python backend to loopback.
+Jaeger and the OTEL collector (`opik-otel` profile) are not yet restricted;
+verify every published port before using that profile. Upstream documents
 local data under `~/opik`; protect and back up that directory. Do not use
 `./opik.sh --clean` or `docker compose down --volumes` unless you intend to
 delete Opik data. Use `./opik.sh --stop` to stop the stack while retaining its

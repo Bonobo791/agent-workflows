@@ -7,9 +7,10 @@ import subprocess
 import tempfile
 import time
 import unittest
+from tests.source_fixture import verifier as fixture_verifier
 
 
-@unittest.skipUnless(os.environ.get('WORKFLOW_TEST_PUBLIC_SOURCE')=='1' and os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1' and os.environ.get('CODEX_TEST_EXECUTABLE'),'signed-in marketing probe not configured')
+@unittest.skipUnless((os.environ.get('WORKFLOW_TEST_PUBLIC_SOURCE')=='1' or os.environ.get('WORKFLOW_TEST_SYNTHETIC_SOURCE')=='1') and os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1' and os.environ.get('CODEX_TEST_EXECUTABLE'),'signed-in marketing probe not configured')
 class LocalMarketingGraphLiveTests(unittest.TestCase):
     def test_fixture_reaches_freeze_approval_gate(self):
         from runner.codex_executor import CodexExecutor
@@ -30,13 +31,15 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
         temporary=tempfile.TemporaryDirectory(prefix='workflow-marketing-graph-live-',delete=False)
         root=Path(temporary.name); workspace=root/'workspace'; workspace.mkdir(mode=0o700)
         skills=root/'skills'; skills.mkdir(mode=0o700)
+        synthetic_source=os.environ.get('WORKFLOW_TEST_SYNTHETIC_SOURCE')=='1'
+        source_url='https://example.com/'
         for name,content in {
             'brief':'Prepare only the requested fixture brief and exact candidate source register. Do not invent claims.',
             'writer':'Write the requested note using only supplied verified evidence. Include the required heading and both requested supported statements; do not return only a heading.',
-            'editor':'Review the assigned draft against the supplied source and rules. Report actual material problems only.',
+            'editor':('Review the draft against the supplied source register and page rules. This offline synthetic fixture uses verifier_id synthetic-independent-verifier as its declared test authority and intentionally does not fetch the public URL; check that the draft has the required heading and only registered claims. Report actual material problems only.' if synthetic_source else 'Review the assigned draft against the supplied source and rules. Report actual material problems only.'),
             'source':'Review supplied source snapshots. A page is primary evidence of its own HTML title.',
-            'channel-writer':'Adapt the supplied frozen content for the assigned channel. Do not introduce new claims or publish.',
-            'channel-editor':'Independently review the assigned channel draft against its supplied input. Report actual material problems only.',
+            'channel-writer':'Adapt the supplied frozen content for the assigned channel. Use supplied source_verification and source_snapshots; do not request duplicate evidence when a verified proof is present. Do not introduce new claims or publish.',
+            'channel-editor':('Independently review the assigned channel draft against its supplied source verification and OpenFilm asset review. For this offline synthetic fixture, trust verifier_id synthetic-independent-verifier as the source authority; compare the exact draft, channel-bound brief asset and passed per-asset checks. The asset reviewer inspected the actual media. Reddit still requires a real community and rules. Report actual material problems only.' if synthetic_source else 'Independently review the assigned channel draft against its supplied source verification, snapshots and OpenFilm asset review. Compare the exact draft, channel-bound brief asset and passed per-asset checks; the asset reviewer inspected the actual media. Report actual material problems only.'),
         }.items():
             directory=skills/name; directory.mkdir(mode=0o700); (directory/'SKILL.md').write_text(content)
         render=os.environ.get('WORKFLOW_TEST_RENDER')=='1'
@@ -91,7 +94,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 service.openfilm_reviewer=LocalAssetReviewer(service)
                 class FixturePlatform:
                     def check(self,run,brief_ref,brief):
-                        now=time.time(); source=service.artifacts.put(b'Synthetic fixture policy: still image dimensions are accepted for this test only.')
+                        now=time.time(); source=service.artifacts.put(b'Synthetic fixture policy: requested media dimensions and formats are accepted for this test only; no live platform acceptance is claimed.')
                         assets=[{**{key:item[key] for key in ('channel','kind','width','height','duration_seconds')},'source_ref':source,'supported':True} for item in brief['assets']]
                         return service.artifacts.put(json.dumps({'brief_ref':brief_ref,'checked_at':now,'expires_at':now+3600,'assets':assets}).encode())
                     def verify(self,*args): return True
@@ -104,10 +107,11 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 service.approve('controller','openfilm_builder_policy',builder.policy_hash,'fixture-operator')
                 service.approve('controller','openfilm_policy',service.openfilm_backend.policy_hash,'fixture-operator')
             service.page_rules={'note':{'headings':[{'level':1,'text':'Example Domain'}]}}
-            service.source_snapshots=SourceSnapshots(service,SourceFetcher(['https://example.com/'],timeout=15)); service.source_reviewer=SourceReviewer(service)
+            service.source_snapshots=SourceSnapshots(service,SourceFetcher([source_url],timeout=15)); service.source_reviewer=SourceReviewer(service)
+            if synthetic_source: service.source_verifier=fixture_verifier
             task={'task_id':'fixture','ready':True,'leaf':True,'dependencies_complete':True,'owner':None,'due':None,'existing_work':[],'format':'note',
-                  'description':'Write a short note with the exact Markdown heading # Example Domain. The only claims are that the HTML document title is Example Domain and the domain is for documentation examples. Use only https://example.com/ as source; assign source-1 and evidence-1 and distinct claim IDs. Do not add claims.'}
-            if render: task['description']+=' For the separate visual asset only, request one Instagram PNG at 1080 by 1080 pixels with no external media; its visible text must be the exact approved heading Example Domain. This visual restriction does not limit the note body.'
+                  'description':f'Write a short note with the exact Markdown heading # Example Domain. The only claim is that the HTML document title is Example Domain. Use only {source_url} as source; assign source-1, evidence-1 and claim-1. Do not add claims.'}
+            if render: task['description']+=' For the separate visuals only, create one 1080 by 1080 PNG for each of LinkedIn, X, Facebook, Instagram, and Reddit, plus one Instagram Reel MP4 at 1080 by 1920 pixels lasting 8 seconds. Give each PNG a visibly distinct treatment described in its alt_text: LinkedIn navy with a cream outline; X charcoal with cyan corner arcs; Facebook sky blue with a cream circle; Instagram coral-to-orange gradient with a small white ring fixed in the upper-right corner and the heading centered in a clear band below it; Reddit coral with a dark rounded shape. Keep the ring away from every letter. Use no platform logos or names. Use the single approved Instagram draft for both Instagram assets; there is no separate Reel draft. Keep the Instagram Reel heading fixed in a clear center band with a gentle fade; move a geometric shape left to right only within the upper 20 percent of the frame. The shape must never touch, cross, or sit behind any letter; sample frames must show visible motion. Do not use external media or add claims. The only visible words on every visual must be the exact approved heading Example Domain; put that concise excerpt first in approved_text and keep the full channel draft there only for traceability. Keep each design simple with generous margins and no overlapping text. This visual restriction does not limit the note body.'
             service.create('r','marketing','fixture'); service.enqueue('r'); queue=service.lifecycle.claim(1200); claim=service.graph.claim('r',1200)
             self.assertTrue(manual_fence_ready(service,'r'))
             task_ref=service.artifacts.put(json.dumps(task).encode())
@@ -127,16 +131,15 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 for channel in ('linkedin','x','facebook','instagram','reddit'):
                     outcome=dispatcher.step('r',queue['token'],claim)
                     self.assertEqual((outcome['stage'],outcome['status']),(channel+'_draft','passed'))
-                for channel in ('linkedin','x','facebook','reddit'):
-                    outcome=dispatcher.step('r',queue['token'],claim)
-                    self.assertEqual(outcome['stage'],channel+'_review'); self.assertIn(outcome['status'],('passed','blocked'))
-                    if channel=='reddit': self.assertEqual(outcome['status'],'blocked')
-                    self.assertTrue(dispatcher._verify_recorded_review('r',channel+'_review'))
-                    draft=json.loads(service.artifacts.get(service.graph.get('r',channel+'_draft')['version']))
-                    review=json.loads(service.artifacts.get(service.graph.get('r',channel+'_review')['version']))
-                    self.assertNotEqual(draft['session_id'],review['session_id'])
                 outcome=dispatcher.step('r',queue['token'],claim)
-                self.assertEqual(outcome['stage'],'asset_brief'); self.assertIn(outcome['status'],('passed','blocked'))
+                self.assertEqual((outcome['stage'],outcome['status']),('asset_brief','passed'))
+                if render:
+                    brief_ref=json.loads(service.artifacts.get(service.graph.get('r','asset_brief')['version']))['outputs'][0]
+                    assets=json.loads(service.artifacts.get(brief_ref))['assets']
+                    still=next(item for item in assets if item['channel']=='instagram' and item['kind']=='png')['alt_text'].lower()
+                    reel=next(item for item in assets if item['channel']=='instagram' and item['kind']=='mp4')['alt_text'].lower()
+                    self.assertTrue('ring' in still and 'upper-right' in still and 'away from every letter' in still)
+                    self.assertTrue('shape' in reel and ('upper 20%' in reel or 'upper 20 percent' in reel) and 'center band' in reel and 'letter' in reel and ('away' in reel or 'never touch' in reel))
                 outcome=dispatcher.step('r',queue['token'],claim)
                 if platform_source:
                     self.assertEqual((outcome['stage'],outcome['status']),('asset_production','blocked'))
@@ -148,15 +151,30 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                 elif render:
                     self.assertEqual((outcome['stage'],outcome['status']),('asset_production','awaiting_review'))
                     manifest=json.loads(service.artifacts.get(service.graph.get('r','asset_production')['version']))
-                    self.assertTrue(manifest['assets']); self.assertTrue(all(item['kind']=='png' for item in manifest['assets']))
-                    self.assertTrue(any(item['channel']=='instagram' and item['width']==1080 and item['height']==1080 for item in manifest['assets']))
+                    self.assertEqual({(item['channel'],item['kind']) for item in manifest['assets']},{(channel,'png') for channel in ('linkedin','x','facebook','instagram','reddit')}|{('instagram','mp4')})
+                    stills=[item for item in manifest['assets'] if item['kind']=='png']
+                    self.assertTrue(all(item['width']==1080 and item['height']==1080 for item in stills))
+                    self.assertEqual(len({item['sha256'] for item in stills}),5)
+                    reel=next(item for item in manifest['assets'] if item['channel']=='instagram' and item['kind']=='mp4')
+                    self.assertEqual((reel['width'],reel['height'],reel['duration_seconds']),(1080,1920,8))
+                    layout=json.loads(service.artifacts.get(reel['look_report_ref']))
+                    self.assertFalse(any(line.startswith('! every frame looks the same') for line in layout['lines']))
                     outcome=dispatcher.step('r',queue['token'],claim)
-                    self.assertEqual(outcome['stage'],'asset_production'); self.assertIn(outcome['status'],('passed','blocked'))
+                    self.assertEqual((outcome['stage'],outcome['status']),('asset_production','passed'))
+                    asset_record=json.loads(service.artifacts.get(service.graph.get('r','asset_production')['version']))
+                    checks=json.loads(service.artifacts.get(asset_record['report_ref']))['assets']
+                    self.assertTrue(all(value is True for item in checks for key,value in item.items() if key!='artifact_ref'))
                 else: self.assertEqual((outcome['stage'],outcome['status']),('asset_production','blocked'))
-                outcome=dispatcher.step('r',queue['token'],claim)
-                self.assertEqual(outcome['stage'],'instagram_review'); self.assertIn(outcome['status'],('passed','blocked'))
-                if not render or platform_source: self.assertEqual(outcome['status'],'blocked')
-                self.assertTrue(dispatcher._verify_recorded_review('r','instagram_review'))
+                for channel in ('linkedin','x','facebook','instagram','reddit'):
+                    outcome=dispatcher.step('r',queue['token'],claim)
+                    self.assertEqual(outcome['stage'],channel+'_review'); self.assertIn(outcome['status'],('passed','blocked'))
+                    if channel=='reddit': self.assertEqual(outcome['status'],'blocked')
+                    elif render and not platform_source: self.assertEqual(outcome['status'],'passed')
+                    if channel=='instagram' and (not render or platform_source): self.assertEqual(outcome['status'],'blocked')
+                    self.assertTrue(dispatcher._verify_recorded_review('r',channel+'_review'))
+                    draft=json.loads(service.artifacts.get(service.graph.get('r',channel+'_draft')['version']))
+                    review=json.loads(service.artifacts.get(service.graph.get('r',channel+'_review')['version']))
+                    self.assertNotEqual(draft['session_id'],review['session_id'])
                 outcome=dispatcher.step('r',queue['token'],claim)
                 self.assertEqual((outcome['stage'],outcome['status']),('assembly','awaiting_review'))
                 package=json.loads(service.artifacts.get(service.graph.get('r','assembly')['version']))
@@ -187,7 +205,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                     subprocess.run(['/usr/bin/podman','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,check=True)
             service.lifecycle.close(); service.close()
             from tests.test_local_executor_crash_live import cleanup_crash_fixture
-            if completed: cleanup_crash_fixture(temporary,backend)
+            if completed and os.environ.get('WORKFLOW_TEST_PRESERVE')!='1': cleanup_crash_fixture(temporary,backend)
             else:
                 from types import SimpleNamespace
                 cleanup_crash_fixture(SimpleNamespace(name=str(root),cleanup=lambda:None),backend)
