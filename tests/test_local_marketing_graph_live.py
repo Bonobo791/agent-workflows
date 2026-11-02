@@ -192,7 +192,8 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
                     with self.assertRaises(HumanReviewError): review.decide('r',queue['token'],claim,version,'approved')
                     self.assertEqual(service.graph.db.execute('SELECT count(*) FROM human_review_decisions').fetchone()[0],0)
                     service.source_snapshots.fetcher.max_bytes+=1
-                    self.assertEqual(review.decide('r',queue['token'],claim,version,'approved')['version'],version)
+                    video_refs=review._video_refs('r')
+                    self.assertEqual(review.decide('r',queue['token'],claim,version,'approved',video_refs)['version'],version)
                     self.assertEqual(review.current('r')['decision'],'approved')
             self.assertFalse(unresolved_scope_rows(service.graph.db,'r')); self.assertFalse(unresolved_scope_rows(service.graph.db,'discovery'))
             service.request_lifecycle_stop('r')
