@@ -24,9 +24,17 @@ class StageEntrypointTests(unittest.TestCase):
         self._run_marketing(with_asset=True,asset_blocked=True)
     def test_platform_block_evidence_must_remain_verified(self):
         self._run_marketing(with_asset=True,platform_blocked=True)
+    def test_reddit_irrelevant_context_is_unsuitable(self):
+        self._run_marketing(with_asset=True,reddit_context='irrelevant')
+    def test_reddit_product_without_disclosure_stays_blocked(self):
+        self._run_marketing(with_asset=True,reddit_context='product')
+    def test_reddit_missing_context_stays_blocked(self):
+        self._run_marketing(with_asset=True,reddit_context='missing')
+    def test_reddit_expired_context_stays_blocked(self):
+        self._run_marketing(with_asset=True,reddit_context='expired')
     def test_approved_package_completes_with_current_platform_block(self):
         self._run_marketing(with_asset=True,platform_blocked=True,complete_job=True)
-    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False,platform_blocked=False,complete_job=False):
+    def _run_marketing(self,with_asset,asset_blocked=False,with_snapshots=False,platform_blocked=False,complete_job=False,reddit_context='current'):
         class External(http.server.BaseHTTPRequestHandler):
             version='v1'; owner=None; available=True
             def log_message(self,*args): pass
@@ -155,9 +163,10 @@ class StageEntrypointTests(unittest.TestCase):
                         def check(self,run,draft_ref):
                             import time
                             now=time.time(); rules=service.artifacts.put(b'synthetic community rules')
-                            return service.artifacts.put(json.dumps({'draft_ref':draft_ref,'community':'example','rules_ref':rules,'checked_at':now,'expires_at':now+300,'relevant':True,'product_mentioned':False,'affiliation_disclosed':False}).encode())
+                            expires=now-1 if reddit_context=='expired' else now+300
+                            return service.artifacts.put(json.dumps({'draft_ref':draft_ref,'community':'example','rules_ref':rules,'checked_at':now,'expires_at':expires,'relevant':reddit_context!='irrelevant','product_mentioned':reddit_context=='product','affiliation_disclosed':False}).encode())
                         def verify(self,run,draft_ref,context_ref): return True
-                    service.reddit_context_authority=RedditAuthority()
+                    service.reddit_context_authority=None if reddit_context=='missing' else RedditAuthority()
                     if with_asset:
                         import io, time, zipfile
                         from tests.test_assets import png
@@ -242,10 +251,11 @@ class StageEntrypointTests(unittest.TestCase):
                         if result.get('stage')=='assembly' and result.get('status')=='awaiting_review': break
                     self.assertEqual(result['status'],'awaiting_review'); self.assertEqual(Engine.canonical_reviews,2); self.assertEqual(Engine.source_reviews,3); self.assertEqual(len(Engine.resumed),1)
                     self.assertEqual(service.graph.get('run-1','asset_production')['status'],'passed' if with_asset and not asset_blocked and not platform_blocked else 'blocked')
-                    self.assertEqual(service.graph.get('run-1','reddit_review')['status'],'passed' if with_asset and not asset_blocked and not platform_blocked else 'blocked')
+                    asset_passed=with_asset and not asset_blocked and not platform_blocked
+                    self.assertEqual(service.graph.get('run-1','reddit_review')['status'],{'current':'passed','irrelevant':'unsuitable'}.get(reddit_context,'blocked') if asset_passed else 'blocked')
                     package=json.loads(service.artifacts.get(service.graph.get('run-1','assembly')['version']))
                     if with_asset and not asset_blocked and not platform_blocked:
-                        for channel in ('linkedin','x','facebook','instagram','reddit'): self.assertEqual(package['stages'][channel+'_review']['status'],'passed')
+                        for channel in ('linkedin','x','facebook','instagram','reddit'): self.assertEqual(package['stages'][channel+'_review']['status'],'passed' if channel!='reddit' or reddit_context=='current' else package['stages'][channel+'_review']['status'])
                     if asset_blocked:
                         self.assertEqual(package['stages']['instagram_review']['status'],'blocked')
                         self.assertEqual(package['stages']['asset_production']['asset_review']['reason'],'Safe area unverified.')
@@ -256,6 +266,11 @@ class StageEntrypointTests(unittest.TestCase):
                     self.assertIn('claim-1',package['stages']['brief']['contents'][1])
                     self.assertIn('synthetic linkedin_draft',package['stages']['linkedin_draft']['contents'][0])
                     self.assertTrue(service.verify_terminal('run-1'))
+                    if with_asset and not asset_blocked and not platform_blocked and reddit_context=='current':
+                        from runner.stage_dispatch import StageError
+                        service.reddit_context_authority.verify=lambda *_:False
+                        with self.assertRaises(StageError): service.stage_dispatcher._verify_recorded_review('run-1','reddit_review')
+                        service.reddit_context_authority.verify=lambda *_:True
                     if platform_blocked:
                         from runner.control import ControlError
                         service.openfilm_platform_authority.valid=False
