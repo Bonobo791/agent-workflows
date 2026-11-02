@@ -36,8 +36,8 @@ DATA = HERE / 'data' / 'synthetic'
 # stage -> (PROMPTS.md role heading, input files as data)
 TASKS = {
     'brief': ('Brief and research', ['task.md', 'source.md']),
-    'canonical_draft': ('Canonical writer', ['task.md', 'source.md']),
-    'canonical_review': ('Independent canonical reviewer', ['task.md', 'source.md', 'canonical_draft.md']),
+    'canonical_draft': ('Canonical writer', ['task.md', 'source.md', 'brief.md']),
+    'canonical_review': ('Independent canonical reviewer', ['task.md', 'source.md', 'brief.md', 'canonical_draft.md']),
     'channel_draft': ('Platform writer and reviewer', ['task.md', 'source.md', 'platform.md', 'canonical_draft.md']),
     'channel_review': ('Platform writer and reviewer', ['task.md', 'source.md', 'platform.md', 'channel_draft.md']),
 }
@@ -71,6 +71,9 @@ def check_result(parsed):
         problems.append('invalid status')
     if parsed.get('status') in ('blocked', 'failed') and not parsed.get('reason'):
         problems.append('blocked or failed without reason')
+    open_blocking = [f for f in parsed.get('findings') or [] if f.get('severity') == 'blocking' and f.get('resolution') == 'open']
+    if parsed.get('status') == 'passed' and open_blocking:
+        problems.append('passed with open blocking findings')
     return problems
 
 
@@ -89,7 +92,7 @@ def run_codex(stage, prompt, model, run_dir, input_versions, images=()):
         parsed = json.loads(result['text'])
     except json.JSONDecodeError:
         parsed = {'status': 'unparsed', 'raw': result['text']}
-    parsed.setdefault('input_versions', input_versions)
+    parsed['input_versions'] = input_versions  # harness-computed; never trust model-supplied hashes
     return {'stage': stage, 'model': model, 'thread_id': result['thread_id'], 'usage': result['usage'], 'schema_problems': check_result(parsed), 'result': parsed}
 
 
@@ -163,7 +166,7 @@ def main():
     parser.add_argument('--out', type=Path, default=HERE / 'runs')
     args = parser.parse_args()
     DEFAULT_MODEL = args.model
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     root = args.out / stamp
     if args.stage in TASKS:
         run_dir = root / args.stage
