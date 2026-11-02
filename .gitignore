@@ -17,3 +17,4 @@ __pycache__/
 credentials.json
 *.sqlite
 *.sqlite-*
+tools/codex_harness/runs/
