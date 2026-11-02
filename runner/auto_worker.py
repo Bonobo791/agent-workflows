@@ -10,6 +10,8 @@ import time
 
 HEARTBEAT_INTERVAL=10
 
+from runner.human_review import HumanReviewError
+
 class AutoWorkerError(RuntimeError): pass
 
 def renew_leases(path,run,queue_claim,graph_claim,ttl=60):
@@ -147,6 +149,7 @@ class AutoWorker:
                             args=(run,queue['token'],claim,pending['version'],pending['decision'])
                             if pending['video_playback_refs'] is None: service.human_review.decide(*args)
                             else: service.human_review.decide(*args,pending['video_playback_refs'])
+                        except HumanReviewError as exc: self._set(status=state,stage=stage,run=run,version=version,reason=str(exc))
                         except Exception: self._set(status=state,stage=stage,run=run,version=version,reason='human decision rejected; review package changed or evidence unavailable')
                     decision=service.human_review.current(run)
                     if decision and decision['decision']=='approved':

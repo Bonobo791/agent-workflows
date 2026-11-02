@@ -10,6 +10,12 @@ local users.
 
 ## Start a local Opik server
 
+The local loopback, ClickHouse, Podman, and frontend-resolver changes that made
+this stack run are saved as
+`observability/local/opik-2.2.120-local.patch`. They are not committed upstream
+and exist only as this patch. Apply the patch to the clean `2.2.120` checkout
+created below before starting the stack.
+
 The upstream local deployment requires Docker Engine and Docker Compose. This
 example pins [Opik 2.2.120](https://github.com/comet-ml/opik/releases/tag/2.2.120);
 review the [self-hosted changelog](https://www.comet.com/docs/opik/self-host/changelog)
@@ -19,19 +25,9 @@ and update both version values together when upgrading.
 OPIK_RELEASE=2.2.120
 git clone --depth 1 --branch "$OPIK_RELEASE" https://github.com/comet-ml/opik.git
 cd opik
+git apply /absolute/path/to/agent-workflows/observability/local/opik-2.2.120-local.patch
 OPIK_VERSION="$OPIK_RELEASE" ./opik.sh
 ./opik.sh --verify
-```
-
-The local loopback, ClickHouse, Podman, and frontend-resolver changes that made
-this stack run are saved as
-`observability/local/opik-2.2.120-local.patch`. They are not committed upstream
-and exist only as this patch. Apply the patch to a clean `2.2.120` checkout
-before starting the stack:
-
-```sh
-cd opik
-git apply /absolute/path/to/agent-workflows/observability/local/opik-2.2.120-local.patch
 ```
 
 The UI is available at `http://127.0.0.1:5173`. Upstream Compose publishes host

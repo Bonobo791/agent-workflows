@@ -54,10 +54,10 @@ export async function inspectLayout(folder, open) {
             if (rects.length > 2000) throw new Error('too many text rectangles');
           }
           const problems = [];
-          for (let a = 0; a < rects.length; a++) {
+          for (let a = 0; a < rects.length && problems.length < 20; a++) {
             const r = rects[a];
             if (r.x < -1 || r.y < -1 || r.right > innerWidth + 1 || r.bottom > innerHeight + 1) problems.push(`text outside frame: ${r.text}`);
-            for (let b = 0; b < a; b++) {
+            for (let b = 0; b < a && problems.length < 20; b++) {
               const q = rects[b];
               if (r.owner === q.owner) continue;
               if (Math.min(r.right,q.right)-Math.max(r.x,q.x)>2 && Math.min(r.bottom,q.bottom)-Math.max(r.y,q.y)>2) problems.push(`overlapping text: ${q.text} / ${r.text}`);
