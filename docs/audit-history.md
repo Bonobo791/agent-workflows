@@ -325,8 +325,9 @@ endpoint; it does not establish that the log adapter is accepted. Pinned server
 compatibility, access control, retention and actual ingestion remain unverified.
 These histories do not yet cover every
 rejected claim, review, command, process termination or external operation; they are
-not a complete audit or a configured OpenTelemetry integration. Backend and
-retention configuration remain unimplemented.
+not a complete audit or a configured OpenTelemetry integration. See
+[`local-opik.md`](local-opik.md) for an operator-managed local Opik setup. This
+repository does not configure a production backend or retention policy.
 
 `runner.metrics.snapshot` reads one consistent SQLite snapshot and emits aggregate
 counts with allowlisted workflow, stage and status labels. It includes current
