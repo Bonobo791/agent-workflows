@@ -100,7 +100,7 @@ index 408de0a..4645c03 100644
        JACKSON_MAX_STRING_LENGTH: ${JACKSON_MAX_STRING_LENGTH:-104857600}
      ports:
 -      - "3003" # OpenAPI specification port
-+      - "127.0.0.1::3003" # OpenAPI specification port (loopback only)
++      - "127.0.0.1:3003:3003" # OpenAPI specification port (loopback only)
      healthcheck:
        test: [ "CMD", "curl", "-f", "http://localhost:8080/health-check" ]
        interval: 1s
