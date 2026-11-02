@@ -677,6 +677,11 @@ class StageDispatcher:
             expected=[subject]
             from workflows.marketing.gates import CHANNELS
             if stage in {channel+'_review' for channel in CHANNELS}: expected.extend(_channel_review_inputs(service,run))
+            if stage.endswith('_review') and stage.removesuffix('_review') in CHANNELS:
+                channel=stage.removesuffix('_review')
+                asset_inputs=self._channel_asset_inputs(run,channel)
+                if asset_inputs: expected.extend(asset_inputs['refs'])
+                elif state['status']=='passed': raise ValueError('verified OpenFilm media unavailable')
             if stage=='reddit_review':
                 context_ref=record.get('_reddit_context')
                 if context_ref:
@@ -690,11 +695,6 @@ class StageDispatcher:
                         if state['status']=='unsuitable' and checked['context']['relevant'] is not False: raise ValueError('community suitability changed')
                     expected.extend([context_ref,context['rules_ref']])
                 elif state['status'] in ('passed','unsuitable'): raise ValueError('community evidence unavailable')
-            if stage.endswith('_review') and stage.removesuffix('_review') in CHANNELS:
-                channel=stage.removesuffix('_review')
-                asset_inputs=self._channel_asset_inputs(run,channel)
-                if asset_inputs: expected.extend(asset_inputs['refs'])
-                elif state['status']=='passed': raise ValueError('verified OpenFilm media unavailable')
             if stage=='canonical_review':
                 brief=json.loads(service.artifacts.get(service.graph.get(run,'brief')['version']))
                 from runner.source_register import validate
