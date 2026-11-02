@@ -13,8 +13,12 @@ class CodexClient:
         self.stderr = open(stderr_path, 'w') if stderr_path else subprocess.DEVNULL
         self.proc = subprocess.Popen([codex, 'app-server', '--listen', 'stdio://'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True, bufsize=1)
         self.next_id = 0
-        self._request('initialize', {'clientInfo': {'name': 'agent_workflows', 'title': 'Agent Workflows', 'version': '0.1.0'}})
-        self._send({'method': 'initialized'})
+        try:
+            self._request('initialize', {'clientInfo': {'name': 'agent_workflows', 'title': 'Agent Workflows', 'version': '0.1.0'}})
+            self._send({'method': 'initialized'})
+        except BaseException:
+            self.close()  # the context manager is never entered when the constructor raises
+            raise
 
     def close(self):
         self.proc.terminate()

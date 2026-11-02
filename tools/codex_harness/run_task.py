@@ -14,7 +14,7 @@ from codex_client import CodexClient, CodexError  # noqa: E402
 REPO = HERE.parents[1]
 PROMPTS = REPO / 'workflows/marketing/PROMPTS.md'
 SCHEMA = json.loads((REPO / 'workflows/marketing/stage-result.schema.json').read_text())
-# The API rejects top-level allOf/$schema; the full schema is still checked locally.
+# The API rejects top-level allOf/$schema. check_result enforces the required keys, status values, the blocked/failed reason rule and the open-blocking rule locally; it does not check the full schema.
 def strict_schema(schema):
     # Strict mode requires every property to be required, so optional ones become nullable.
     out = {k: v for k, v in schema.items() if k not in ('$schema', 'allOf')}
