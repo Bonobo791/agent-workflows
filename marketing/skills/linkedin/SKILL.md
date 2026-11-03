@@ -29,3 +29,4 @@ Rules:
 - State a sourced fact plainly, then name the source once per post at most, for example "Moderaty's pricing page lists $5 a month". Don't hedge every sentence. These words are banned in hooks: may, might, describes, positions, offers, various.
 - Make one sharp point per post. Cut any sentence that only lists features.
 - Take the tone from the voice file. Facts still come only from the brief: the tone changes, the facts don't.
+- Never mention the brief, supplied facts or supplied evidence in the copy. Readers don't know they exist.

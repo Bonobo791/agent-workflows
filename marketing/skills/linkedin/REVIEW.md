@@ -19,6 +19,7 @@ Blocking findings:
 - The first line names a product or feature, not the reader's problem or a concrete moment.
 - The post is mainly a feature list with no example or scene.
 - A banned hedge word in the hook (may, might, describes, positions, offers, various).
+- Copy that mentions the brief, supplied facts or supplied evidence.
 
 Minor findings:
 - Paragraph length, whitespace, wording.
