@@ -356,6 +356,20 @@ class DesignSystemTest(unittest.TestCase):
         self.assertLess(prompt.index('--- BEGIN design-system ---'), prompt.index('--- BEGIN 02-brief#Core message ---'))
 
 
+class OpenFilmTest(unittest.TestCase):
+    def test_write_project_marks_it_opened(self):
+        project = Path(tempfile.mkdtemp()) / 'p'
+        run.write_project(project, [{'path': 'film.html', 'content': '<html></html>'}])
+        self.assertTrue((project / '.film' / 'opened').is_file())
+
+    def test_run_tool_error_shows_stdout_and_stderr(self):
+        command = [sys.executable, '-c', 'import sys; print("OUT"); print("ERR", file=sys.stderr); sys.exit(1)']
+        with self.assertRaises(run.WorkflowError) as caught:
+            run.run_tool(command, Path(tempfile.mkdtemp()))
+        self.assertIn('OUT', str(caught.exception))
+        self.assertIn('ERR', str(caught.exception))
+
+
 class ImportTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

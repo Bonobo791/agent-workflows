@@ -6,6 +6,7 @@ Every step: a Codex writer, Python checks, then a fresh Codex reviewer, then the
 import argparse
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -495,14 +496,18 @@ def write_project(project_dir, files):
         safe_write(project_dir, item['path'], item['content'])
     if not (project_dir / 'film.html').is_file():
         raise WorkflowError(f'{project_dir} has no film.html')
+    (project_dir / '.film').mkdir(exist_ok=True)
+    (project_dir / '.film' / 'opened').write_text('')  # OpenFilm: Studio has already shown this project, so look and render do not start it
 
 
 def run_tool(args, cwd):
     if shutil.which(args[0]) is None:
         raise WorkflowError(f'{args[0]} is not on PATH')
-    proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=900)
+    env = {**os.environ, 'OPENFILM_NO_BROWSER': '1', 'OPENFILM_NO_UPDATE_CHECK': '1'}
+    proc = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True, timeout=900)
     if proc.returncode != 0:
-        raise WorkflowError(f"{' '.join(args)} failed in {cwd}:\n{(proc.stderr or proc.stdout)[-2000:]}")
+        raise WorkflowError(f"{' '.join(args)} failed in {cwd} (exit {proc.returncode}):\n"
+                            f"stdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}")
 
 
 def half_size(png, out_png):
