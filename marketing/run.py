@@ -56,7 +56,7 @@ DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not'
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
 SOCIAL_INPUTS = ['02-brief', '03-article#outline']
-SOCIAL_REVIEW_INPUTS = ['02-brief#Facts', '02-brief#Channel ideas']
+SOCIAL_REVIEW_INPUTS = ['02-brief#Keywords', '02-brief#Facts', '02-brief#Channel ideas']
 IMAGE_INPUTS = ['design-system', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
 REEL_INPUTS = ['design-system', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
 STEPS = [
@@ -499,6 +499,11 @@ def revision_prompt(step, review, notes):
     return '\n'.join(parts)
 
 
+def frame_note(seconds):
+    return (f'The attached images are up to {MAX_REVIEW_FRAMES} frames spread evenly across the video, at half size. '
+            f"Their seconds, in the order attached: {', '.join(seconds)}.")
+
+
 def review_prompt(skills_dir, campaign, step, step_dir):
     parts = [DATA_RULE]
     for input_id in step['review_inputs']:
@@ -507,7 +512,7 @@ def review_prompt(skills_dir, campaign, step, step_dir):
     if step['kind'] == 'images':
         parts += ['', 'The attached images are the rendered images, at half size, in the order listed in the deliverable.']
     if step['kind'] == 'video':
-        parts += ['', 'The attached images are frames from the rendered video, at half size, sampled once per second.']
+        parts += ['', frame_note((step_dir / 'frame-seconds.txt').read_text().split())]
     parts += ['', library_block(step['review_skills']), '', CONTRACT_RULE,
               '', load_skill(skills_dir, step['skill'], 'REVIEW.md'), '', REVIEW_RULES]
     return '\n'.join(parts)
@@ -594,10 +599,12 @@ def sample_frames(mp4, frames_dir):
     frames = sorted(frames_dir.glob('*.png'))
     if not frames:
         raise WorkflowError(f'ffmpeg produced no frames from {mp4}')
+    seconds = list(range(len(frames)))  # fps=1, so frame i is second i
     if len(frames) > MAX_REVIEW_FRAMES:
         stride = len(frames) / MAX_REVIEW_FRAMES
-        frames = [frames[int(i * stride)] for i in range(MAX_REVIEW_FRAMES)]
-    return frames
+        seconds = [int(i * stride) for i in range(MAX_REVIEW_FRAMES)]
+        frames = [frames[second] for second in seconds]
+    return frames, seconds
 
 
 def materialize(step, step_dir, written):
@@ -654,7 +661,8 @@ def materialize_video(step_dir, written):
     run_tool(['openfilm', 'render', '--out', str(mp4)], project_dir)
     if not mp4.is_file():
         raise WorkflowError(f'openfilm render did not create {mp4}')
-    frames = sample_frames(mp4, step_dir / 'frames')
+    frames, seconds = sample_frames(mp4, step_dir / 'frames')
+    (step_dir / 'frame-seconds.txt').write_text(' '.join(str(second) for second in seconds) + '\n')
     lines = ['# Reel', '', '- reel.mp4 (OpenFilm project: project/)', '', '## Notes', '', written['notes'] or 'None.']
     (step_dir / 'output.md').write_text('\n'.join(lines) + '\n')
     return frames

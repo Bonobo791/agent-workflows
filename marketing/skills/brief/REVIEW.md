@@ -1,6 +1,12 @@
 > Built from the content-brief skill(s). The owner may replace this file.
 
-Section names and counts are checked by the program before you see this.
+The program has already checked the items listed under Checked. Do not report those.
+
+Checked:
+- The nine brief sections exist and are not empty.
+- Every fact under Facts has a URL or ends with "(from task)".
+- The Article plan has exactly one "- Target length: <N> words" line.
+- Channel ideas has the three channel lines when Deliverables include social, or "Not needed." when they do not.
 
 Check the brief against the task and the sources step.
 

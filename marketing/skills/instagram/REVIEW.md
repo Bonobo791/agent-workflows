@@ -1,6 +1,12 @@
 > Built from the caption-writer and hashtag-strategy skill(s). The owner may replace this file.
 
-Section names and counts are checked by the program before you see this.
+The program has already checked the items listed under Checked. Do not report those.
+
+Checked:
+- The Caption, Hashtags and Image text sections exist and are not empty.
+- The last line of the Caption ends with "Link in bio".
+- Hashtags has 3 to 5 hashtags.
+- Image text has 8 words or fewer.
 
 Blocking findings:
 - The first line does not hook, or the image text does not match the post.

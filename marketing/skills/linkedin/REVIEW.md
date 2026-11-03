@@ -1,6 +1,12 @@
 > Built from the linkedin-post-writer and hook-writer skill(s). The owner may replace this file.
 
-Section names and counts are checked by the program before you see this.
+The program has already checked the items listed under Checked. Do not report those.
+
+Checked:
+- The Post and First comment sections exist and are not empty.
+- The Post contains no link and no [ARTICLE LINK].
+- The First comment contains [ARTICLE LINK].
+- The Post has 3 to 5 hashtags.
 
 Blocking findings:
 - A claim that is not in the brief's Facts, or a claim that contradicts the brief.

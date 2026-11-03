@@ -524,6 +524,19 @@ class StatusTest(unittest.TestCase):
         self.assertIn('input 100 (non-cached 60, cached 40), output 10 (reasoning 5)', total)
 
 
+class FrameTest(unittest.TestCase):
+    def test_sample_frames_keeps_ten_frames_with_seconds(self):
+        def fake_ffmpeg(args, cwd):
+            for index in range(1, 26):
+                (cwd / f'{index:03d}.png').write_bytes(b'x')
+
+        with mock.patch.object(run, 'run_tool', side_effect=fake_ffmpeg):
+            frames, seconds = run.sample_frames(Path('film.mp4'), Path(tempfile.mkdtemp()) / 'frames')
+        self.assertEqual(len(frames), 10)
+        self.assertEqual(seconds, [0, 2, 5, 7, 10, 12, 15, 17, 20, 22])
+        self.assertIn('0, 2, 5', run.frame_note([str(second) for second in seconds]))
+
+
 class ImportTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

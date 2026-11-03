@@ -1,6 +1,11 @@
 > Built from the content-research-and-sourcing skill(s). The owner may replace this file.
 
-Section names and counts are checked by the program before you see this.
+The program has already checked the items listed under Checked. Do not report those.
+
+Checked:
+- The Facts section exists and has at least one fact line.
+- The Not found section exists.
+- Every fact has a URL or ends with "(from task)".
 
 Open each URL in Facts with web search. Check that the page says the fact.
 
