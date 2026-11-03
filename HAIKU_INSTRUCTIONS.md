@@ -937,7 +937,7 @@ Pass only when there are no blocking findings.
 
 ### `marketing/skills/images/SKILL.md`
 
-Copy the `film.html` and `scenes/card.html` example blocks below **from the real files** in `marketing/examples/openfilm-sample/`, so the example matches a project that is known to render.
+This file contains two placeholder lines: `(paste marketing/examples/openfilm-sample/film.html here)` and `(paste marketing/examples/openfilm-sample/scenes/card.html here)`. Replace each placeholder line with the full, unchanged content of the file it names. Keep the surrounding ```html fences. This way the example is a project that is known to render.
 
 ~~~markdown
 > Draft skill. The owner will replace this file.
