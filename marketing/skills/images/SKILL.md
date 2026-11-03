@@ -13,6 +13,7 @@ Make three still images, one OpenFilm project each:
 Owner: confirm these sizes for your accounts.
 
 How an OpenFilm project works:
+- Put the scene's `<iframe>` inside one `<section>` in `<body>`, and set the viewport meta tag to the image size (for example `width=1200, height=627` for linkedin). OpenFilm rejects a clip outside a section, and without the viewport meta it uses 1920 × 1080.
 - `film.html` at the project root places scenes with `<iframe>` elements. `src` is the scene file plus `#t=start,end` in seconds. `at` is when the scene starts. The iframe's style sets its position and size.
 - Each scene is an HTML file with a script that sets `window.film = { frame(t) { ... }, duration, width, height }`. `frame(t)` is called with the time in seconds and must put the page into its state at that time.
 - The still is captured at `look_time`. Everything must be fully visible at that time. Use a `look_time` near the end of the scene.
