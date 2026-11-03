@@ -449,7 +449,7 @@ class LengthTest(unittest.TestCase):
         self.assertTrue(length_errors(1201))
 
     def test_article_check_without_target_length_raises(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(run.WorkflowError):
             run.check_article(article_text(155, 6), task_text(), full_brief('- Content type: guide.'))
 
 

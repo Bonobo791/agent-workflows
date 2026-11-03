@@ -340,7 +340,8 @@ def check_sources(output, task, brief):
 def target_words(brief):
     found = TARGET_RE.findall(sections(brief).get('Article plan', ''))
     if len(found) != 1:
-        raise ValueError('brief has no target length' if not found else 'brief has more than one target length')
+        raise WorkflowError('brief has no "- Target length: <N> words" line' if not found
+                            else 'brief has more than one "- Target length: <N> words" line')
     return int(found[0])
 
 
@@ -353,7 +354,7 @@ def check_brief(output, task, brief):
 
 
 def check_article(output, task, brief):
-    target = target_words(brief)  # raises ValueError when the brief has no target length
+    target = target_words(brief)  # raises WorkflowError when the brief has no target length
     errors = []
     lines = output.splitlines()
     if not (lines and lines[0].startswith('Meta description: ')):
