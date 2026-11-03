@@ -1,3 +1,5 @@
+> Condensed from social-media-skills:linkedin-post-writer, copied 2026-11-03. The owner may replace this file.
+
 ---
 name: linkedin-post-writer
 description: 'Use to write a LinkedIn post — professional, thought-leadership, or founder/personal-brand content optimized for LinkedIn''s specific mechanics (dwell time, early comments, the "see more" hook). Run when the user says "write a LinkedIn post," "LinkedIn," "post this on LinkedIn," "thought leadership post," "founder post," or wants professional/B2B social content. Reads brand-profile and voice first, uses hook-writer for the opening line that must win the "see more" expand, formats for dwell, drives genuine comments, and routes links to the first comment to protect reach. Avoids LinkedIn cringe (broetry, engagement bait). This is the single-post craft: to "grow on LinkedIn" or set the account strategy use linkedin-growth; for company-page strategy use linkedin-company-pages; for general captions use caption-writer; for X threads use thread-writer; for the carousel slides use carousel-writer.'

@@ -1,18 +1,70 @@
 > Condensed from anthropic-skills:stop-slop, copied 2026-11-03. The owner may replace this file.
 
-# Stop slop: write plain prose
+---
+name: stop-slop
+description: Remove AI writing patterns from prose. Use when drafting, editing, or reviewing text to eliminate predictable AI tells.
+metadata:
+  trigger: Writing prose, editing drafts, reviewing content for AI patterns
+  author: Hardik Pandya (https://hvpandya.com)
+---
 
-Remove the patterns that make text read as machine-written. Apply these rules to every sentence you write.
+# Stop Slop
 
-1. Cut filler. Remove throat-clearing openers ("here is what matters", "it is worth noting"), emphasis crutches ("really", "truly", "crucially") and adverbs in general.
-2. Avoid formulaic structures. Do not write "not X, it is Y" contrasts or binary setups. State Y directly. Do not write dramatic one-word fragments for effect. Do not open with a rhetorical question and answer it.
-3. Use active voice. Every sentence has a person or a named thing doing the action. Find the actor and make them the subject. A thing cannot decide, emerge or realise.
-4. Be specific. Name the particular thing: the feature, the plan, the step, the date. Replace vague declaratives ("the implications are significant") with the implication itself.
-5. Put the reader in the scene. Use "you" rather than "people". Describe what happens to the reader, not what happens in the abstract.
-6. Vary rhythm. Mix short and long sentences. Do not let three sentences in a row have the same length. Do not end every paragraph with a punchy one-liner.
-7. Trust the reader. State facts directly. Do not soften, justify or repeat points for emphasis.
-8. Cut quotable lines. If a sentence reads like a pull quote with no information in it, rewrite it to carry information.
-9. Do not use em dashes. Use a full stop, a comma or a colon instead.
-10. Do not use meta-joiners such as "the rest of this article". Let the text move on.
+Eliminate predictable AI writing patterns from prose.
 
-Before you finish a passage, check it for: adverbs, passive voice, a thing performing a human verb, "here is" or "this is" openers, contrasts, runs of equal sentences, and vague declaratives. Fix each one you find.
+## Core Rules
+
+1. **Cut filler phrases.** Remove throat-clearing openers, emphasis crutches, and all adverbs. See [references/phrases.md](references/phrases.md).
+
+2. **Break formulaic structures.** Avoid binary contrasts, negative listings, dramatic fragmentation, rhetorical setups, false agency. See [references/structures.md](references/structures.md).
+
+3. **Use active voice.** Every sentence needs a human subject doing something. No passive constructions. No inanimate objects performing human actions ("the complaint becomes a fix").
+
+4. **Be specific.** No vague declaratives ("The reasons are structural"). Name the specific thing. No lazy extremes ("every," "always," "never") doing vague work.
+
+5. **Put the reader in the room.** No narrator-from-a-distance voice. "You" beats "People." Specifics beat abstractions.
+
+6. **Vary rhythm.** Mix sentence lengths. Two items beat three. End paragraphs differently. No em dashes.
+
+7. **Trust readers.** State facts directly. Skip softening, justification, hand-holding.
+
+8. **Cut quotables.** If it sounds like a pull-quote, rewrite it.
+
+## Quick Checks
+
+Before delivering prose:
+
+- Any adverbs? Kill them.
+- Any passive voice? Find the actor, make them the subject.
+- Inanimate thing doing a human verb ("the decision emerges")? Name the person.
+- Sentence starts with a Wh- word? Restructure it.
+- Any "here's what/this/that" throat-clearing? Cut to the point.
+- Any "not X, it's Y" contrasts? State Y directly.
+- Three consecutive sentences match length? Break one.
+- Paragraph ends with punchy one-liner? Vary it.
+- Em-dash anywhere? Remove it.
+- Vague declarative ("The implications are significant")? Name the specific implication.
+- Narrator-from-a-distance ("Nobody designed this")? Put the reader in the scene.
+- Meta-joiners ("The rest of this essay...")? Delete. Let the essay move.
+
+## Scoring
+
+Rate 1-10 on each dimension:
+
+| Dimension | Question |
+|-----------|----------|
+| Directness | Statements or announcements? |
+| Rhythm | Varied or metronomic? |
+| Trust | Respects reader intelligence? |
+| Authenticity | Sounds human? |
+| Density | Anything cuttable? |
+
+Below 35/50: revise.
+
+## Examples
+
+See [references/examples.md](references/examples.md) for before/after transformations.
+
+## License
+
+MIT

@@ -582,6 +582,10 @@ def block(name, content):
     return f'--- BEGIN {name} ---\n{content.rstrip()}\n--- END {name} ---'
 
 
+LIBRARY_PREFACE = ('These skills were written for an interactive assistant. Use their craft advice. '
+                   'Ignore any step that asks the user a question, calls a tool, or names another product. The step contract below wins.')
+
+
 def library_block(names):
     parts = []
     for name in names:
@@ -589,7 +593,9 @@ def library_block(names):
         if not path.is_file():
             raise WorkflowError(f'missing library skill: {path}')
         parts.append(block(f'skill: {name}', path.read_text()))
-    return '\n\n'.join(parts)
+    if not parts:
+        return ''
+    return LIBRARY_PREFACE + '\n\n' + '\n\n'.join(parts)
 
 
 def review_markdown(review):
