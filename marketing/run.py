@@ -20,20 +20,25 @@ from codex_client import CodexClient, CodexError  # noqa: E402
 REPO = HERE.parent
 SKILLS_DIR = HERE / 'skills'
 CAMPAIGNS_DIR = REPO / 'campaigns'
-DEFAULT_MODEL = 'gpt-6.1-terra'
+# The owner's roles: writer "gpt6 luna max", reviewer "gpt6 sol medium", image and video creator "gpt6 sol high".
+ROLES = {
+    'writer': {'model': 'gpt-6-luna', 'effort': 'max'},
+    'reviewer': {'model': 'gpt-6-sol', 'effort': 'medium'},
+    'creator': {'model': 'gpt-6-sol', 'effort': 'high'},
+}
 MAX_AUTO_REVISIONS = 1
 MAX_REVIEW_FRAMES = 10
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 
 STEPS = [
-    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'inputs': ['00-task']},
-    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'inputs': ['00-task', '01-brief']},
-    {'id': '03-linkedin', 'skill': 'linkedin', 'kind': 'text', 'inputs': ['01-brief', '02-article']},
-    {'id': '04-x', 'skill': 'x', 'kind': 'text', 'inputs': ['01-brief', '02-article']},
-    {'id': '05-instagram', 'skill': 'instagram', 'kind': 'text', 'inputs': ['01-brief', '02-article']},
-    {'id': '06-images', 'skill': 'images', 'kind': 'images', 'inputs': ['01-brief', '03-linkedin', '04-x', '05-instagram']},
-    {'id': '07-reel', 'skill': 'reel', 'kind': 'video', 'inputs': ['01-brief', '02-article', '05-instagram']},
+    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'inputs': ['00-task']},
+    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'inputs': ['00-task', '01-brief']},
+    {'id': '03-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'inputs': ['01-brief', '02-article']},
+    {'id': '04-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'inputs': ['01-brief', '02-article']},
+    {'id': '05-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'inputs': ['01-brief', '02-article']},
+    {'id': '06-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'inputs': ['01-brief', '03-linkedin', '04-x', '05-instagram']},
+    {'id': '07-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'inputs': ['01-brief', '02-article', '05-instagram']},
 ]
 
 
@@ -118,6 +123,16 @@ def check_skills(skills_dir, steps):
         load_skill(skills_dir, step['skill'], 'REVIEW.md')
 
 
+def check_models(client, roles, steps):
+    available = client.models()
+    for name in sorted({step['role'] for step in steps}):
+        model, effort = roles[name]['model'], roles[name]['effort']
+        if model not in available:
+            raise WorkflowError(f"{name} model {model} is not in the Codex model list; available: {', '.join(sorted(available))}")
+        if effort not in available[model]:
+            raise WorkflowError(f"{name} effort {effort} is not supported by {model}; supported: {', '.join(available[model])}")
+
+
 def read_input(campaign, input_id):
     if input_id == '00-task':
         return (campaign / '00-task.md').read_text()
@@ -178,12 +193,12 @@ def data_url(png):
     return 'data:image/png;base64,' + base64.b64encode(png.read_bytes()).decode()
 
 
-def call_codex(client, model, prompt, cwd, schema, save_path, what, images=()):
+def call_codex(client, role, prompt, cwd, schema, save_path, what, images=()):
     try:
-        result = client.run_turn(prompt, model, str(cwd), output_schema=schema, images=[data_url(p) for p in images])
+        result = client.run_turn(prompt, role['model'], role['effort'], str(cwd), output_schema=schema, images=[data_url(p) for p in images])
     except CodexError as error:
         raise WorkflowError(f'{what} failed: {error}') from None
-    record_usage(cwd, what, {'model': model, 'effort': ''}, result)
+    record_usage(cwd, what, role, result)
     return parse_json(result['text'], save_path, what)
 
 
@@ -288,19 +303,19 @@ def materialize_video(step_dir, written):
     return frames
 
 
-def write(client, model, skills_dir, campaign, step, step_dir, previous, review, notes):
+def write(client, roles, skills_dir, campaign, step, step_dir, previous, review, notes):
     for stale in ('review.json', 'review.md'):
         (step_dir / stale).unlink(missing_ok=True)
     print(f"[{step['id']}] writer working...")
     prompt = writer_prompt(skills_dir, campaign, step, previous, review, notes)
-    written = call_codex(client, model, prompt, step_dir, WRITER_SCHEMAS[step['kind']], step_dir / 'writer.json', 'writer')
+    written = call_codex(client, roles[step['role']], prompt, step_dir, WRITER_SCHEMAS[step['kind']], step_dir / 'writer.json', 'writer')
     return written, materialize(step, step_dir, written)
 
 
-def review_step(client, model, skills_dir, campaign, step, step_dir, images):
+def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
     print(f"[{step['id']}] reviewer working...")
     prompt = review_prompt(skills_dir, campaign, step, step_dir)
-    review = call_codex(client, model, prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images)
+    review = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images)
     if any(finding['severity'] == 'blocking' for finding in review['findings']):
         review['verdict'] = 'revise'
     (step_dir / 'review.json').write_text(json.dumps(review, indent=2, ensure_ascii=False))
@@ -340,7 +355,7 @@ def decide(step, step_dir, review, ask):
             print('Type a, r or q.')
 
 
-def run_step(client, model, skills_dir, campaign, step, ask):
+def run_step(client, roles, skills_dir, campaign, step, ask):
     step_dir = campaign / step['id']
     step_dir.mkdir(exist_ok=True)
     written = review = None
@@ -352,8 +367,8 @@ def run_step(client, model, skills_dir, campaign, step, ask):
     auto_left = MAX_AUTO_REVISIONS
     while True:
         if review is None:
-            written, images = write(client, model, skills_dir, campaign, step, step_dir, previous, last_review, notes)
-            review = review_step(client, model, skills_dir, campaign, step, step_dir, images)
+            written, images = write(client, roles, skills_dir, campaign, step, step_dir, previous, last_review, notes)
+            review = review_step(client, roles, skills_dir, campaign, step, step_dir, images)
             archive(step_dir)
             if review['verdict'] == 'revise' and auto_left > 0:
                 auto_left -= 1
@@ -386,13 +401,14 @@ def build_final(campaign, steps):
     return final
 
 
-def run_campaign(campaign, client, model, ask=input, steps=STEPS, skills_dir=SKILLS_DIR):
+def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES):
     if not (campaign / '00-task.md').is_file():
         raise WorkflowError(f'no campaign at {campaign}')
     check_skills(skills_dir, steps)
+    check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
     for step in steps:
         if not (campaign / step['id'] / 'APPROVED').is_file():
-            run_step(client, model, skills_dir, campaign, step, ask)
+            run_step(client, roles, skills_dir, campaign, step, ask)
     final = build_final(campaign, steps)
     print(f"\nAll steps approved. Final package: {final / 'index.md'}")
     return final
@@ -436,15 +452,13 @@ def cmd_status(name):
         print(f"final package: {campaign / 'final' / 'index.md'}")
 
 
-def cmd_run(name, model):
+def cmd_run(name):
     campaign = CAMPAIGNS_DIR / name
     if not campaign.is_dir():
         raise WorkflowError(f'no campaign at {campaign}')
     try:
         with CodexClient(stderr_path=campaign / 'codex-stderr.log') as client:
-            if model not in client.models():
-                raise WorkflowError(f'model {model} is not in the Codex model list')
-            run_campaign(campaign, client, model)
+            run_campaign(campaign, client)
     except CodexError as error:
         raise WorkflowError(f'codex: {error}') from None
 
@@ -457,7 +471,6 @@ def main():
     new.add_argument('task_file')
     run = sub.add_parser('run', help='run or continue a campaign')
     run.add_argument('name')
-    run.add_argument('--model', default=DEFAULT_MODEL)
     status = sub.add_parser('status', help='show where a campaign is')
     status.add_argument('name')
     args = parser.parse_args()
@@ -465,7 +478,7 @@ def main():
         if args.command == 'new':
             cmd_new(args.name, args.task_file)
         elif args.command == 'run':
-            cmd_run(args.name, args.model)
+            cmd_run(args.name)
         else:
             cmd_status(args.name)
     except WorkflowError as error:

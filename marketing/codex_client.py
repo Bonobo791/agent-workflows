@@ -61,13 +61,21 @@ class CodexClient:
                 return message['result']
 
     def models(self):
-        return [item['model'] for item in self._request('model/list', {})['data']]
+        """Map each model name to the reasoning efforts it supports."""
+        models, cursor = {}, None
+        while True:
+            result = self._request('model/list', {'cursor': cursor})
+            for item in result['data']:
+                models[item['model']] = [option['reasoningEffort'] for option in item['supportedReasoningEfforts']]
+            cursor = result['nextCursor']
+            if cursor is None:
+                return models
 
-    def run_turn(self, prompt, model, cwd, output_schema=None, images=()):
+    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=()):
         thread = self._request('thread/start', {'model': model, 'cwd': cwd, 'ephemeral': True, 'sandbox': 'read-only', 'approvalPolicy': 'never'})
         thread_id = thread['thread']['id']
         content = [{'type': 'text', 'text': prompt}] + [{'type': 'image', 'url': url} for url in images]
-        params = {'threadId': thread_id, 'input': content, 'model': model, 'cwd': cwd, 'approvalPolicy': 'never'}
+        params = {'threadId': thread_id, 'input': content, 'model': model, 'effort': effort, 'cwd': cwd, 'approvalPolicy': 'never'}
         if output_schema is not None:
             params['outputSchema'] = output_schema
         self.next_id += 1
