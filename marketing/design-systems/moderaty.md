@@ -20,15 +20,15 @@ Hairline borders are 1px wide. Text-3 is for non-essential labels only: it is 2.
 
 ## Typography
 Font stack (system fonts only, nothing loaded from the internet), headline weight, body weight, and sizes for stills and for the reel.
-- font stack: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif
-- labels and numbers: 'JetBrains Mono', ui-monospace, monospace (caps labels only)
+- font stack: system-ui, -apple-system, 'Segoe UI', sans-serif
+- labels and numbers: ui-monospace, monospace (caps labels only)
 - headline weight: 700
 - body weight: 400 (the source does not set a body weight)
 - caps labels: 12 px, uppercase, weight 700, letter-spacing 0.08em (the source's button label style)
 - stills: headline 72 to 96 px, second line 36 to 44 px
 - reel: headline 96 to 120 px, second line 36 to 44 px
 
-Archivo and JetBrains Mono are not system fonts. The images and reel must not load them, so the stack falls back to the system fonts after them.
+The source names Archivo and JetBrains Mono. Neither is installed where these images render, so the stacks above use the system fonts that actually render.
 
 ## Layout
 Margins, alignment, where the headline sits, where the logo sits.
