@@ -190,5 +190,32 @@ class TaskFormatTest(unittest.TestCase):
         self.assertEqual(ids, ['01-sources', '02-brief', '03-article', '04-linkedin', '05-x', '06-instagram'])
 
 
+class ImportTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / 'skills' / 'import').mkdir(parents=True)
+        (self.tmp / 'skills' / 'import' / 'SKILL.md').write_text('import the issue')
+        self.campaign = self.tmp / 'campaigns' / 'mc-32'
+        self.campaign.mkdir(parents=True)
+
+    def test_import_writes_the_task(self):
+        client = FakeClient([], writer_text=json.dumps({'output': task_text(), 'notes': ''}))
+        run.import_issue(client, self.campaign, 'MC-32', skills_dir=self.tmp / 'skills', roles=ROLES)
+        self.assertEqual(run.check_task((self.campaign / '00-task.md').read_text()), [])
+        self.assertIn('MC-32', client.prompts[0])
+
+    def test_import_with_empty_output_stops(self):
+        client = FakeClient([], writer_text=json.dumps({'output': '', 'notes': 'tracker unreachable'}))
+        with self.assertRaises(run.WorkflowError):
+            run.import_issue(client, self.campaign, 'MC-32', skills_dir=self.tmp / 'skills', roles=ROLES)
+        self.assertFalse((self.campaign / '00-task.md').exists())
+
+
+class SkillFilesTest(unittest.TestCase):
+    def test_every_step_has_skill_files(self):
+        run.check_skills(run.SKILLS_DIR, run.STEPS)
+        run.load_skill(run.SKILLS_DIR, 'import', 'SKILL.md')
+
+
 if __name__ == '__main__':
     unittest.main()

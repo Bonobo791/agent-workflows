@@ -29,6 +29,7 @@ ROLES = {
 MAX_AUTO_REVISIONS = 1
 MAX_REVIEW_FRAMES = 10
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
+ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
 USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 DELIVERABLES = ['article', 'social', 'images', 'reel']
 TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints']
@@ -495,21 +496,46 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
     return final
 
 
-def cmd_new(name, task_file):
+def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
+    check_models(client, roles, [{'role': 'writer'}])
+    prompt = '\n\n'.join([load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)])
+    written = call_codex(client, roles['writer'], prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer')
+    errors = check_task(written['output'])
+    if errors:
+        raise WorkflowError(f"the imported task is not valid ({'; '.join(errors)}); see {campaign / 'import.json'}")
+    (campaign / '00-task.md').write_text(written['output'].rstrip() + '\n')
+    return written['output']
+
+
+def cmd_new(name, task_file, issue):
+    if (task_file is None) == (issue is None):
+        raise WorkflowError('give either a task file or --issue, not both and not neither')
     if not NAME_RE.match(name):
         raise WorkflowError('campaign name must use lowercase letters, digits and hyphens')
     campaign = CAMPAIGNS_DIR / name
     if campaign.exists():
         raise WorkflowError(f'{campaign} already exists')
-    task = Path(task_file)
-    if not task.is_file():
-        raise WorkflowError(f'task file not found: {task}')
-    errors = check_task(task.read_text())
-    if errors:
-        raise WorkflowError('; '.join(errors))
+    if issue is None:
+        task = Path(task_file)
+        if not task.is_file():
+            raise WorkflowError(f'task file not found: {task}')
+        errors = check_task(task.read_text())
+        if errors:
+            raise WorkflowError('; '.join(errors))
+        campaign.mkdir(parents=True)
+        shutil.copyfile(task, campaign / '00-task.md')
+        print(f'Created {campaign}. Next: python3 marketing/run.py run {name}')
+        return
+    if not ISSUE_RE.match(issue):
+        raise WorkflowError(f'issue must look like MC-32, not {issue!r}')
     campaign.mkdir(parents=True)
-    shutil.copyfile(task, campaign / '00-task.md')
-    print(f'Created {campaign}. Next: python3 marketing/run.py run {name}')
+    try:
+        with CodexClient(stderr_path=campaign / 'codex-stderr.log') as client:  # not lean: the import needs the It's a Plan connection
+            task = import_issue(client, campaign, issue)
+    except (CodexError, WorkflowError) as error:
+        raise WorkflowError(f'{error} Delete {campaign} before trying again.') from None
+    print(task)
+    print(f"Check and edit {campaign / '00-task.md'}, then: python3 marketing/run.py run {name}")
 
 
 def cmd_status(name):
@@ -517,6 +543,9 @@ def cmd_status(name):
     if not campaign.is_dir():
         raise WorkflowError(f'no campaign at {campaign}')
     steps = campaign_steps(campaign)
+    import_totals = usage_totals(campaign)
+    if any(import_totals.values()):
+        print(f"{'00-import':<14} {'':<26} {usage_line(import_totals)}")
     total = {key: 0 for key in USAGE_KEYS}
     for step in steps:
         step_dir = campaign / step['id']
@@ -551,9 +580,10 @@ def cmd_run(name):
 def main():
     parser = argparse.ArgumentParser(description='Marketing workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)
-    new = sub.add_parser('new', help='create a campaign from a task file')
+    new = sub.add_parser('new', help="create a campaign from a task file or an It's a Plan issue")
     new.add_argument('name')
-    new.add_argument('task_file')
+    new.add_argument('task_file', nargs='?')
+    new.add_argument('--issue', help='an It\'s a Plan issue identifier, for example MC-32')
     run = sub.add_parser('run', help='run or continue a campaign')
     run.add_argument('name')
     status = sub.add_parser('status', help='show where a campaign is')
@@ -561,7 +591,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == 'new':
-            cmd_new(args.name, args.task_file)
+            cmd_new(args.name, args.task_file, args.issue)
         elif args.command == 'run':
             cmd_run(args.name)
         else:
