@@ -14,6 +14,7 @@ Blocking findings:
 - Line 1 would not stop a creator scrolling: it describes a situation with no stakes, no number and no tension.
 - The post covers more than one idea, or reads as a summary of the article.
 - No opinion or recommendation.
+- More than 2 facts in the post.
 - The first line does not hook, or the image text does not match the post.
 - The primary keyword is missing from the first sentence.
 - A claim that is not in the brief's Facts.

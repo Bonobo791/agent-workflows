@@ -68,15 +68,13 @@ HEDGE_WORDS = ['may', 'might', 'describes', 'positions', 'offers', 'various']
 SOCIAL_BANNED = ['fictional', 'says it', 'stated', 'describes', 'positions', 'within that scope', 'supplied']
 LINKEDIN_LIMIT = 1000  # characters, hashtags excluded
 X_POST_LIMIT = 3
-MAX_PRODUCT_LINES = 2
-PRODUCT_STOPWORDS = {'The', 'A', 'An', 'In', 'On', 'At', 'For', 'To', 'Of', 'And', 'It', 'Its', 'This', 'That', 'With', 'From', 'By', 'When', 'If', 'Plans'}
 CHANNEL_LIMIT = 200  # characters per Channel idea line
 BANNED_PHRASES = ['supplied facts', 'supplied evidence', 'the brief', 'provided facts', 'based on the facts']
 CONTRAST_RE = re.compile(r"\b(?:is|are|was|were|isn't|aren't)?\s*\w[\w\s']{0,40},\s+not\s+\w", re.I)  # "X, not Y"
 NOT_IT_RE = re.compile(r"\bnot (?:just |only )?\w[\w\s']{0,30}[,;]\s+(?:it[’']s|it is|but)\b", re.I)  # "not X, it's Y"
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
-SOCIAL_INPUTS = ['voice', '02-brief#Angle', '02-brief#Channel ideas', '02-brief#Facts']
+SOCIAL_INPUTS = ['voice', '02-brief#Angle', '02-brief#Keywords', '02-brief#Channel ideas', '02-brief#Facts']
 SOCIAL_REVIEW_INPUTS = SOCIAL_INPUTS  # one list, so the writer and reviewer prompts share a prefix
 IMAGE_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
 REEL_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
@@ -436,16 +434,6 @@ def linkedin_length(post):
     return len(HASHTAG_RE.sub('', post).strip())
 
 
-def product_names(brief):
-    """Capitalised words in the brief's Facts, except common words that start a sentence."""
-    if not brief:
-        return set()
-    names = set()
-    for fact in facts_of(brief):
-        names.update(word for word in re.findall(r"\b[A-Z][A-Za-z]+\b", fact) if word not in PRODUCT_STOPWORDS)
-    return names
-
-
 def sentences(text):
     return [sentence.strip() for sentence in re.split(r'(?<=[.!?])\s+|\n+', text) if sentence.strip()]
 
@@ -487,10 +475,6 @@ def check_linkedin(output, task, brief):
         errors.append(f'the Post is {length} characters without hashtags; the limit is {LINKEDIN_LIMIT}')
     if '`' in post:
         errors.append('the Post contains a backtick; a LinkedIn post may not contain one')
-    names = product_names(brief)
-    product_lines = [line for line in post.splitlines() if any(re.search(rf'\b{re.escape(name)}\b', line) for name in names)]
-    if len(product_lines) > MAX_PRODUCT_LINES:
-        errors.append(f'the Post has {len(product_lines)} lines that state a fact with a product name; the limit is {MAX_PRODUCT_LINES}')
     errors += social_word_errors(output, 'Post')
     errors += wording_errors(output)
     return errors

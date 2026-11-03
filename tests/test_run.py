@@ -489,12 +489,6 @@ class SocialLimitsTest(unittest.TestCase):
         three = f'1/ One.\n\n2/ Two.\n\n3/ Three {run.LINK}'
         self.assertFalse(any('posts;' in e for e in run.check_x(three, task_text(), None)))
 
-    def test_linkedin_names_at_most_two_product_lines(self):
-        brief = '## Facts\n- Moderaty holds links https://example.com (checked 2026-11-03)\n'
-        post = linkedin_post('Moderaty one.\n\nModeraty two.\n\nModeraty three.')
-        self.assertIn('the Post has 3 lines that state a fact with a product name; the limit is 2',
-                      run.check_linkedin(post, task_text(), brief))
-
     def test_brief_channel_idea_is_200_characters_at_most(self):
         prefix = '- LinkedIn: '
         at_limit = prefix + 'x' * (run.CHANNEL_LIMIT - len(prefix))
@@ -645,7 +639,7 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(client.prompts, [])
 
     def test_social_steps_share_the_longest_prefix(self):
-        for step_id, text in (('02-brief', '## Angle\nA reader problem.\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n## Channel ideas\nIdea.\n'),
+        for step_id, text in (('02-brief', '## Angle\nA reader problem.\n## Keywords\nkeyword\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n## Channel ideas\nIdea.\n'),
                               ('03-article', '# Title\n## One\nBody.\n')):
             folder = self.campaign / step_id
             folder.mkdir()
