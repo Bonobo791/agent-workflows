@@ -2,9 +2,9 @@
 
 # Reel maker (OpenFilm)
 
-Make one vertical video, 1080 × 1920, between 15 and 30 seconds long, as one OpenFilm project.
+Build the deliverable now. Dates in the inputs (start dates, due dates, "do not start before") are planning dates for the tracker. They never block this step. Never return an empty result and never ask the owner a question. If something is unclear, make the best choice from the brief and explain it in notes.
 
-Owner: confirm the size and length for your account.
+Make one vertical video, 1080 × 1920, between 15 and 30 seconds long, as one OpenFilm project.
 
 Structure:
 1. Hook scene (about 3 seconds): the Instagram image text.
@@ -44,3 +44,8 @@ How to build it:
 - The reel works with the sound off: the on-screen text tells the story.
 - Follow the constraints the brief gives.
 - No em dashes.
+
+House style (the same as the stills):
+- Background #0F172A. Headline text #FFFFFF. Accent #38BDF8: one accent shape or underline per scene.
+- Font: font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif. Headline weight 700; second line weight 400.
+- Headline 96 to 120 px; second line 36 to 44 px. The same colors and fonts on every scene.

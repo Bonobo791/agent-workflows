@@ -307,6 +307,23 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual(run.check_sources(good, ''), [])
 
 
+class ImagesTest(unittest.TestCase):
+    def setUp(self):
+        self.step_dir = Path(tempfile.mkdtemp()) / '07-images'
+        self.step_dir.mkdir(parents=True)
+
+    def test_images_error_includes_writer_notes(self):
+        with self.assertRaises(run.WorkflowError) as caught:
+            run.materialize_images(self.step_dir, {'projects': [], 'notes': 'blocked'})
+        self.assertIn('blocked', str(caught.exception))
+
+    def test_images_need_the_three_names(self):
+        projects = [{'name': 'linkedin', 'look_time': 1, 'files': []}, {'name': 'x', 'look_time': 1, 'files': []}]
+        with self.assertRaises(run.WorkflowError) as caught:
+            run.materialize_images(self.step_dir, {'projects': projects, 'notes': ''})
+        self.assertIn('instagram', str(caught.exception))
+
+
 class ImportTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

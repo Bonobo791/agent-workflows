@@ -523,9 +523,11 @@ def materialize_images(step_dir, written):
     review_dir.mkdir()
     names = [project['name'] for project in written['projects']]
     if not names:
-        raise WorkflowError('writer returned no image projects')
+        raise WorkflowError(f"writer returned no image projects. Writer notes: {written['notes'] or 'none'}")
     if len(set(names)) != len(names):
         raise WorkflowError(f'duplicate image project names: {names}')
+    if set(names) != {'linkedin', 'x', 'instagram'}:
+        raise WorkflowError(f'expected exactly the projects linkedin, x and instagram; the writer returned {names}')
     lines, reviews = ['# Images', ''], []
     for project in written['projects']:
         if not NAME_RE.match(project['name']):
@@ -544,6 +546,8 @@ def materialize_images(step_dir, written):
 
 
 def materialize_video(step_dir, written):
+    if not written['files']:
+        raise WorkflowError(f"writer returned no reel files. Writer notes: {written['notes'] or 'none'}")
     project_dir = step_dir / 'project'
     write_project(project_dir, written['files'])
     mp4 = step_dir / 'reel.mp4'

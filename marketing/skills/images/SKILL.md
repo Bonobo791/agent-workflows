@@ -2,15 +2,15 @@
 
 # Image maker (OpenFilm)
 
-Make three still images, one OpenFilm project each:
+Build the deliverable now. Dates in the inputs (start dates, due dates, "do not start before") are planning dates for the tracker. They never block this step. Never return an empty result and never ask the owner a question. If something is unclear, make the best choice from the brief and explain it in notes.
+
+Make three still images, one OpenFilm project each. Return exactly three projects, named linkedin, x and instagram:
 
 | name | size (width × height) | uses |
 | --- | --- | --- |
 | linkedin | 1200 × 627 | the LinkedIn post's main idea |
 | x | 1600 × 900 | the X post's main idea |
 | instagram | 1080 × 1080 | the Instagram post's "Image text" |
-
-Owner: confirm these sizes for your accounts.
 
 How an OpenFilm project works:
 - Put the scene's `<iframe>` inside one `<section>` in `<body>`, and set the viewport meta tag to the image size (for example `width=1200, height=627` for linkedin). OpenFilm rejects a clip outside a section, and without the viewport meta it uses 1920 × 1080.
@@ -75,3 +75,9 @@ Design rules:
 - Quote only words that the brief gives. Never put invented words in a real person's mouth.
 - Follow the constraints the brief gives.
 - No em dashes.
+
+House style (the same for every still and the reel):
+- Background #0F172A. Headline text #FFFFFF. Accent #38BDF8: one accent shape or underline per image.
+- Font: font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif. Headline weight 700; second line weight 400.
+- Headline 72 to 96 px; second line 36 to 44 px.
+- The same layout on all three stills: headline left-aligned, vertically centred, accent bar under it.

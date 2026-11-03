@@ -38,4 +38,5 @@ What the task does not say and the owner must decide, or None.
 Rules:
 - Use only the task and the sources step. Never invent features, prices, numbers, customers, quotes or dates.
 - Follow the task's Constraints.
+- Do not copy schedule dates into any section. They are not rules for later steps.
 - No em dashes.
