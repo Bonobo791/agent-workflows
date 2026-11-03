@@ -1,42 +1,5 @@
 __pycache__/
 *.py[cod]
-*.db
-*.db-*
 .env
 .env.*
-!.env.example
-# AI agent tool directories. .claude and .codex stay under version control.
-.agents/
-.aider/
-.continue/
-.cursor/
-.devin/
-.gemini/
-.grok/
-.hermes/
-.junie/
-.kilocode/
-.kiro/
-.openhands/
-.opencode/
-.qwen/
-.remember/
-.roo/
-.trae/
-.vibe/
-.windsurf/
-/data/
-# Explicit workflow-generated run outputs; /data/ also keeps all local state private.
-/data/*/artifacts/
-/data/*/local-outputs/
-/data/*/local-workspaces/
-/secrets/
-/control-secret
-credentials.json
-*.sqlite
-*.sqlite-*
-tools/codex_harness/runs/
-
-# Local tool cache and the skill installer's lockfile.
-/.claude/ucai-formatter-cache.local.json
-/skills-lock.json
+campaigns/
