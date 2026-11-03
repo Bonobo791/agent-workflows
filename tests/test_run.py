@@ -409,6 +409,19 @@ class VoiceAndAngleTest(unittest.TestCase):
         self.assertIn('not None', ' '.join(run.voice_errors(task_text().replace('## Voice\nmoderaty\n', '## Voice\nNone.\n'))))
 
 
+class StepRoleTest(unittest.TestCase):
+    def test_brief_step_runs_on_the_strategist(self):
+        brief = next(step for step in run.STEPS if step['id'] == '02-brief')
+        self.assertEqual(run.ROLES[brief['role']], {'model': 'gpt-6.1-sol', 'effort': 'high'})
+        article = next(step for step in run.STEPS if step['id'] == '03-article')
+        self.assertEqual(run.ROLES[article['role']]['model'], 'gpt-6-luna')
+
+    def test_missing_strategist_effort_stops_before_any_turn(self):
+        brief = next(step for step in run.STEPS if step['id'] == '02-brief')
+        with self.assertRaisesRegex(run.WorkflowError, 'strategist effort high is not supported by gpt-6.1-sol'):
+            run.check_models(FakeClient([], models={'gpt-6.1-sol': ['medium']}), run.ROLES, [brief])
+
+
 class SearchLogTest(unittest.TestCase):
     def test_each_web_search_is_logged_and_returned(self):
         client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])

@@ -33,6 +33,7 @@ ROLES = {
     'writer': {'model': 'gpt-6-luna', 'effort': 'max'},
     'reviewer': {'model': 'gpt-6-sol', 'effort': 'medium'},
     'creator': {'model': 'gpt-6-sol', 'effort': 'high'},
+    'strategist': {'model': 'gpt-6.1-sol', 'effort': 'high'},
 }
 MAX_AUTO_REVISIONS = 2
 MAX_REVIEW_FRAMES = 10
@@ -74,7 +75,7 @@ STEPS = [
     {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources',
      'inputs': ['00-task'], 'review_inputs': ['00-task'],
      'writer_skills': ['content-research-and-sourcing'], 'review_skills': ['content-research-and-sourcing']},
-    {'id': '02-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'brief',
+    {'id': '02-brief', 'skill': 'brief', 'kind': 'text', 'role': 'strategist', 'deliverable': 'article', 'web': False, 'check': 'brief',
      'inputs': ['voice', '00-task', '01-sources'], 'review_inputs': ['voice', '00-task', '01-sources'],
      'writer_skills': ['content-brief'], 'review_skills': ['content-brief']},
     {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'article',
