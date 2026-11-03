@@ -8,7 +8,12 @@ Checked:
 - Hashtags has 3 to 5 hashtags.
 - Image text has 8 words or fewer.
 
+Judge as the target reader scrolling a busy feed. Passing the rules is not enough; a post that is accurate but forgettable is a revise.
+
 Blocking findings:
+- Line 1 would not stop a creator scrolling: it describes a situation with no stakes, no number and no tension.
+- The post covers more than one idea, or reads as a summary of the article.
+- No opinion or recommendation.
 - The first line does not hook, or the image text does not match the post.
 - The primary keyword is missing from the first sentence.
 - A claim that is not in the brief's Facts.

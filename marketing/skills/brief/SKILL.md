@@ -34,7 +34,7 @@ The primary search phrase for the article, its search intent (informational, com
 - H2 list. If the task gives Required headings, include each one exactly as written, in the same order. Other H2s may go around them.
 
 ## Channel ideas
-If the Deliverables include social: one line each, starting `- LinkedIn:`, `- X:` and `- Instagram:`, with the single idea that post carries. Otherwise: Not needed.
+If the Deliverables include social: one line each, starting `- LinkedIn:`, `- X:` and `- Instagram:`, 200 characters or fewer. Each line is one sentence that gives the single point, the emotion (for example annoyance, relief or surprise) and the one fact that proves the point. Example: `- LinkedIn: Annoyance at a spam link under your newest upload; proof: a held comment waits for your review, so no viewer sees the link.` Otherwise: Not needed.
 
 ## Visual ideas
 If the Deliverables include images: what the three images show. If the Deliverables include reel: what the reel shows. Otherwise: Not needed.

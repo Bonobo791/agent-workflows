@@ -7,7 +7,12 @@ Checked:
 - [ARTICLE LINK] appears exactly once, in the last post.
 - The thread has at most two hashtags.
 
+Judge as the target reader scrolling a busy feed. Passing the rules is not enough; a post that is accurate but forgettable is a revise.
+
 Blocking findings:
+- Line 1 would not stop a creator scrolling: it describes a situation with no stakes, no number and no tension.
+- The post covers more than one idea, or reads as a summary of the article.
+- No opinion or recommendation.
 - Post 1 does not hook, or does not promise the payoff the thread delivers.
 - A post that does not move the one idea forward, or that repeats another post.
 - A claim that is not in the brief's Facts, or one that contradicts the brief's Facts or its Channel idea for X.

@@ -7,6 +7,7 @@ Checked:
 - Every fact under Facts has a URL or ends with "(from task)".
 - The Article plan has exactly one "- Target length: 2000 words" line, with a whole number.
 - Channel ideas has the three channel lines when Deliverables include social, or "Not needed." when they do not.
+- Each Channel idea line is 200 characters or fewer.
 
 Check the brief against the task and the sources step.
 

@@ -453,6 +453,59 @@ class WordingTest(unittest.TestCase):
         self.assertTrue(any('remove "the brief"' in e for e in run.check_instagram(output, task_text(), None)))
 
 
+def linkedin_post(post_text):
+    return f'## Post\n{post_text}\n\nLink in the first comment.\n#one #two #three\n\n## First comment\n{run.LINK}\n'
+
+
+class SocialLimitsTest(unittest.TestCase):
+    def post_length(self, count):
+        return run.linkedin_length(run.sections(linkedin_post('x' * count))['Post'])
+
+    def test_linkedin_length_limit(self):
+        at_limit = run.LINKEDIN_LIMIT - self.post_length(1) + 1
+        self.assertEqual(self.post_length(at_limit), run.LINKEDIN_LIMIT)
+        self.assertFalse(any('characters without hashtags' in e for e in run.check_linkedin(linkedin_post('x' * at_limit), task_text(), None)))
+        over = linkedin_post('x' * (at_limit + 1))
+        self.assertEqual(self.post_length(at_limit + 1), run.LINKEDIN_LIMIT + 1)
+        self.assertIn(f'the Post is {run.LINKEDIN_LIMIT + 1} characters without hashtags; the limit is {run.LINKEDIN_LIMIT}',
+                      run.check_linkedin(over, task_text(), None))
+
+    def test_social_banned_meta_words(self):
+        for word in run.SOCIAL_BANNED:
+            outputs = {
+                'check_linkedin': linkedin_post(f'You wake up to spam, {word} the rest.'),
+                'check_x': f'1/ You wake up to spam, {word} the rest.',
+                'check_instagram': f'## Caption\nYou wake up to spam, {word} the rest.\nLink in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\nSave hours\n',
+            }
+            for name, output in outputs.items():
+                with self.subTest(word=word, check=name):
+                    errors = getattr(run, name)(output, task_text(), None)
+                    self.assertIn(f'the {"Post" if name == "check_linkedin" else "thread" if name == "check_x" else "post"} uses "{word}"; that word is not allowed in a social post',
+                                  errors)
+
+    def test_x_max_three_posts(self):
+        four = f'1/ One.\n\n2/ Two.\n\n3/ Three.\n\n4/ Four {run.LINK}'
+        self.assertIn('the thread has 4 posts; the limit is 3', run.check_x(four, task_text(), None))
+        three = f'1/ One.\n\n2/ Two.\n\n3/ Three {run.LINK}'
+        self.assertFalse(any('posts;' in e for e in run.check_x(three, task_text(), None)))
+
+    def test_linkedin_names_at_most_two_product_lines(self):
+        brief = '## Facts\n- Moderaty holds links https://example.com (checked 2026-11-03)\n'
+        post = linkedin_post('Moderaty one.\n\nModeraty two.\n\nModeraty three.')
+        self.assertIn('the Post has 3 lines that state a fact with a product name; the limit is 2',
+                      run.check_linkedin(post, task_text(), brief))
+
+    def test_brief_channel_idea_is_200_characters_at_most(self):
+        prefix = '- LinkedIn: '
+        at_limit = prefix + 'x' * (run.CHANNEL_LIMIT - len(prefix))
+        others = '\n- X: ok\n- Instagram: ok'
+        ok_brief = full_brief('- Target length: 800 words', channel=at_limit + others)
+        self.assertFalse(any('Channel idea is' in e for e in run.check_brief(ok_brief, task_text('article, social'), None)))
+        long_brief = full_brief('- Target length: 800 words', channel=at_limit + 'x' + others)
+        self.assertIn('the LinkedIn Channel idea is 201 characters; the limit is 200',
+                      run.check_brief(long_brief, task_text('article, social'), None))
+
+
 class SearchLogTest(unittest.TestCase):
     def test_each_web_search_is_logged_and_returned(self):
         client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])
@@ -592,7 +645,7 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(client.prompts, [])
 
     def test_social_steps_share_the_longest_prefix(self):
-        for step_id, text in (('02-brief', '## Facts\n- A fact https://example.com (checked 2026-11-03)\n## Channel ideas\nIdea.\n'),
+        for step_id, text in (('02-brief', '## Angle\nA reader problem.\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n## Channel ideas\nIdea.\n'),
                               ('03-article', '# Title\n## One\nBody.\n')):
             folder = self.campaign / step_id
             folder.mkdir()

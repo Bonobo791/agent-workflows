@@ -65,13 +65,19 @@ VOICE_SECTIONS = ['Personality', 'Tone', 'How we talk to the reader', 'Sentence 
                   'Posts we like', "Posts we don't like"]
 TEMPLATE_NOTE = 'Template note:'
 HEDGE_WORDS = ['may', 'might', 'describes', 'positions', 'offers', 'various']
+SOCIAL_BANNED = ['fictional', 'says it', 'stated', 'describes', 'positions', 'within that scope', 'supplied']
+LINKEDIN_LIMIT = 1000  # characters, hashtags excluded
+X_POST_LIMIT = 3
+MAX_PRODUCT_LINES = 2
+PRODUCT_STOPWORDS = {'The', 'A', 'An', 'In', 'On', 'At', 'For', 'To', 'Of', 'And', 'It', 'Its', 'This', 'That', 'With', 'From', 'By', 'When', 'If', 'Plans'}
+CHANNEL_LIMIT = 200  # characters per Channel idea line
 BANNED_PHRASES = ['supplied facts', 'supplied evidence', 'the brief', 'provided facts', 'based on the facts']
 CONTRAST_RE = re.compile(r"\b(?:is|are|was|were|isn't|aren't)?\s*\w[\w\s']{0,40},\s+not\s+\w", re.I)  # "X, not Y"
 NOT_IT_RE = re.compile(r"\bnot (?:just |only )?\w[\w\s']{0,30}[,;]\s+(?:it[’']s|it is|but)\b", re.I)  # "not X, it's Y"
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
-SOCIAL_INPUTS = ['voice', '02-brief', '03-article#outline']
-SOCIAL_REVIEW_INPUTS = ['voice', '02-brief#Keywords', '02-brief#Facts', '02-brief#Channel ideas']
+SOCIAL_INPUTS = ['voice', '02-brief#Angle', '02-brief#Channel ideas', '02-brief#Facts']
+SOCIAL_REVIEW_INPUTS = SOCIAL_INPUTS  # one list, so the writer and reviewer prompts share a prefix
 IMAGE_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
 REEL_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
 STEPS = [
@@ -384,6 +390,9 @@ def check_brief(output, task, brief):
         for prefix in ('- LinkedIn:', '- X:', '- Instagram:'):
             if not any(line.startswith(prefix) for line in channel.splitlines()):
                 errors.append(f'Channel ideas needs a line starting "{prefix}"')
+        for line in channel.splitlines():
+            if len(line) > CHANNEL_LIMIT:
+                errors.append(f'the {line[2:line.index(":")]} Channel idea is {len(line)} characters; the limit is {CHANNEL_LIMIT}')
     elif channel != 'Not needed.':
         errors.append('Channel ideas must say "Not needed." when Deliverables do not include social')
     return errors
@@ -416,6 +425,25 @@ def check_article(output, task, brief):
 
 def first_line(text):
     return next((line.strip() for line in text.splitlines() if line.strip()), '')
+
+
+def social_word_errors(text, what):
+    return [f'the {what} uses "{word}"; that word is not allowed in a social post'
+            for word in SOCIAL_BANNED if re.search(rf'\b{re.escape(word)}\b', text, re.IGNORECASE)]
+
+
+def linkedin_length(post):
+    return len(HASHTAG_RE.sub('', post).strip())
+
+
+def product_names(brief):
+    """Capitalised words in the brief's Facts, except common words that start a sentence."""
+    if not brief:
+        return set()
+    names = set()
+    for fact in facts_of(brief):
+        names.update(word for word in re.findall(r"\b[A-Z][A-Za-z]+\b", fact) if word not in PRODUCT_STOPWORDS)
+    return names
 
 
 def sentences(text):
@@ -454,6 +482,16 @@ def check_linkedin(output, task, brief):
     if not 3 <= hashtags <= 5:
         errors.append(f'the Post has {hashtags} hashtags; the limit is 3 to 5')
     errors += hedge_errors(first_line(post))
+    length = linkedin_length(post)
+    if length > LINKEDIN_LIMIT:
+        errors.append(f'the Post is {length} characters without hashtags; the limit is {LINKEDIN_LIMIT}')
+    if '`' in post:
+        errors.append('the Post contains a backtick; a LinkedIn post may not contain one')
+    names = product_names(brief)
+    product_lines = [line for line in post.splitlines() if any(re.search(rf'\b{re.escape(name)}\b', line) for name in names)]
+    if len(product_lines) > MAX_PRODUCT_LINES:
+        errors.append(f'the Post has {len(product_lines)} lines that state a fact with a product name; the limit is {MAX_PRODUCT_LINES}')
+    errors += social_word_errors(output, 'Post')
     errors += wording_errors(output)
     return errors
 
@@ -465,8 +503,8 @@ def check_x(output, task, brief):
     if numbers and numbers != list(range(1, len(numbers) + 1)):
         found = ', '.join(f'{number}/' for number in numbers)
         errors.append(f'post numbers must run 1/ to {len(numbers)}/ in order; found {found}')
-    if len(posts) > 5:
-        errors.append(f'the thread has {len(posts)} posts; the limit is 5')
+    if len(posts) > X_POST_LIMIT:
+        errors.append(f'the thread has {len(posts)} posts; the limit is {X_POST_LIMIT}')
     for number, post in enumerate(posts, 1):
         length = len(post.replace(LINK, 'x' * X_LINK_LENGTH))
         if length > 280:
@@ -478,6 +516,7 @@ def check_x(output, task, brief):
     hashtags = len(HASHTAG_RE.findall(output))
     if hashtags > 2:
         errors.append(f'the thread has {hashtags} hashtags; the limit is 2')
+    errors += social_word_errors(output, 'thread')
     errors += wording_errors(output)
     return errors
 
@@ -495,6 +534,7 @@ def check_instagram(output, task, brief):
     if words > 8:
         errors.append(f'the Image text has {words} words; the limit is 8')
     errors += hedge_errors(first_line(found.get('Caption', '')))
+    errors += social_word_errors(output, 'post')
     errors += wording_errors(output)
     return errors
 
