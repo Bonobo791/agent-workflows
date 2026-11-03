@@ -1,4 +1,5 @@
 """Mockable stage runner. External actions and live execution are not enabled."""
+from runner.trace import trace
 import hashlib
 import json
 from runner.graph import GraphError
@@ -69,23 +70,23 @@ class GraphRunner:
         try:
             if names and not self.skill_resolver: raise ExecutionError('required skill resolver unavailable')
             skills=self.skill_resolver.resolve(names) if names else {}
-        except Exception:
+        except Exception as exc:
             if self.graph.get(run,stage): self.graph.invalidate(run,stage,snapshot,token,reason='skills_unavailable')
-            raise ExecutionError('required skills unavailable') from None
+            raise ExecutionError('required skills unavailable') from exc
         hashes={name:skill['sha256'] for name,skill in skills.items()}
         skill_fingerprint=hashlib.sha256(json.dumps(hashes,sort_keys=True).encode()).hexdigest()
         try:
             encoded=json.dumps({'inputs':inputs,'dependencies':snapshot['dependencies'],'skill_hashes':hashes},sort_keys=True,separators=(',',':'),allow_nan=False).encode()
-        except (ValueError, TypeError): raise ExecutionError('inputs are not serializable') from None
+        except (ValueError, TypeError) as exc: raise ExecutionError('inputs are not serializable') from exc
         input_hash=hashlib.sha256(encoded).hexdigest()
         row=self.graph.db.execute('SELECT output_hash FROM graph_results WHERE run=? AND stage=? AND input_hash=?',(run,stage,input_hash)).fetchone()
         current=self.graph.get(run,stage)
         if current and current['status']=='rate_limited': raise ExecutionError('subscription limit reached; explicit resume required')
         if row and current and current['status'] in ('passed','blocked','unsuitable','awaiting_review') and current['version']==row[0]:
             try: cached=self._validate_artifact_graph(row[0])
-            except Exception:
+            except Exception as exc:
                 self.graph.invalidate(run,stage,snapshot,token,reason='artifact_unavailable')
-                raise ExecutionError('cached artifact unavailable') from None
+                raise ExecutionError('cached artifact unavailable') from exc
             decision=self.gate(stage,cached)
             cached_status='passed' if decision is True else decision
             if cached_status != current['status']:
@@ -104,22 +105,23 @@ class GraphRunner:
             row=self.graph.db.execute('SELECT session FROM graph_sessions WHERE run=? AND role=?',(run,stage)).fetchone() if resumable else None
             session=row[0] if row else None
             try: result=self.specialist(stage,context,session)
-            except RateLimited:
+            except RateLimited as exc:
                 if correction_id is not None:
                     self.graph.db.execute('INSERT OR REPLACE INTO quota_pauses VALUES(?,?,?)',(self.quota_scope,run,stage))
-                    raise ExecutionError('subscription limit reached; correction outcome requires inspection') from None
+                    raise ExecutionError('subscription limit reached; correction outcome requires inspection')
                 ref=self.artifacts.put(b'{"status":"rate_limited"}')
                 self.graph.finish(run,stage,snapshot,'rate_limited',ref,token,completion_input=input_hash,skill_fingerprint=skill_fingerprint,quota_scope=self.quota_scope)
-                raise ExecutionError('subscription limit reached; run paused') from None
+                raise ExecutionError('subscription limit reached; run paused') from exc
             if resumable and session and isinstance(result,dict) and result.get('session_id') != session: raise ExecutionError('writer or implementation session changed')
             decision=self.gate(stage,result) if isinstance(result,dict) else False
+            trace('graph.gate', run=run, stage=stage, decision=decision, status=result.get('status') if isinstance(result,dict) else None, reason=result.get('reason') if isinstance(result,dict) else None)
             if decision is True: status='passed'
             elif decision in ('blocked','unsuitable','awaiting_review'):
                 status=decision
                 result={**result, '_gate_status':status}
             else:
                 self.graph.resolve_attempt(run,stage,input_hash,token,'failed')
-                raise ExecutionError('stage gate failed')
+                raise ExecutionError(f"stage gate failed (decision {decision!r}, status {result.get('status') if isinstance(result,dict) else None!r}, reason {str(result.get('reason') if isinstance(result,dict) else '')[:200]!r})")
             output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
             ref=self.artifacts.put(output)
             if correction_id is not None and status!='passed':
@@ -129,4 +131,6 @@ class GraphRunner:
             self.graph.finish(run,stage,snapshot,status,ref,token,completion_input=input_hash,skill_fingerprint=skill_fingerprint,session_record=result.get('session_id') if resumable else None,correction_id=correction_id)
             return ref
         except ExecutionError: raise
-        except Exception: raise ExecutionError('stage outcome requires inspection') from None
+        except Exception as exc:
+            trace('graph.exception', run=run, stage=stage, error=f'{type(exc).__name__}: {str(exc)[:600]}')
+            raise ExecutionError(f'stage outcome requires inspection ({type(exc).__name__}: {str(exc)[:300]})') from exc

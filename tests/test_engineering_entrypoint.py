@@ -1,16 +1,35 @@
-import hashlib
 import http.client
 import http.server
 import json
-import socketserver
-import struct
+import os
+import secrets
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from runner.worker import build_control
+from runner.local_command import _claim_command_launch
+from runner.local_scope import LocalScopes, reserve_for_execution
+from runner.local_supervisor import LocalSupervisor
 from runner.manual_lifecycle import ManualLifecycle
+from runner.process_transport import ProcessTransport
+from runner.worker import build_control
+
+FIXTURE = Path(__file__).resolve().parent/'fixtures'/'fake_engineering_codex.py'
+
+class ScopeBackend:
+    """Synthetic user-scope backend that tracks several scope units at once."""
+    def __init__(self): self.units={}
+    def start(self,unit): self.units[unit]={'active':'active','invocation':secrets.token_hex(16),'cgroup':'/user.slice/'+unit}
+    def inspect(self,unit):
+        info=self.units.get(unit)
+        if info is None: return {'id':unit,'load':'not-found','active':'inactive','invocation':'','cgroup':''}
+        live=info['active']=='active'
+        return {'id':unit,'load':'loaded' if live else 'not-found','active':info['active'],'invocation':info['invocation'] if live else '','cgroup':info['cgroup'] if live else ''}
+    def stop(self,unit): self.units[unit]['active']='inactive'; return True
+    def empty_cgroup(self,path): return True
 
 class EngineeringEntrypointTests(unittest.TestCase):
     def test_engineering_admission_implementation_and_qa_to_approval(self):
@@ -31,74 +50,6 @@ class EngineeringEntrypointTests(unittest.TestCase):
                 self.reply({'jsonrpc':'2.0','id':message['id'],'result':result})
             def reply(self,data):
                 payload=json.dumps(data).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(payload))); self.end_headers(); self.wfile.write(payload)
-        class Engine(socketserver.StreamRequestHandler):
-            containers={}; specs=[]; canonical_reviews=0; resumed=[]
-            def handle(self):
-                request=self.rfile.readline().decode().split(); headers={}
-                while True:
-                    line=self.rfile.readline()
-                    if line==b'\r\n': break
-                    key,value=line.decode().split(':',1); headers[key.lower()]=value.strip()
-                path=request[1]; body=self.rfile.read(int(headers.get('content-length','0')))
-                def reply(status,data=None):
-                    payload=json.dumps(data).encode() if data is not None else b''
-                    self.wfile.write(('HTTP/1.1 '+str(status)+' OK\r\nContent-Length: '+str(len(payload))+'\r\nContent-Type: application/json\r\n\r\n').encode()+payload); self.wfile.flush()
-                if path.endswith('/containers/create'):
-                    spec=json.loads(body); cid=format(len(Engine.specs)+1,'064x'); Engine.specs.append(spec)
-                    mounts={m['Target']:m['Source'] for m in spec['HostConfig']['Mounts']}
-                    Engine.containers[cid]={'state':'created','label':spec['Labels']['agent-workflows.run'],'mounts':mounts,'command':spec['Entrypoint']+spec['Cmd'] if 'Entrypoint' in spec else None,'code':0,'stdout':b'','stderr':b''}; reply(201,{'Id':cid}); return
-                cid=path.split('/')[3]; item=Engine.containers[cid]
-                if path.endswith('/json'): reply(200,{'Id':cid,'Config':{'Labels':{'agent-workflows.run':item['label']}},'State':{'Running':item['state']=='running','Status':item['state'],'ExitCode':item['code']}})
-                elif path.endswith('/start'):
-                    item['state']='running'
-                    if item['command'] is not None:
-                        import subprocess
-                        completed=subprocess.run(item['command'],cwd=item['mounts']['/workspace'],env={'PATH':'/usr/bin:/bin','HOME':'/nonexistent'},capture_output=True,timeout=5,check=False)
-                        item['code']=completed.returncode; item['stdout']=completed.stdout; item['stderr']=completed.stderr; item['state']='exited'
-                    reply(204)
-                elif '/stop?' in path: item['state']='exited'; reply(204)
-                elif '/wait?' in path: reply(200,{'StatusCode':item['code']})
-                elif '/logs?' in path:
-                    payload=b''.join(struct.pack('>BxxxI',channel,len(data))+data for channel,data in ((1,item['stdout']),(2,item['stderr'])) if data)
-                    self.wfile.write(('HTTP/1.1 200 OK\r\nContent-Length: '+str(len(payload))+'\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n').encode()+payload); self.wfile.flush()
-                elif '/attach?' in path:
-                    self.wfile.write(b'HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n'); self.wfile.flush()
-                    def emit(value):
-                        data=json.dumps(value).encode()+b'\n'; self.wfile.write(struct.pack('>BxxxI',1,len(data))+data); self.wfile.flush()
-                    for line in self.rfile:
-                        msg=json.loads(line); method=msg.get('method'); ident=msg.get('id')
-                        if method=='initialize': emit({'id':ident,'result':{}})
-                        elif method=='model/list': emit({'id':ident,'result':{'data':[{'model':'fake-terra','displayName':'GPT-6.1 Terra','supportedReasoningEfforts':[{'reasoningEffort':'medium'}]}],'nextCursor':None}})
-                        elif method=='thread/start':
-                            tid='thread-'+cid[-4:]; Path(item['mounts']['/codex-home'],'synthetic-state').write_text(tid); emit({'id':ident,'result':{'thread':{'id':tid}}})
-                        elif method=='thread/resume':
-                            tid=msg['params']['threadId']; assert Path(item['mounts']['/codex-home'],'synthetic-state').read_text()==tid
-                            Engine.resumed.append(tid); emit({'id':ident,'result':{'thread':{'id':tid}}})
-                        elif method=='turn/start':
-                            tid=msg['params']['threadId']; payload=json.JSONDecoder().raw_decode(msg['params']['input'][0]['text'].split('\n',1)[1])[0]; stage=payload['stage']; refs=payload['input_versions']
-                            data=(json.dumps({'commands':[{'command':'synthetic-check','exit_code':0,'output':'fixture passed'}]}) if stage=='test' else 'synthetic '+stage+' '+cid[-4:]).encode(); Path(item['mounts']['/output'],'result.txt').write_bytes(data)
-                            status='passed'; findings=[]
-                            if stage=='implement':
-                                import subprocess
-                                workspace=item['mounts']['/workspace']
-                                Path(workspace,'new.txt').write_text('corrected fixture v2' if len(Engine.resumed)>1 else 'corrected fixture' if Engine.resumed else 'implemented fixture')
-                                subprocess.run(['git','add','new.txt'],cwd=workspace,check=True,capture_output=True)
-                                subprocess.run(['git','commit','-m','implementation'],cwd=workspace,check=True,capture_output=True)
-                            if stage=='qa':
-                                Engine.canonical_reviews+=1
-                                if Engine.canonical_reviews in (1,3):
-                                    status='blocked'; findings=[{'id':'f1','severity':'blocking','description':'Fix fixture','location':'new.txt','evidence':refs[1],'remedy':'Correct content','resolution':'open'}]
-                            result={'stage':stage,'status':status,'input_versions':refs,'outputs':[hashlib.sha256(data).hexdigest()],'findings':findings}
-                            if status=='blocked': result['reason']='correction required'
-                            emit({'id':ident,'result':{'turn':{'id':'turn-'+cid[-4:]}}})
-                            emit({'method':'item/agentMessage/delta','params':{'threadId':tid,'turnId':'turn-'+cid[-4:],'delta':json.dumps(result)}})
-                            emit({'method':'turn/completed','params':{'threadId':tid,'turn':{'id':'turn-'+cid[-4:],'status':'completed'}}}); break
-                else: reply(404)
-        class EngineServer(socketserver.ThreadingUnixStreamServer): daemon_threads=True
-        class Delivery:
-            def ready(self): return True
-            def deliver(self,assignment,cid): return True
-            def verify_home(self,path): return True
         external=http.server.ThreadingHTTPServer(('127.0.0.1',0),External); external_thread=threading.Thread(target=external.serve_forever); external_thread.start()
         self.addCleanup(external.server_close); self.addCleanup(external_thread.join); self.addCleanup(external.shutdown)
         host,port=external.server_address
@@ -109,25 +60,53 @@ class EngineeringEntrypointTests(unittest.TestCase):
             def request(self,method,path,body=None):
                 conn=http.client.HTTPConnection(host,port,timeout=3); conn.request(method,path); response=conn.getresponse(); result=json.loads(response.read()); conn.close(); return result
         with tempfile.TemporaryDirectory() as root:
-            import subprocess
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
             workspace=Path(root)/'workspaces'/'run-1'/'repo'; workspace.mkdir(parents=True,mode=0o700)
             (Path(root)/'workspaces').chmod(0o700); workspace.parent.chmod(0o700)
             def git(*args): return subprocess.run(['git',*args],cwd=workspace,check=True,capture_output=True,text=True).stdout.strip()
             git('init','-b','main'); (workspace/'.git').chmod(0o700); git('config','user.name','Fixture'); git('config','user.email','fixture@example.invalid')
             (workspace/'base.txt').write_text('base'); git('add','base.txt'); git('commit','-m','base'); base=git('rev-parse','HEAD'); git('checkout','-b','task-1'); git('remote','add','origin','https://github.com/owner/repo.git')
             skillroot=Path(root)/'skills'; (skillroot/'role').mkdir(parents=True); (skillroot/'role'/'SKILL.md').write_text('Synthetic role')
-            sock=str(Path(root)/'engine.sock'); engine=EngineServer(sock,Engine); engine_thread=threading.Thread(target=engine.serve_forever); engine_thread.start()
-            docker={'socket':sock,'image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
+            state_path=Path(root)/'codex-state.json'
+            state_path.write_text(json.dumps({'counter':0,'threads':{},'canonical_reviews':0,'resumed':[],'errors':[]}))
+            def read_state(): return json.loads(state_path.read_text())
+            outputs=Path(root)/'outputs'; outputs.mkdir(mode=0o700)
+            binary=Path(root)/'codex'; binary.write_text('synthetic'); binary.chmod(0o700)
+            scope_backend=ScopeBackend()
+            class Handle:
+                def __init__(self,db,run,path,workspace_claim):
+                    self.db,self.run=db,run; self.output_dir=tempfile.mkdtemp(dir=outputs); self.output_path_prefix=self.output_dir
+                    self.unit=reserve_for_execution(db,run,scope_backend,path,workspace_claim)
+                    scope_backend.start(self.unit); scopes=LocalScopes(db,scope_backend)
+                    try: scopes.bind(run,self.unit)
+                    finally: scopes.close()
+                    self.process=subprocess.Popen([sys.executable,str(FIXTURE)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,env={**os.environ,'OUTPUT':self.output_dir,'FAKE_STATE':str(state_path),'FAKE_WORKSPACE':path})
+                def assert_active(self): return True
+                def open_transport(self,deadline,cancelled): return ProcessTransport(self.process,deadline,cancelled)
+                def verify_config(self,request): return True
+                def finish(self):
+                    self.process.stdin.close(); self.process.wait(timeout=10); self.process.stdout.close()
+                    scopes=LocalScopes(self.db,scope_backend)
+                    try: return scopes.stop(self.run,self.unit)
+                    finally: scopes.close()
+                def cancel(self): return self.finish()
+            def workspace_for(run,role): return str(Path(root)/'workspaces'/run/'repo') if role in ('implement','test','qa') else str(Path(root)/'workspaces'/role)
+            factory=lambda service:LocalSupervisor(str(Path(root)/'state.db'),str(binary),{'HOME':root},scope_backend,lambda run:True,workspace_for,lambda:True,{'mcp_servers':[],'plugins':[]},engineering_root=root,policy_hash='a'*64)
+            def sandbox(supervisor,run,path,argv,deadline,output_limit,on_reserved,*,reserved_command=None,**_):
+                unit=_claim_command_launch(supervisor,run,path,reserved_command,None)
+                scope_backend.start(unit); scopes=LocalScopes(supervisor.db,scope_backend)
+                try:
+                    scopes.bind(run,unit)
+                    completed=subprocess.run(argv,cwd=path,env={'PATH':'/usr/bin:/bin'},capture_output=True,timeout=10,check=False)
+                    scopes.stop(run,unit)
+                finally: scopes.close()
+                return {'outcome':'exited','exit_code':completed.returncode,'stdout':completed.stdout,'stderr':completed.stderr,'unit':unit}
             task={'run':'run-1','workflow':'engineering','project':'DEMO','number':1,'ready_columns':[10],'completed_columns':[20],'blocker_direction':'inward','plan_endpoint':'https://plan.example.invalid/mcp','github_owner':'owner','github_repo':'repo','github_branch':'task-1','github_base':'main'}
             roles=['plan','implement','test','qa']
             command={'argv':['/usr/bin/python3','-c','print("fixture test passed")'],'timeout_seconds':10,'output_limit':4096}
-            with patch('runner.plan_mcp.HTTPSMCP',return_value=PlanHTTP()),patch('workflows.engineering.github.HTTPSGitHub',return_value=GithubHTTP()):
-                service,control=build_control(root,'x'*40,docker_config=docker,command_config=command,task_config=task,plan_token='synthetic-plan',github_token='synthetic-github',role_config={'skill_roots':[str(skillroot)],'required_skills':{role:['role'] for role in roles}},lifecycle_factory=lambda service:ManualLifecycle(root+'/state.db','worker','inc'))
+            with patch('runner.plan_mcp.HTTPSMCP',return_value=PlanHTTP()),patch('workflows.engineering.github.HTTPSGitHub',return_value=GithubHTTP()),patch('runner.local_supervisor.start_local_process',side_effect=lambda db,run,path,*args,workspace_claim=None,**kwargs:Handle(db,run,path,workspace_claim)),patch('runner.local_command.run_scoped_sandbox',side_effect=sandbox):
+                service,control=build_control(root,'x'*40,execution_mode='local',local_supervisor_factory=factory,command_config=command,task_config=task,plan_token='synthetic-plan',github_token='synthetic-github',role_config={'skill_roots':[str(skillroot)],'required_skills':{role:['role'] for role in roles}},lifecycle_factory=lambda service:ManualLifecycle(root+'/state.db','worker','inc'))
                 try:
-                    service.docker_supervisor.credential_delivery=Delivery(); service.docker_supervisor.provider_ready=lambda:True
-                    service.approve('controller','command_policy',service.command_supervisor.policy_hash,'operator')
-                    service.approve('controller','docker_config',service.docker_supervisor.config.policy_hash,'operator')
+                    service.model_supervisor.preflight=lambda:True
                     control.handle('x'*40,{'action':'submit_configured'}); q=control.handle('x'*40,{'action':'manual_claim'})['claim']; g=control.handle('x'*40,{'action':'claim','run':'run-1'})['claim']
                     binding={'action':'engineering_workspace_binding','run':'run-1','queue_claim':q['token'],'graph_claim':g,'base':base}
                     proposal=control.handle('x'*40,binding); binding.update(action='bind_engineering_workspace',binding_hash=proposal['binding_hash']); control.handle('x'*40,binding)
@@ -137,23 +116,19 @@ class EngineeringEntrypointTests(unittest.TestCase):
                         result=control.handle('x'*40,req); seen.append(result.get('stage'))
                         if result.get('status')=='awaiting_approval': break
                     self.assertEqual(seen,['intake','plan','implement','test','qa','implement','test','qa','open_draft'])
-                    self.assertEqual(result['status'],'awaiting_approval'); self.assertEqual(Engine.canonical_reviews,2); self.assertEqual(len(Engine.resumed),1)
+                    self.assertEqual(result['status'],'awaiting_approval'); self.assertEqual(read_state()['canonical_reviews'],2); self.assertEqual(len(read_state()['resumed']),1)
                     from runner.metrics import snapshot, prometheus_text
                     wait_metric='workflow_stages{workflow="engineering",stage="open_draft",status="awaiting_approval"} 1'
                     self.assertIn(wait_metric,prometheus_text(snapshot(service.graph.db)))
                     original_package=result['version'];old_queue,old_graph=q['token'],g
-                    from types import SimpleNamespace
                     from runner.checkpoint import checkpoint
-                    from runner.local_scope import LocalScopes
                     from tests.test_local_scope import Backend
                     scopes=LocalScopes(root+'/state.db',Backend());scopes.close()
-                    service.graph.db.execute('CREATE TABLE local_sessions(run TEXT,role TEXT,session TEXT,binding TEXT,state TEXT)')
-                    service.model_supervisor=SimpleNamespace(db=root+'/state.db')
                     checkpoint(service,'run-1',old_queue,old_graph)
                     self.assertNotIn(wait_metric,prometheus_text(snapshot(service.graph.db)))
                     service.lifecycle.register_checkpoint_replacement('run-1','inc','inc-next')
                     service.lifecycle.close();service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc-next')
-                    q=service.lifecycle.claim();g=service.claim('run-1');service.model_supervisor=None
+                    q=service.lifecycle.claim();g=service.claim('run-1')
                     req.update(queue_claim=q['token'],graph_claim=g)
                     result=control.handle('x'*40,req)
                     self.assertEqual(result['status'],'awaiting_approval')
@@ -280,11 +255,10 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     self.assertEqual(service.graph.db.execute('SELECT state FROM pr_bridge_operations WHERE proposal=?',(initial['proposal'],)).fetchone(),('proposed',))
                     self.assertEqual(service.graph.db.execute('SELECT status FROM external_actions WHERE run=? AND action=?',('run-1',initial['action'])).fetchone(),('revoked',))
                     with self.assertRaises(ControlError):control.handle('x'*40,{**base_req,'action':'pr_execute','proposal':initial['proposal']})
-                    service.model_supervisor=SimpleNamespace(db=root+'/state.db')
                     checkpoint(service,'run-1',q['token'],g)
                     service.lifecycle.register_checkpoint_replacement('run-1','inc-next','inc-third')
                     service.lifecycle.close();service.lifecycle=ManualLifecycle(root+'/state.db','worker','inc-third')
-                    q=service.lifecycle.claim();g=service.claim('run-1');service.model_supervisor=None
+                    q=service.lifecycle.claim();g=service.claim('run-1')
                     base_req.update(queue_claim=q['token'],graph_claim=g);req.update(queue_claim=q['token'],graph_claim=g)
                     control.handle('x'*40,{**base_req,'action':'pr_approve','proposal':initial['proposal'],'expires':time.time()+60})
                     service.graph.db.execute('UPDATE action_bindings SET expires=0 WHERE run=? AND action=?',('run-1',initial['action']))
@@ -370,7 +344,7 @@ class EngineeringEntrypointTests(unittest.TestCase):
                     self.assertEqual(service.pr_authority.http.writes,5)
                     from runner.control import ControlError
                     with self.assertRaises(ControlError): control.handle('x'*40,req)
-                finally: service.lifecycle.close(); service.close(); engine.shutdown(); engine_thread.join(); engine.server_close()
+                finally: service.lifecycle.close(); service.close()
                 import sqlite3
                 from contextlib import closing
                 with closing(sqlite3.connect(root+'/state.db')) as reopened:

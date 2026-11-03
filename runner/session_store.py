@@ -44,14 +44,14 @@ class SessionStore:
             self.homes.mkdir(mode=0o700,exist_ok=True)
             info=self.homes.lstat()
             if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise SessionError('unsafe homes root')
-        except OSError: raise SessionError('state root unavailable') from None
+        except OSError: raise SessionError('state root unavailable')
         try:
             fd=os.open(self.root/'session-state.db',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
             try:
                 info=os.fstat(fd)
                 if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise SessionError('unsafe state database')
             finally: os.close(fd)
-        except OSError: raise SessionError('state database unavailable') from None
+        except OSError: raise SessionError('state database unavailable')
         self.db=sqlite3.connect(str(self.root/'session-state.db'),timeout=10,isolation_level=None)
         self.db.execute('''CREATE TABLE IF NOT EXISTS homes(id TEXT PRIMARY KEY,run TEXT NOT NULL,role TEXT NOT NULL,config TEXT NOT NULL,skills TEXT NOT NULL,session TEXT UNIQUE,state TEXT NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS home_claims(job TEXT PRIMARY KEY,home TEXT NOT NULL,state TEXT NOT NULL)''')
@@ -103,7 +103,7 @@ class SessionStore:
             row=db.execute("SELECT h.id,h.session FROM homes h JOIN home_claims c ON c.home=h.id WHERE c.job=? AND c.state='active' AND h.state='active'",(job,)).fetchone()
             if not row or (row[1] is not None and row[1]!=session): raise SessionError('session assignment unavailable')
             try: db.execute('UPDATE homes SET session=? WHERE id=?',(session,row[0]))
-            except sqlite3.IntegrityError: raise SessionError('session belongs to another home') from None
+            except sqlite3.IntegrityError: raise SessionError('session belongs to another home')
             db.execute('COMMIT')
         except Exception: db.execute('ROLLBACK'); raise
     def _check_home(self,home,fd=None):
@@ -114,7 +114,7 @@ class SessionStore:
             if (fd is None and path.resolve(strict=True)!=path) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise SessionError('unsafe state home')
             _check_entries(path)
             return identity
-        except OSError: raise SessionError('state unavailable') from None
+        except OSError: raise SessionError('state unavailable')
     def release(self,job,verify_stopped):
         if not callable(verify_stopped) or verify_stopped(job) is not True: raise SessionError('writer termination unverified')
         db=self.db; db.execute(_WRITE_TRANSACTION)
@@ -139,7 +139,7 @@ class SessionStore:
     @contextmanager
     def _pinned_home(self,home,identity):
         try: fd=os.open(self.homes/home,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-        except OSError: raise SessionError('backup home unavailable') from None
+        except OSError: raise SessionError('backup home unavailable')
         try:
             if _home_identity(os.fstat(fd))!=identity:raise SessionError(_BACKUP_HOME_CHANGED)
             self._check_home(home,fd)
@@ -155,7 +155,7 @@ class SessionStore:
                 self._finish_backup(job,home,generation,identity)
                 raise SessionError('credential boundary unverified')
             try: result=exporter(path,generation)
-            except Exception: raise SessionError('backup outcome unresolved') from None
+            except Exception: raise SessionError('backup outcome unresolved')
             self._finish_backup(job,home,generation,identity)
             return result
     def _finish_backup(self,job,home,generation,identity):
@@ -174,7 +174,7 @@ class SessionStore:
         with self._pinned_home(home,identity) as pinned:
             try:
                 if verify_quiescent(job,str(self.homes/home),generation) is not True or verify_safe(pinned) is not True: raise SessionError('backup recovery unverified')
-            except Exception: raise SessionError('backup recovery unverified') from None
+            except Exception: raise SessionError('backup recovery unverified')
             self._finish_backup(job,home,generation,identity)
             return True
     def delete(self,job,deleter):
@@ -184,4 +184,4 @@ class SessionStore:
             if deleter(str(path)) is not True or path.exists() or path.is_symlink(): raise SessionError('deletion unverified')
             self.db.execute("UPDATE homes SET state='deleted' WHERE id=? AND state='deleting'",(home,))
             return True
-        except Exception: raise SessionError('deletion outcome unresolved') from None
+        except Exception: raise SessionError('deletion outcome unresolved')

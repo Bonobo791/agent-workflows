@@ -24,7 +24,7 @@ def local_supervisor_factory(config,environment,root):
         state.mkdir(mode=0o700,parents=True,exist_ok=True)
         info=state.lstat()
         if state.resolve(strict=True)!=state or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise ValueError()
-    except Exception: raise LocalConfigError('invalid local executable or state directory') from None
+    except Exception: raise LocalConfigError('invalid local executable or state directory')
     expected=config['codex_sha256']; integrations={key:list(value) for key,value in config['disabled_integrations'].items()}
     policy_hash=hashlib.sha256(json.dumps({'codex_executable':str(binary),'codex_sha256':expected,'disabled_integrations':integrations,'state':str(state),'sandbox_settings':args[4:],'environment':child_env,'engineering_git_write':'implement-only'},sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def verify_policy():
@@ -57,13 +57,13 @@ def local_supervisor_factory(config,environment,root):
                         if not row or row[0]!=task['github_owner']+'/'+task['github_repo'] or row[2]!=task['github_branch'] or row[5]!=policy_hash or row[6] is not None or registry.verify(run,*row[:4],row[5])!=row[4]: raise ValueError()
                         return row[4]
                     finally:registry.close()
-                except Exception: raise LocalConfigError('verified engineering workspace unavailable') from None
+                except Exception: raise LocalConfigError('verified engineering workspace unavailable')
             parent=state
             try:
                 for name in ('local-workspaces',run,role):
                     parent=parent/name; parent.mkdir(mode=0o700,exist_ok=True); info=parent.lstat()
                     if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077 or parent.resolve(strict=True)!=parent: raise ValueError()
-            except (OSError,ValueError): raise LocalConfigError('private workspace unavailable') from None
+            except (OSError,ValueError): raise LocalConfigError('private workspace unavailable')
             return str(parent)
         return LocalSupervisor(str(state/'state.db'),str(binary),env,SystemdScopes(manager),lambda _:False,workspace_for,verify_policy,integrations,engineering_root=str(state),policy_hash=policy_hash)
     return factory

@@ -32,7 +32,7 @@ class PlatformReviewer:
             proof TEXT PRIMARY KEY,run TEXT NOT NULL,brief_ref TEXT NOT NULL,register_ref TEXT NOT NULL,bundle_ref TEXT NOT NULL,
             session TEXT NOT NULL,turn TEXT NOT NULL,skills TEXT NOT NULL,response_ref TEXT NOT NULL,report_ref TEXT NOT NULL,policy_hash TEXT NOT NULL)''')
     def _policy(self):
-        data={'config':self.config,'reviewer_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),'local_policy':self.service.model_supervisor.policy_hash}
+        data={'config':self.config,'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),'local_policy':self.service.model_supervisor.policy_hash}
         return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def _graph(self):
         graph=GraphStore(self.db_path);graph.register(marketing_definition());graph.register(engineering_definition());return graph
@@ -114,10 +114,7 @@ class PlatformReviewer:
             if not provenance.verify(run,'platform_review',session,skills) or not provenance.completed(run,'platform_review',session) or not provenance.subject_matches(run,'platform_review',session,brief_ref) or provenance.completion_hash(run,'platform_review',session)!=response_ref: return False
             inputs=[brief_ref,register,bundle];turn_row=graph.db.execute('SELECT input_versions,output_refs FROM completed_turn_outputs WHERE run=? AND role=? AND session=? AND turn=?',(run,'platform_review',session,turn)).fetchone()
             if not turn_row or json.loads(turn_row[0])!=inputs or json.loads(turn_row[1])!=[report_ref]: return False
-            model=self.service.model_policy.for_role('platform_review')['model'];binding=self.service.model_supervisor._binding(run,'platform_review',skills,model)[1]
-            from runner.local_scope import valid_scope_identity
-            scope=graph.db.execute("SELECT t.unit,s.invocation,s.cgroup FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='platform_review' AND t.session=? AND t.turn=? AND t.binding=? AND s.state='terminated'",(run,session,turn,binding)).fetchone()
-            if not scope or not valid_scope_identity(*scope): return False
+            if not graph.db.execute("SELECT 1 FROM execution_launches WHERE run=? AND role='platform_review' AND session=? AND turn=? AND launch_status='completed'",(run,session,turn)).fetchone(): return False
             parsed=parse_marketing_result(self.service.artifacts.get(response_ref).decode(),'platform_review')
             proof=json.loads(self.service.artifacts.get(proof_ref));report=json.loads(self.service.artifacts.get(report_ref))
             if parsed['input_versions']!=inputs or parsed['outputs']!=[report_ref] or not isinstance(report,dict) or set(report)!={'assets'}: return False

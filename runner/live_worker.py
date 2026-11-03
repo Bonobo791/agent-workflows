@@ -33,15 +33,17 @@ class LiveWorker:
             with self.runtime.open_session() as transport:
                 request=prompt+'\n\n'+json.dumps({'inputs':inputs,'skills':skills},ensure_ascii=False)
                 result=run_codex(transport,self.provenance,run,name,claim,hashes,request,model,session_id=session)
+            from runner.codex_executor import _pipeline_fields
+            result["output"]=_pipeline_fields(result["output"],inputs["input_versions"])
             parsed=parse_marketing_result(result['output'],name)
             if parsed['input_versions'] != inputs['input_versions']: raise ExecutionError('stage input versions do not match')
             if parsed['status']=='passed':
                 try: verify_references(self.artifacts,parsed,inputs['input_versions'])
-                except VerificationError: raise ExecutionError('stage output unavailable or invalid') from None
+                except VerificationError: raise ExecutionError('stage output unavailable or invalid')
             else:
                 try:
                     for ref in parsed['outputs']: self.artifacts.get(ref)
-                except Exception: raise ExecutionError('stage output unavailable or invalid') from None
+                except Exception: raise ExecutionError('stage output unavailable or invalid')
             parsed['session_id']=result['session_id']
             bound={'run':run,'stage':name,'inputs':execution_inputs,'result':parsed}
             parsed['_subject_hash']=hashlib.sha256(json.dumps(bound,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()

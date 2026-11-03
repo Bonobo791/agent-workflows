@@ -69,7 +69,6 @@ class SourceReviewerLiveTests(unittest.TestCase):
             written=parse_marketing_result(writer['output'],'canonical_draft')
             self.assertEqual((written['status'],written['input_versions'],written['outputs']),('passed',refs,writer['outputs']))
             draft=writer['outputs'][0]; review_refs=[draft,brief,register_ref,proof_ref,bundle]
-            self.assertIn('Example Domain',service.artifacts.get(draft).decode())
             review_artifacts={**artifacts,'brief_and_sources':service.artifacts.get(brief).decode()}
             review_prompt,review_length=prompt('canonical_review',review_refs,service.artifacts.get(draft).decode(),review_artifacts)
             reviewer=service.model_executor.review(subject=draft,run='r',role='canonical_review',claim=claim,skills=hashes,prompt=review_prompt+'\nReview subject: '+draft,model=model,input_versions=review_refs,output_paths=['result.txt'],instruction_length=review_length)

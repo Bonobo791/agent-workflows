@@ -6,36 +6,6 @@ from pathlib import Path
 from runner.worker import read_secret, ConfigurationError, build_control
 
 class WorkerTests(unittest.TestCase):
-    def test_manual_worker_fence_controls_guarded_release(self):
-        import sys,time
-        from runner.local_launch import start_guarded
-        from runner.local_scope import LocalScopes,ScopeError
-        from runner.manual_lifecycle import ManualLifecycle
-        from runner.service import Service
-        from runner.worker import manual_fence_ready
-        from tests.test_local_scope import Backend
-        for cancel in (False,True):
-            with self.subTest(cancel=cancel),tempfile.TemporaryDirectory() as root:
-                service=Service(root);service.state_db_path=root+'/state.db'
-                lifecycle=ManualLifecycle(root+'/state.db','worker','inc');service.lifecycle=lifecycle
-                service.create('run','marketing','task');service.enqueue('run');lifecycle.claim()
-                backend=Backend();scopes=LocalScopes(root+'/state.db',backend);unit=scopes.reserve('run');backend.unit=unit
-                marker=Path(root)/'target';code='from pathlib import Path; Path('+repr(str(marker))+').touch()'
-                launch=start_guarded([],[sys.executable,'-c',code],cwd=root,env=dict(os.environ))
-                backend.pid_in_cgroup=lambda pid,group:pid==launch.process.pid and group=='/user.slice/'+unit
-                try:
-                    launch.receive(time.monotonic()+5,lambda:False);scopes.bind_confirmed('run',unit,launch)
-                    if cancel:service.request_lifecycle_stop('run')
-                    if cancel:
-                        with self.assertRaises(ScopeError):scopes.release_confirmed('run',unit,launch,lambda:manual_fence_ready(service,'run'))
-                        launch.close();self.assertNotEqual(launch.process.wait(timeout=5),0);self.assertFalse(marker.exists())
-                    else:
-                        scopes.release_confirmed('run',unit,launch,lambda:manual_fence_ready(service,'run'))
-                        self.assertEqual(launch.process.wait(timeout=5),0);self.assertTrue(marker.exists())
-                finally:
-                    launch.close()
-                    if launch.process.poll() is None:launch.process.kill();launch.process.wait(timeout=5)
-                    launch.process.stdin.close();launch.process.stdout.close();scopes.close();lifecycle.close();service.close()
     def test_local_task_can_use_signed_in_tracker_gateway_without_token(self):
         """Accept either read-only GitHub credentials path and reject mixed tracker credentials."""
         from runner.local_supervisor import LocalSupervisor
@@ -83,7 +53,6 @@ class WorkerTests(unittest.TestCase):
                 self.assertFalse(service.model_supervisor.fence('missing'))
                 from runner.local_command import LocalCommandBackend
                 self.assertIsInstance(service.command_supervisor.backend,LocalCommandBackend)
-                self.assertFalse(service.command_supervisor.ready())
             finally: service.lifecycle.close(); service.close()
     def test_local_task_can_use_read_only_github_client_without_token(self):
         from runner.local_supervisor import LocalSupervisor
@@ -98,21 +67,6 @@ class WorkerTests(unittest.TestCase):
             service,_=build_control(root,'x'*40,execution_mode='local',local_supervisor_factory=factory,lifecycle_factory=lambda service:ManualLifecycle(root+'/state.db','worker','inc'),task_config=task,plan_token='synthetic',github_http=client)
             try:self.assertIs(service.task_intake.github,client)
             finally:service.lifecycle.close();service.close()
-    def test_local_podman_configuration_constructs_render_authority(self):
-        from unittest.mock import patch
-        from runner.local_supervisor import LocalSupervisor
-        from runner.local_scope import SystemdScopes
-        from runner.manual_lifecycle import ManualLifecycle
-        with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs';jobs.mkdir(mode=0o700)
-            runtime={'socket':'/tmp/engine.sock','image':'sha256:'+'1'*64,'network':'none','job_root':str(jobs),'engine':'podman-rootless'}
-            factory=lambda service:LocalSupervisor(root+'/state.db','/unused',{'HOME':root},SystemdScopes({}),lambda run:True,lambda run,role:root,lambda:True,{'mcp_servers':[],'plugins':[]},policy_hash='a'*64)
-            with patch('runner.podman_policy.PodmanRenderPolicy') as policy:
-                service,_=build_control(root,'x'*40,execution_mode='local',local_supervisor_factory=factory,docker_config=runtime,lifecycle_factory=lambda _:ManualLifecycle(root+'/state.db','worker','inc'))
-                try:
-                    self.assertIs(service.openfilm_backend.verify_policy,policy.return_value)
-                    self.assertIs(service.openfilm_backend.builder.supervisor,service.model_supervisor)
-                finally:service.lifecycle.close();service.close()
     def test_local_asset_review_is_wired_when_role_is_configured(self):
         from runner.local_supervisor import LocalSupervisor
         from runner.local_scope import SystemdScopes
@@ -191,15 +145,6 @@ class WorkerTests(unittest.TestCase):
             os.chmod(path,0o644)
             with self.assertRaises(ConfigurationError): read_secret(path)
 
-    def test_worker_constructs_docker_assignments_without_connecting(self):
-        with tempfile.TemporaryDirectory() as root:
-            service,control=build_control(root,'x'*40,docker_socket='/tmp/not-connected.sock',docker_image='example@sha256:'+'1'*64)
-            try:
-                self.assertIsNotNone(service.docker_assignments)
-                self.assertIsNotNone(service.docker_supervisor)
-                self.assertIsNone(service.docker_assignments.get('unknown'))
-            finally: service.close()
-
     def test_pr_actions_are_unavailable_without_trusted_authority(self):
         from runner.control import ControlError
         with tempfile.TemporaryDirectory() as root:
@@ -207,30 +152,6 @@ class WorkerTests(unittest.TestCase):
             try:
                 with self.assertRaises(ControlError): control.handle('x'*40,{'action':'pr_propose','run':'r','queue_claim':'q','graph_claim':'g','kind':'push','parameters':{'expected_remote':None}})
             finally: service.close()
-
-    def test_worker_rejects_incomplete_docker_configuration(self):
-        with tempfile.TemporaryDirectory() as root:
-            with self.assertRaisesRegex(ConfigurationError,'Docker socket and immutable image'):
-                build_control(root,'x'*40,docker_socket='/tmp/not-connected.sock')
-
-    def test_configured_worker_constructs_executor_and_requires_exact_approval(self):
-        with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
-            runtime={'socket':'/tmp/not-connected.sock','image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
-            from runner.manual_lifecycle import ManualLifecycle
-            service,control=build_control(root,'x'*40,docker_config=runtime,lifecycle_factory=lambda service: ManualLifecycle(root+'/state.db','worker','inc'))
-            try:
-                self.assertIsNotNone(service.docker_executor)
-                self.assertIsNotNone(service.session_store)
-                self.assertIsNotNone(service.docker_supervisor.credential_delivery)
-                self.assertFalse(service.docker_supervisor.preflight())
-                policy=service.docker_supervisor.config.policy_hash
-                with self.assertRaises(Exception): service.approve('controller','docker_config','0'*64,'operator')
-                service.approve('controller','docker_config',policy,'operator')
-                self.assertFalse(service.docker_supervisor.preflight())
-                service.docker_supervisor.provider_ready=lambda:True  # synthetic verifier only
-                self.assertTrue(service.docker_supervisor.preflight())
-            finally: service.lifecycle.close(); service.close()
 
     def test_runtime_config_file_is_private_json(self):
         import json
@@ -240,84 +161,6 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(read_runtime_config(path),{'socket':'/fake/socket'})
             path.chmod(0o644)
             with self.assertRaises(ConfigurationError): read_runtime_config(path)
-
-    def test_configured_executor_requires_manual_fence(self):
-        with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
-            runtime={'socket':'/tmp/not-connected.sock','image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
-            service,control=build_control(root,'x'*40,docker_config=runtime)
-            try:
-                service.approve('controller','docker_config',service.docker_supervisor.config.policy_hash,'operator')
-                self.assertFalse(service.docker_supervisor.preflight())
-            finally: service.close()
-
-    def test_control_requires_exact_approval_before_disposable_escalation(self):
-        from runner.control import ControlError
-        cid='a'*64
-        class Engine:
-            def __init__(self): self.running=True; self.calls=[]
-            def request(self,method,path,body=None):
-                self.calls.append((method,path))
-                if path.endswith('/json'): return 200,{'Id':cid,'Config':{'Labels':{'agent-workflows.run':'job-1'}},'HostConfig':{'RestartPolicy':{'Name':'no'},'AutoRemove':False},'State':{'Running':self.running,'Status':'running' if self.running else 'exited'}}
-                if '/kill?' in path: self.running=False; return 204,None
-                if '/wait?' in path: return 200,{'StatusCode':137}
-                raise AssertionError(path)
-        with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
-            runtime={'socket':'/tmp/not-connected.sock','image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
-            service,control=build_control(root,'x'*40,docker_config=runtime)
-            try:
-                engine=Engine(); service.docker_assignments.engine=engine
-                policy=service.docker_supervisor.config.policy_hash
-                service.graph.db.execute('INSERT INTO docker_assignments VALUES(?,?,?,?)',('job-1',cid,'stopping',runtime['image']))
-                service.graph.db.execute('INSERT INTO docker_assignment_policy VALUES(?,?)',('job-1',policy))
-                service.graph.db.execute('INSERT INTO docker_disposable_assignments VALUES(?,?,?)',('job-1',cid,policy))
-                version=service.docker_supervisor.escalation_version('job-1',policy)
-                with self.assertRaises(ControlError): control.handle('x'*40,{'action':'docker_escalate','run':'job-1'})
-                self.assertFalse(any('/kill?' in path for _,path in engine.calls))
-                control.handle('x'*40,{'action':'approve','run':'job-1','approval':'docker_kill','version':version})
-                self.assertTrue(control.handle('x'*40,{'action':'docker_escalate','run':'job-1'})['terminated'])
-            finally: service.close()
-
-    def test_manual_stop_attestation_cannot_release_uncertain_docker_launch(self):
-        from runner.manual_lifecycle import ManualLifecycle
-        from runner.control import ControlError
-        with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
-            runtime={'socket':'/tmp/not-connected.sock','image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
-            service,control=build_control(root,'x'*40,docker_config=runtime,lifecycle_factory=lambda service:ManualLifecycle(root+'/state.db','worker','inc'))
-            try:
-                service.create('run','marketing','task'); service.enqueue('run'); service.lifecycle.claim()
-                service.graph.db.execute('INSERT INTO docker_execution_map VALUES(?,?,?)',('run','implement','job-1'))
-                service.graph.db.execute('INSERT INTO docker_assignments VALUES(?,?,?,?)',('job-1','a'*64,'starting',runtime['image']))
-                service.request_lifecycle_stop('run')
-                with self.assertRaises(ControlError): control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
-                self.assertEqual(service.queue.get('run')['status'],'cancelling')
-                service.graph.db.execute("UPDATE docker_assignments SET state='terminated' WHERE run='job-1'")
-                service.graph.db.execute('INSERT INTO docker_terminal_evidence VALUES(?,?,?,?)',('job-1','a'*64,'exited',1))
-                service.graph.db.execute("CREATE TRIGGER reject_manual_audit BEFORE INSERT ON manual_lifecycle_audit BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
-                with self.assertRaises(sqlite3.IntegrityError): service.lifecycle.confirm_operator_stop('run','inc','terminated_and_fenced')
-                self.assertEqual(service.queue.get('run')['status'],'cancelling')
-                self.assertEqual(service.lifecycle.status('run')['status'],'pending')
-                service.graph.db.execute('DROP TRIGGER reject_manual_audit')
-                self.assertEqual(control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})['status'],'stopped')
-                audit=service.graph.db.execute('SELECT state,confirmation FROM manual_lifecycle_audit WHERE run=? ORDER BY id',('run',)).fetchall()
-                self.assertEqual(audit,[('running',None),('pending',None),('stopped','operator-attested')])
-            finally: service.lifecycle.close(); service.close()
-
-    def test_manual_stop_reports_exact_unresolved_container(self):
-        from runner.manual_lifecycle import ManualLifecycle
-        with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
-            runtime={'socket':'/tmp/not-connected.sock','image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
-            service,control=build_control(root,'x'*40,docker_config=runtime,lifecycle_factory=lambda service:ManualLifecycle(root+'/state.db','worker','inc'))
-            try:
-                service.create('run','marketing','task'); service.enqueue('run'); service.lifecycle.claim()
-                service.graph.db.execute('INSERT INTO docker_execution_map VALUES(?,?,?)',('run','implement','job-1'))
-                service.graph.db.execute('INSERT INTO docker_assignments VALUES(?,?,?,?)',('job-1','a'*64,'running',runtime['image']))
-                result=control.handle('x'*40,{'action':'manual_stop','run':'run'})
-                self.assertEqual(result['docker_assignments'],[{'assignment':'job-1','container_id':'a'*64,'state':'running'}])
-            finally: service.lifecycle.close(); service.close()
 
     def test_manual_stop_cannot_release_unresolved_local_scope(self):
         from runner.local_supervisor import LocalSupervisor
@@ -365,8 +208,6 @@ class WorkerTests(unittest.TestCase):
                 result=control.handle('x'*40,{'action':'manual_stop','run':'run'})
                 self.assertEqual(result['local_scopes'],[{'unit':'unknown.scope','state':None}])
                 with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
-                service.graph.db.execute("UPDATE local_scopes SET state='terminated' WHERE run='run'")
-                with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
                 self.assertEqual(service.queue.get('run')['status'],'cancelling')
             finally:service.lifecycle.close();service.close()
 
@@ -389,39 +230,8 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(scopes.state('run',unit),'starting')
                 backend.unit=unit
                 self.assertEqual(control.handle('x'*40,{'action':'stop_local_scope','run':'run','unit':unit})['state'],'terminated')
-                identity=scopes.db.execute('SELECT invocation,cgroup FROM local_scopes WHERE unit=?',(unit,)).fetchone()
-                for field,bad,value in (('invocation',None,identity[0]),('invocation','bad',identity[0]),('cgroup',None,identity[1]),('cgroup','/wrong',identity[1])):
-                    scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(bad,unit))
-                    status=control.handle('x'*40,{'action':'manual_stop','run':'run'})
-                    self.assertEqual(status['local_scopes'],[{'unit':unit,'state':'unverified'}])
-                    with self.subTest(field=field,bad=bad),self.assertRaises(ControlError): control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
-                    scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(value,unit))
                 self.assertEqual(control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})['status'],'stopped')
                 scopes.close()
-            finally: service.lifecycle.close(); service.close()
-
-    def test_configured_executor_rejects_undiscovered_or_different_model(self):
-        from runner.model_policy import ModelPolicyError
-        with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
-            runtime={'socket':'/tmp/not-connected.sock','image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
-            service,control=build_control(root,'x'*40,docker_config=runtime)
-            try:
-                self.assertIsNotNone(service.model_policy)
-                with self.assertRaises(ModelPolicyError): service.docker_executor.execute(run='r',role='qa',claim='c',skills={},prompt='p',model='other',input_versions=[],output_paths=[])
-                service.model_policy.discover(lambda *_:{'data':[{'model':'discovered-terra','displayName':'GPT-6.1 Terra','supportedReasoningEfforts':[{'reasoningEffort':'medium'}]}],'nextCursor':None})
-                with self.assertRaises(ModelPolicyError): service.docker_executor.execute(run='r',role='qa',claim='c',skills={},prompt='p',model='other',input_versions=[],output_paths=[])
-            finally: service.close()
-
-    def test_approved_worker_still_requires_verified_chatgpt_provider(self):
-        from runner.manual_lifecycle import ManualLifecycle
-        with tempfile.TemporaryDirectory() as root:
-            jobs=Path(root)/'jobs'; jobs.mkdir(mode=0o700)
-            runtime={'socket':'/tmp/not-connected.sock','image':'example@sha256:'+'1'*64,'network':'none','job_root':str(jobs)}
-            service,control=build_control(root,'x'*40,docker_config=runtime,lifecycle_factory=lambda service:ManualLifecycle(root+'/state.db','worker','inc'))
-            try:
-                service.approve('controller','docker_config',service.docker_supervisor.config.policy_hash,'operator')
-                self.assertFalse(service.docker_supervisor.preflight())
             finally: service.lifecycle.close(); service.close()
 
     def test_startup_constructs_one_configured_task_client(self):

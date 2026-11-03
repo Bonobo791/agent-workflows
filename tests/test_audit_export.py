@@ -18,33 +18,6 @@ from runner.otel_audit import OpenTelemetryAuditExporter, OpenTelemetryAuditTrac
 
 
 class AuditExportTests(unittest.TestCase):
-    def test_launch_receipt_projection_correlates_without_private_identity(self):
-        from runner.otel_audit import _attributes
-        key=b'x'*32
-        row={'id':1,'schema_version':1,'run':'private-run','unit':'private-unit',
-             'invocation':'private-invocation','cgroup':'private-cgroup','pid':123,
-             'nonce_hash':'private-nonce','status':'bound','created':1}
-        event=project_event('local_scope_launch_audit',row,key)
-        scope=project_event('local_scope_audit',{'id':2,'schema_version':1,'run':'private-run',
-                            'unit':'private-unit','state':'running','created':1},key)
-        self.assertEqual(event['scope_id'],scope['scope_id'])
-        self.assertEqual(_attributes(event)['kind'],'local_scope_launch_audit')
-        self.assertNotIn('private',str(event))
-        self.assertNotIn('pid',event);self.assertNotIn('nonce_hash',event)
-        recovery=project_event('local_scope_recovery_audit',{'id':3,'schema_version':1,'run':'private-run',
-                               'unit':'private-unit','status':'reconciled','created':1},key)
-        self.assertEqual(recovery['scope_id'],scope['scope_id'])
-        self.assertEqual(_attributes(recovery)['status'],'reconciled')
-        self.assertNotIn('private',str(recovery))
-        stop=project_event('local_scope_stop_audit',{'id':4,'schema_version':1,'run':'private-run','unit':'private-unit',
-                           'invocation':'private-invocation','cgroup':'private-cgroup','nonce_hash':'private-nonce',
-                           'status':'completed','created':1},key)
-        self.assertEqual(stop['scope_id'],scope['scope_id']);self.assertEqual(_attributes(stop)['status'],'completed')
-        self.assertNotIn('private',str(stop));self.assertNotIn('nonce_hash',stop)
-        reconciled=project_event('local_scope_recovery_audit',{'id':5,'schema_version':1,'run':'private-run',
-                                 'unit':'private-unit','status':'reconciled_stop','created':1},key)
-        self.assertEqual(_attributes(reconciled)['status'],'reconciled_stop')
-
     def test_checkpoint_delivery_replays_without_exposing_worker_identities(self):
         import sqlite3
         from types import SimpleNamespace
@@ -86,8 +59,6 @@ class AuditExportTests(unittest.TestCase):
         from runner.otel_audit import _attributes
         row={'id':1,'schema_version':1,'run':'private-run','assignment':'private-assignment','unit':'private-unit','status':'bound','created':1}
         event=project_event('workspace_scope_audit',row,b'x'*32)
-        scope=project_event('local_scope_audit',{'id':2,'schema_version':1,'run':'private-run','unit':'private-unit','state':'starting','created':1},b'x'*32)
-        self.assertEqual(event['scope_id'],scope['scope_id'])
         self.assertIsNotNone(event['execution_id']);self.assertEqual(event['status'],'bound')
         self.assertNotIn('private',str(event));self.assertEqual(_attributes(event)['kind'],'workspace_scope_audit')
 
@@ -128,13 +99,6 @@ class AuditExportTests(unittest.TestCase):
                 if server is not None: server.shutdown(); thread.join(); server.server_close()
                 session.close(); cursor.close(); graph.close()
 
-    def test_platform_review_role_is_preserved_in_sanitized_projection(self):
-        from runner.otel_audit import _attributes
-        event=project_event('execution_launch_audit',{'id':1,'schema_version':1,'run':'private',
-                            'role':'platform_review','status':'completed','created':1},b'x'*32)
-        self.assertEqual(event['role'],'platform_review')
-        self.assertEqual(_attributes(event)['role'],'platform_review')
-        self.assertNotIn('private',str(event))
     @unittest.skipUnless(OTLPSpanExporter is not None, 'optional OpenTelemetry OTLP exporter unavailable')
     def test_opik_adapter_retries_partial_ack_over_local_http(self):
         import http.server
@@ -489,23 +453,6 @@ class AuditExportTests(unittest.TestCase):
         self.assertEqual(project_event('invalidation_audit',{'id':3,'schema_version':1,'run':'private-run','stage':'brief','status':'invalidated','reason':'source_policy_changed','created':1},b'x'*32)['reason'],'source_policy_changed')
         self.assertIsNone(project_event('invalidation_audit',{'id':1,'schema_version':1,'run':'private-run','stage':'brief','status':'invalidated','reason':'private reason','created':1},b'x'*32)['reason'])
 
-    def test_launch_projection_correlates_requested_and_uncertain(self):
-        row={'id':1,'schema_version':1,'run':'private-run','role':'brief','execution':'private-execution','status':'requested','model':'private-model','created':1}
-        start=project_event('execution_launch_audit',row,b'x'*32)
-        end=project_event('execution_launch_audit',{**row,'id':2,'status':'uncertain'},b'x'*32)
-        self.assertEqual(start['execution_id'],end['execution_id'])
-        self.assertIsNotNone(start['execution_id'])
-        self.assertNotIn('private',str(start))
-        linked=project_event('execution_link_audit',{**row,'id':3,'session':'private-session','turn':'private-turn','status':'completed'},b'x'*32)
-        self.assertEqual(start['execution_id'],linked['execution_id'])
-        self.assertIsNotNone(linked['session_id']); self.assertIsNotNone(linked['turn_id'])
-        self.assertNotIn('private',str(linked))
-        source=project_event('execution_launch_audit',{**row,'role':'source_review'},b'x'*32)
-        self.assertEqual(source['role'],'source_review'); self.assertIsNone(source['stage'])
-        from runner.otel_audit import _attributes
-        self.assertEqual(_attributes(source)['role'],'source_review')
-        self.assertIsNone(project_event('execution_launch_audit',{**row,'role':'private role'},b'x'*32)['role'])
-        with self.assertRaises(ValueError): _attributes({**source,'role':'private role'})
 
     def test_tool_projection_excludes_private_payload_and_preserves_shape(self):
         row={'id':1,'schema_version':1,'run':'private-run','role':'source_review','session':'private-session','turn':'private-turn','tool_kind':'mcpToolCall','status':'completed','input_present':1,'output_present':1,'evidence_ref':'private-evidence','created':1}

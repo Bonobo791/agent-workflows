@@ -30,7 +30,7 @@ class LocalAssetReviewer:
             access_ref TEXT PRIMARY KEY,run TEXT NOT NULL,subject TEXT NOT NULL,session TEXT NOT NULL,turn TEXT NOT NULL,
             image_refs TEXT NOT NULL,response_ref TEXT NOT NULL,policy_hash TEXT NOT NULL)''')
     def _policy(self):
-        data={'local_policy':self.service.model_supervisor.policy_hash,'reviewer_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),'sampler_policy':self.sampler.policy_hash if self.sampler else None,'audio_policy':self.transcriber.policy_hash if self.transcriber else None,'delivery_sha256':{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in ('codex_executor.py','codex_session.py','protocol.py')}}
+        data={'local_policy':self.service.model_supervisor.policy_hash,'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),'sampler_policy':self.sampler.policy_hash if self.sampler else None,'audio_policy':self.transcriber.policy_hash if self.transcriber else None}
         return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def _graph(self):
         graph=GraphStore(self.db_path);graph.register(marketing_definition());graph.register(engineering_definition());return graph
@@ -142,10 +142,7 @@ class LocalAssetReviewer:
             resolved=self.service.skill_resolver.resolve(self.service.required_skills['asset_review']);skills={name:item['sha256'] for name,item in resolved.items()}
             provenance=Provenance(graph)
             if not provenance.verify(run,'asset_review',session,skills) or not provenance.completed(run,'asset_review',session) or not provenance.subject_matches(run,'asset_review',session,subject) or provenance.completion_hash(run,'asset_review',session)!=row[2]: return False
-            model=self.service.model_policy.for_role('asset_review')['model'];binding=self.service.model_supervisor._binding(run,'asset_review',skills,model)[1]
-            from runner.local_scope import valid_scope_identity
-            row=graph.db.execute("SELECT t.unit,s.invocation,s.cgroup FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='asset_review' AND t.session=? AND t.turn=? AND t.binding=? AND s.state='terminated'",(run,session,turn,binding)).fetchone()
-            return bool(row and valid_scope_identity(*row))
+            return bool(graph.db.execute("SELECT 1 FROM execution_launches WHERE run=? AND role='asset_review' AND session=? AND turn=? AND launch_status='completed'",(run,session,turn)).fetchone())
         except Exception: return False
         finally: graph.close()
     def extra_inputs(self,run,session,subject,refs,access_ref):

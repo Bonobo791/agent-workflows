@@ -75,11 +75,8 @@ class GraphStore:
         CREATE TABLE IF NOT EXISTS graph_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, version TEXT NOT NULL, revision INTEGER NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS cache_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, input_hash TEXT NOT NULL, output_hash TEXT NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS invalidation_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL, reason TEXT NOT NULL, created REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS execution_launch_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, role TEXT NOT NULL, execution TEXT NOT NULL, status TEXT NOT NULL, model TEXT NOT NULL, created REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS execution_link_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, role TEXT NOT NULL, execution TEXT NOT NULL, session TEXT NOT NULL, turn TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL);
-        CREATE INDEX IF NOT EXISTS execution_link_scope ON execution_link_audit(run,role,execution,session,status,turn);
+        CREATE TABLE IF NOT EXISTS execution_launches(execution TEXT PRIMARY KEY, run TEXT NOT NULL, role TEXT NOT NULL, launch_status TEXT NOT NULL, model TEXT NOT NULL, session TEXT, turn TEXT, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS tool_audit(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, run TEXT NOT NULL, role TEXT NOT NULL, session TEXT NOT NULL, turn TEXT NOT NULL, tool_kind TEXT NOT NULL, status TEXT NOT NULL, input_present INTEGER NOT NULL, output_present INTEGER NOT NULL, evidence_ref TEXT NOT NULL, created REAL NOT NULL);
-        CREATE INDEX IF NOT EXISTS execution_launch_latest ON execution_launch_audit(run,execution,id);
         CREATE TABLE IF NOT EXISTS graph_migrations(run TEXT NOT NULL, old_hash TEXT NOT NULL, new_hash TEXT NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS quota_pauses(scope TEXT PRIMARY KEY, run TEXT NOT NULL, stage TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS graph_sessions(run TEXT NOT NULL, role TEXT NOT NULL, session TEXT NOT NULL, PRIMARY KEY(run,role));
@@ -141,8 +138,6 @@ class GraphStore:
             if self.db.execute("SELECT 1 FROM graph_attempts WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved stage attempt')
             actions=self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_actions'").fetchone()
             if actions and self.db.execute("SELECT 1 FROM external_actions WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved external action')
-            mapping=self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone()
-            if mapping and self.db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated')",(run,)).fetchone(): raise GraphError('unresolved worker execution')
             affected={'asset_brief','asset_production','assembly'} | {channel+'_review' for channel in CHANNELS}
             self._invalidate_stages(run,affected,'graph_migration')
             self.db.execute('UPDATE graph_runs SET definition_hash=? WHERE id=?',(target,run))
@@ -160,7 +155,6 @@ class GraphStore:
             if self._definition(run).name!='marketing' or self.db.execute("SELECT 1 FROM graph_attempts WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved stage attempt')
             if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_actions'").fetchone() and self.db.execute("SELECT 1 FROM external_actions WHERE run=? AND status='uncertain'",(run,)).fetchone(): raise GraphError('unresolved external action')
             if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone() and self.db.execute("SELECT 1 FROM local_scopes WHERE run=? AND state IS NOT 'terminated'",(run,)).fetchone(): raise GraphError('unresolved local scope')
-            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone() and self.db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state!='terminated')",(run,)).fetchone(): raise GraphError('unresolved worker execution')
             freeze=self.get(run,'freeze'); task=self.db.execute('SELECT artifact_ref FROM task_input_versions WHERE run=?',(run,)).fetchone()
             if not freeze or freeze['status']!='passed' or freeze['version']!=freeze_version or not task or task[0]!=task_ref: raise GraphError('review inputs changed')
             for stage,version in versions.items():

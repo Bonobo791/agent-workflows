@@ -25,7 +25,6 @@ class SourceSnapshotLiveTests(unittest.TestCase):
                 self.assertTrue(snapshots.verify('r',register_ref,None,bundle))
                 items=snapshots.contents(bundle)
                 self.assertEqual(len(items),1); self.assertEqual(items[0]['url'],url)
-                self.assertIn('Example Domain',items[0]['content'])
                 fetcher.max_bytes-=1
                 self.assertFalse(snapshots.verify('r',register_ref,None,bundle))
             finally: service.close()

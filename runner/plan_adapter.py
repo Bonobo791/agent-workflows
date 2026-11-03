@@ -20,7 +20,7 @@ def inspect_issue(client,project_key,number,*,ready_columns,completed_columns,bl
         if value is not None:
             try:
                 if not isinstance(value,str) or date.fromisoformat(value).isoformat()!=value: raise ValueError()
-            except ValueError: raise PlanError('invalid task schedule') from None
+            except ValueError: raise PlanError('invalid task schedule')
     if not all(isinstance(data[key],list) for key in ('subtasks','links','development')): raise PlanError('issue relationships unavailable')
     if any(not isinstance(child,dict) or type(child.get('archived')) is not bool for child in data['subtasks']): raise PlanError('invalid subtask status')
     attachments=client.call('list_attachments',{'issueId':data['id']})
@@ -34,7 +34,7 @@ def inspect_issue(client,project_key,number,*,ready_columns,completed_columns,bl
         if not isinstance(link,dict) or link.get('kind') not in ('blocks','relates','duplicates') or link.get('direction') not in ('inward','outward'): raise PlanError('invalid issue link')
         if link['kind']=='blocks' and link['direction']==blocker_direction:
             try: linked_id=link['issue']['id']
-            except (KeyError,TypeError): raise PlanError('invalid blocker') from None
+            except (KeyError,TypeError): raise PlanError('invalid blocker')
             if type(linked_id) is not int or linked_id<1: raise PlanError('invalid blocker')
             linked=client.call('get_issue',{'issueId':linked_id})
             item=linked.get('data') if isinstance(linked,dict) and linked.get('ok') is True else None
@@ -46,7 +46,7 @@ def inspect_issue(client,project_key,number,*,ready_columns,completed_columns,bl
     else: existing+=external_work
     if data['startDate']:
         try: started = today is not None and date.fromisoformat(data['startDate']) <= date.fromisoformat(today)
-        except (ValueError,TypeError): raise PlanError('invalid task start date') from None
+        except (ValueError,TypeError): raise PlanError('invalid task start date')
     else: started=True
     return {'task_id':'plan:'+str(data['id']),'identifier':data['identifier'],'title':data['title'],'description':data['description'],
             'ready':data['archivedAt'] is None and data['columnId'] in ready_columns and started,

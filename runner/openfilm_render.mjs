@@ -7,6 +7,8 @@ import { createRequire } from 'node:module';
 
 const MAX_BYTES = 100 * 1024 * 1024;
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+// One line per step on stderr; the Python side captures and traces it.
+const log = (step, detail = {}) => process.stderr.write(`[render] ${step} ${JSON.stringify(detail)}\n`);
 
 // Inspects rendered text boxes in the same isolated browser used by OpenFilm.
 export async function inspectLayout(folder, open) {
@@ -88,21 +90,29 @@ export async function renderAssets(brief, projectRoot, outputRoot, api) {
   const project = await realpath(projectRoot);
   const output = await realpath(outputRoot);
   if ((await readdir(output)).length) throw new Error('output directory must be empty');
+  log('begin', { assets: brief.assets.length, kinds: brief.assets.map(a => a && a.kind), project, output });
   const outputs = [];
   for (const [index, asset] of brief.assets.entries()) {
     if (!asset || !['png', 'mp4'].includes(asset.kind)) throw new Error('unsupported asset kind');
     const folder = brief.assets.length === 1 ? project : join(project, 'projects', String(index));
+    log('asset.begin', { index, kind: asset.kind, folder });
     await confinedFile(project, join(folder, 'film.html'));
     let layout;
     try { layout = await api.layout(folder); }
-    catch { layout = ['layout inspection unavailable']; }
+    catch (error) {
+      const detail = String(error && error.message ? error.message : error).replace(/"data:[^"]*"/g, '"data…"').slice(0, 400);
+      log('asset.layout_error', { index, detail });
+      layout = [`layout inspection unavailable: ${detail}`];
+    }
     if (!Array.isArray(layout) || layout.some(x => typeof x !== 'string')) layout = ['layout inspection unavailable'];
+    log('asset.layout', { index, problems: layout.slice(0, 12) });
     if (layout.length) {
       await writeFile(join(output, 'look-failure.json'), JSON.stringify({ok:false,lines:layout.map(x => `asset ${index}: ${x}`)}), {flag:'wx',mode:0o600});
       throw new Error('layout inspection failed');
     }
     const check = async (args) => {
       const inspected = await api.look(args, { count: 12 });
+      log('look.check', { index, args: args.map(String), ok: inspected && inspected.ok, files: inspected && Array.isArray(inspected.files) ? inspected.files.length : null, lines: inspected && Array.isArray(inspected.lines) ? inspected.lines.slice(0, 12) : null });
       if (inspected && inspected.ok === false && Array.isArray(inspected.lines) && inspected.lines.every((line) => typeof line === 'string')) {
         const report = Buffer.from(JSON.stringify({ ok: false, lines: inspected.lines }));
         if (report.length <= 1024 * 1024) await writeFile(join(output, 'look-failure.json'), report, { flag: 'wx', mode: 0o600 });
@@ -122,14 +132,17 @@ export async function renderAssets(brief, projectRoot, outputRoot, api) {
       const rendered = await api.render([folder], { out: join(output, name), fps: 30, workers: 1 });
       if (!rendered || resolve(rendered.out) !== join(output, name)) throw new Error('OpenFilm output path mismatch');
     }
+    log('asset.rendered', { index, kind: asset.kind, name, bytes: (await lstat(join(output, name))).size });
     const assetPath = await confinedFile(output, join(output, name));
     const bytes = await readFile(assetPath);
     const reportName = `look-${index}.json`;
     const report = Buffer.from(JSON.stringify({ ok: true, lines: ['✓ sampled text layout inspected', ...inspected.lines, ...(still ? still.lines : [])] }));
+    log('asset.done', { index, kind: asset.kind, bytes: bytes.length, report: report.length });
     if (report.length > 1024 * 1024) throw new Error('visual report too large');
     await writeFile(join(output, reportName), report, { flag: 'wx', mode: 0o600 });
     outputs.push({ path: name, sha256: hash(bytes), previews: [{ path: previewName, sha256: hash(previewBytes) }], report: { path: reportName, sha256: hash(report) } });
   }
+  log('done', { outputs: outputs.length });
   return { outputs };
 }
 

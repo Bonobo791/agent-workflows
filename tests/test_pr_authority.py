@@ -1,6 +1,6 @@
 import unittest
 from tests.test_engineering_workspace import EngineeringWorkspaceTests
-from runner.pr_authority import PRRuntimeAuthority, ReadAndIsolatedPush
+from runner.pr_authority import ReadAndIsolatedPush
 from workflows.engineering.github import GitHubError
 
 class PRAuthorityTests(EngineeringWorkspaceTests):
@@ -15,11 +15,3 @@ class PRAuthorityTests(EngineeringWorkspaceTests):
         with self.assertRaises(GitHubError): transport.request('POST','/repos/owner/repo/pulls',{})
         with self.assertRaises(GitHubError): transport.mark_ready('node')
         self.assertEqual(http.calls,[('GET','/repos/owner/repo')])
-    def test_unconfigured_authority_does_not_open_runtime(self):
-        class HTTP:
-            def request(self,method,path,body=None): return {}
-        class Credentials:
-            def ready(self): return False
-        authority=PRRuntimeAuthority(self.service,HTTP(),Credentials())
-        self.assertFalse(authority.ready())
-        with self.assertRaises(GitHubError): authority.for_claim('run-1','q','g')

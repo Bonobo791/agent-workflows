@@ -57,7 +57,7 @@ class SourceReviewerTests(unittest.TestCase):
                         proof={'run':'r','reviewer_role':'source_review','reviewer_session':session,'subject_hash':register,'skills':kw['skills'],'review_output_ref':response_ref}
                         events={'run':'r','role':'source_review','session':session,'turn':'turn','items':[]}
                         return {'outputs':[result_ref],'session_id':session,'turn_id':'turn','response_ref':response_ref,'evidence_ref':service.artifacts.put(json.dumps(proof).encode()),'tool_evidence_ref':service.artifacts.put(json.dumps(events).encode())}
-                service.docker_executor=Executor();reviewer=SourceReviewer(service)
+                service.model_executor=Executor();reviewer=SourceReviewer(service)
                 evidence=reviewer.verify('r',claim,register,draft_ref=draft,model='fixture',cancelled=lambda:False)
                 self.assertTrue(validate_evidence(service,'r',register,evidence,draft))
                 fetcher.urls={*fetcher.urls,'https://other.invalid/additional'}
@@ -65,7 +65,7 @@ class SourceReviewerTests(unittest.TestCase):
                 with self.assertRaises(SourceError): validate_evidence(service,'r',register,evidence,draft)
                 refreshed=reviewer.verify('r',claim,register,draft_ref=draft,model='fixture',cancelled=lambda:False)
                 self.assertNotEqual(refreshed,evidence)
-                self.assertEqual(service.docker_executor.counter,2)
+                self.assertEqual(service.model_executor.counter,2)
                 self.assertTrue(validate_evidence(service,'r',register,refreshed,draft))
                 with self.assertRaises(SourceError): validate_evidence(service,'r',register,evidence,draft)
                 from runner.stage_dispatch import _source_snapshot_inputs
@@ -99,17 +99,17 @@ class SourceReviewerTests(unittest.TestCase):
                         service.provenance.mark_completed('r','source_review',session,claim,hashlib.sha256(response).hexdigest())
                         proof={'run':'r','reviewer_role':'source_review','reviewer_session':session,'subject_hash':register,'skills':kw['skills'],'review_output_ref':response_ref}
                         return {'outputs':[ref],'session_id':session,'turn_id':'t','response_ref':response_ref,'evidence_ref':service.artifacts.put(json.dumps(proof).encode()),'tool_evidence_ref':service.artifacts.put(json.dumps(event).encode())}
-                service.docker_executor=Executor(); service.source_tool_authority=lambda events,reg,current: bool(events['items']) and reg==register and current==draft
+                service.model_executor=Executor(); service.source_tool_authority=lambda events,reg,current: bool(events['items']) and reg==register and current==draft
                 reviewer=SourceReviewer(service)
                 self.assertTrue(reviewer.verify('r','claim',register,draft_ref=draft,model='fixture',cancelled=lambda:False))
                 for mode in ('unsupported','missing','stale','omitted','unavailable'):
-                    service.docker_executor.mode=mode
+                    service.model_executor.mode=mode
                     with self.subTest(mode=mode), self.assertRaises(SourceError) as failure: reviewer.verify('r','claim',register,draft_ref=draft,model='fixture',cancelled=lambda:False)
                     if mode in ('unsupported','missing','omitted'):
                         self.assertIsInstance(failure.exception,SourceReviewBlocked)
                         blocked=json.loads(service.artifacts.get(failure.exception.evidence_ref))
                         self.assertEqual(blocked['draft_ref'],draft)
                         if mode=='omitted': self.assertEqual(blocked['reviewer_judgment']['omitted_claims'],['unregistered material claim'])
-                service.docker_executor.mode='ok'; service.source_tool_authority=None
+                service.model_executor.mode='ok'; service.source_tool_authority=None
                 with self.assertRaises(SourceError): reviewer.verify('r','claim',register,draft_ref=draft,model='fixture',cancelled=lambda:False)
             finally: service.close()

@@ -41,7 +41,7 @@ class SourceReviewer:
         prompt=instructions+'\n'+json.dumps(payload,ensure_ascii=False)
         args=dict(run=run,role='source_review',claim=claim,skills=skills,prompt=prompt,model=model,input_versions=refs,output_paths=['verification.json'],subject=register_ref,cancelled=cancelled)
         if service.model_executor is not None: args['instruction_length']=len(instructions)
-        result=(service.model_executor or service.docker_executor).review(**args)
+        result=service.model_executor.review(**args)
         record=json.loads(service.artifacts.get(result['outputs'][0]))
         if not isinstance(record,dict) or set(record)!={'register_ref','verifier_id','checks','draft_ref','omitted_claims','coverage_complete'} or record['register_ref']!=register_ref or record['draft_ref']!=draft_ref or not isinstance(record['omitted_claims'],list) or any(not isinstance(item,str) or not item.strip() for item in record['omitted_claims']) or type(record['coverage_complete']) is not bool: raise SourceError('source review result malformed or stale')
         access={'review_session':result['session_id'],'review_turn':result['turn_id'],'tool_evidence_ref':result['tool_evidence_ref']}
@@ -54,7 +54,7 @@ class SourceReviewer:
         proof={'register_ref':register_ref,'verifier_id':record['verifier_id'],'checks':record['checks']}
         proof_ref=service.artifacts.put(json.dumps(proof,sort_keys=True,separators=(',',':')).encode())
         try: validate(service.artifacts,register_ref,proof_ref)
-        except SourceError: raise SourceReviewBlocked('source reviewer found unsupported or missing source evidence',negative_ref) from None
+        except SourceError: raise SourceReviewBlocked('source reviewer found unsupported or missing source evidence',negative_ref)
         evidence={'register_ref':register_ref,'draft_ref':draft_ref,'proof_ref':proof_ref,'review_session':result['session_id'],'review_turn':result['turn_id'],'review_skills':skills,'review_output_ref':result['response_ref'],'review_result_ref':result['outputs'][0],'review_evidence_ref':result['evidence_ref'],'tool_evidence_ref':result['tool_evidence_ref'],'coverage_complete':record['coverage_complete'],'omitted_claims':record['omitted_claims']}
         if bundle: evidence['source_bundle_ref']=bundle
         evidence_ref=service.artifacts.put(json.dumps(evidence,sort_keys=True,separators=(',',':')).encode())
@@ -83,7 +83,7 @@ def validate_blocked(service,run,register_ref,evidence_ref,draft_ref):
         if not negative: raise ValueError('no negative judgment')
         if not _verify_access(service,run,register_ref,draft_ref,record): raise ValueError('source authority')
         return record
-    except Exception: raise SourceError('negative source-review evidence unavailable or stale') from None
+    except Exception: raise SourceError('negative source-review evidence unavailable or stale')
 
 def validate_evidence(service,run,register_ref,evidence_ref,draft_ref=None):
     from runner.structured import parse_marketing_result
@@ -102,4 +102,4 @@ def validate_evidence(service,run,register_ref,evidence_ref,draft_ref=None):
         validate(service.artifacts,register_ref,record['proof_ref'])
         if not _verify_access(service,run,register_ref,draft_ref,record): raise ValueError('source authority')
         return True
-    except Exception: raise SourceError('source review evidence unavailable or stale') from None
+    except Exception: raise SourceError('source review evidence unavailable or stale')

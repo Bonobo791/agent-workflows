@@ -43,7 +43,7 @@ class EngineeringWorkspace:
         try:
             result=subprocess.run(['git','-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',*args],cwd=path,env={'PATH':os.defpath,'HOME':'/nonexistent','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0'},check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=10)
             return result.stdout.strip()
-        except (OSError,subprocess.SubprocessError): raise WorkspaceError('workspace git verification failed') from None
+        except (OSError,subprocess.SubprocessError): raise WorkspaceError('workspace git verification failed')
     def verify(self,run,repository,base,branch,owner,policy,*,initial=False):
         if not all(isinstance(x,str) for x in (run,repository,base,branch,policy)) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',run) or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',repository) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',base) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}',branch) or not re.fullmatch(r'[0-9a-f]{64}',policy) or type(owner) is not int or owner!=os.geteuid(): raise WorkspaceError('invalid workspace binding')
         path=self.allowed/run/'repo'
@@ -59,7 +59,7 @@ class EngineeringWorkspace:
             self._git(path,'merge-base','--is-ancestor',base,head)
             if initial and self._git(path,'status','--porcelain','--untracked-files=all'): raise WorkspaceError('workspace not clean')
             return str(path)
-        except OSError: raise WorkspaceError('workspace unavailable') from None
+        except OSError: raise WorkspaceError('workspace unavailable')
     def recover_unadopted(self,run,repository,base,branch,owner,policy,approved,rejected):
         """Preserve a rejected correction commit under a recovery ref, then restore the approved commit. Any mismatch leaves the workspace untouched."""
         if not all(isinstance(x,str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',x) for x in (approved,rejected)): raise WorkspaceError('invalid recovery revision')
@@ -91,7 +91,7 @@ class EngineeringWorkspace:
             self.db.execute('INSERT INTO engineering_workspaces VALUES(?,?,?,?,?,?,?,NULL)',(run,repository,base,branch,owner,path,policy))
             self.db.execute('INSERT INTO engineering_workspace_approvals VALUES(?,?,?)',(run,approval,'local-owner'))
             self.db.execute('COMMIT')
-        except Exception: self.db.execute('ROLLBACK'); raise WorkspaceError('workspace binding already exists') from None
+        except Exception: self.db.execute('ROLLBACK'); raise WorkspaceError('workspace binding already exists')
         return path
     def _claim_binding(self,run,assignment,policy):
         if not re.fullmatch(r'job-[0-9a-f]{48}',assignment): raise WorkspaceError('invalid assignment')
@@ -116,7 +116,7 @@ class EngineeringWorkspace:
             path=self._claim(run,assignment,policy,verified)
             self.db.execute('COMMIT'); return path
         except Exception: self.db.execute('ROLLBACK'); raise
-    def claim_local(self,run,assignment,policy,*,expected_path=None,pr_scope=None):
+    def claim_local(self,run,assignment,policy,*,expected_path=None):
         from runner.local_scope import reserve_scope
         verified=self._verified_claim_binding(run,assignment,policy)
         self.db.execute('BEGIN IMMEDIATE')
@@ -125,16 +125,11 @@ class EngineeringWorkspace:
             if expected_path is not None and path!=expected_path: raise WorkspaceError('engineering workspace changed')
             unit=reserve_scope(self.db,run)
             bind_scope_with_audit(self.db,run,assignment,unit)
-            if pr_scope is not None:
-                if not isinstance(pr_scope,tuple) or len(pr_scope)!=3 or any(not isinstance(value,str) or not value for value in pr_scope) or pr_scope[2]!='bundle': raise WorkspaceError('invalid push scope binding')
-                self.db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,run,*pr_scope))
             self.db.execute('COMMIT'); return path,unit
         except Exception: self.db.execute('ROLLBACK'); raise
     def release(self,run,assignment):
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            row=self.db.execute("SELECT 1 FROM docker_assignments a JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE a.run=? AND a.state='terminated'",(assignment,)).fetchone()
-            if not row: raise WorkspaceError('terminal container evidence required')
             if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')
             self.db.execute('COMMIT')
         except Exception: self.db.execute('ROLLBACK'); raise
@@ -158,9 +153,8 @@ class EngineeringWorkspace:
                 fence=self.db.execute("SELECT 1 FROM manual_assignments a JOIN manual_workers w ON w.target=a.target JOIN jobs j ON j.run=a.run JOIN graph_runs g ON g.id=a.run WHERE a.run=? AND a.target=? AND a.incarnation=? AND a.state='pending' AND w.incarnation=a.incarnation AND w.state='assigned' AND ((j.status IN ('cancelling','uncertain') AND g.status='cancelled') OR (j.status='completed' AND g.status='completed'))",(run,*fenced)).fetchone()
                 if not fence: raise WorkspaceError('recovery fence changed')
                 if self.db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone():raise WorkspaceError('graph claim remains active')
-            from runner.local_scope import valid_scope_identity
-            row=self.db.execute("SELECT s.invocation,s.cgroup FROM engineering_local_scopes m JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE m.run=? AND m.assignment=? AND m.unit=? AND s.state='terminated'",(run,assignment,unit)).fetchone()
-            if not row or not valid_scope_identity(unit,*row): raise WorkspaceError('terminal local scope evidence required')
+            row=self.db.execute("SELECT 1 FROM engineering_local_scopes m JOIN local_scopes s ON s.run=m.run AND s.unit=m.unit WHERE m.run=? AND m.assignment=? AND m.unit=? AND s.state='terminated'",(run,assignment,unit)).fetchone()
+            if not row: raise WorkspaceError('terminal local scope evidence required')
             if self.db.execute('UPDATE engineering_workspaces SET assignment=NULL WHERE run=? AND assignment=?',(run,assignment)).rowcount!=1: raise WorkspaceError('workspace claim mismatch')
             if fenced is not None:
                 self._record_recovery(run,assignment,unit)

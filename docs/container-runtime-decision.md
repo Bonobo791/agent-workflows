@@ -1,3 +1,5 @@
+> **Superseded.** The Docker worker-container design described below was removed. Runs execute as host processes under the local runtime (`runner/local_*.py`). This file is kept as decision history.
+
 # One-job worker container: design and unresolved boundary
 
 ## Candidate

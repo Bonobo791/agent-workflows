@@ -69,8 +69,7 @@ before rendering, binds the attempt to the brief and current graph revision,
 requests cancellation on a failed or interrupted supervisor call, and refuses
 to complete an unverified outcome. A trusted backend must independently verify
 the exact attempt's terminal state and bind its editable project and output
-paths to that attempt; its `ready` check must establish the pinned renderer,
-network/provider restrictions and isolation. The worker validates a bounded
+paths to that attempt; its `ready` check must confirm the local OpenFilm package and project builder are available. The worker validates a bounded
 project ZIP containing `film.html`, ingests and decodes every requested output,
 and records the manifest as `awaiting_review`. Confirmed bad outputs are
 blocked; uncertain outcomes stay fenced. The distributed worker configures no
@@ -98,31 +97,16 @@ references and paths to that attempt; a worker or model assertion is not an
 acceptable verifier. `cancel` requests a stop, and its return does not prove
 termination.
 
-`runner/openfilm_render.mjs` is a fixed render entrypoint for a future isolated
-job image with OpenFilm 0.2.6 already installed. It invokes the package's
+`runner/openfilm_render.mjs` is the render entrypoint used by the local backend (`runner/openfilm_local.py`) with OpenFilm 0.2.6 on this host. It has no isolation boundary. It invokes the package's
 `look` and `render` modules directly, avoiding the CLI's automatic browser
 download. In a host fixture with an empty browser directory, the pinned modules
 failed without creating a browser or asset; the CLI path is not used by this
 fixture. It requires a successful same-picture check and produces fixed output,
 preview and private report files. Stills run a range check for repeated text
 cutoff as well as a separate full-size frame export; a local synthetic cropped
-text fixture exercises that warning. It has no isolation of its own: the trusted
-supervisor must run it with network disabled, without credentials and with only
-the intended private project and output mounts. Its real host execution was
-tested locally; the job image and container path remain unverified.
+text fixture exercises that warning. Renders run directly on the host through `runner/openfilm_local.py`; there is no container, network-policy or owner-approval gate. Its real host execution was tested locally.
 
-`DockerOpenFilmBackend` provides an opt-in Engine implementation with an exact
-attempt and both task leases, a fixed entrypoint, only private workspace/output
-mounts, a read-only root filesystem, an unprivileged UID, dropped capabilities
-and network mode `none`. It requires a separately trusted project builder and
-host-policy verifier, plus owner approvals for both `docker_config` and the
-derived `openfilm_policy`. The policy hash binds the image configuration, helper
-bytes, OpenFilm version and timeout. The verifier must establish that the pinned
-image actually contains those bytes, the approved OpenFilm/browser/ffmpeg
-versions and the required host isolation. `Dockerfile.openfilm` accepts an
-already prepared base image and performs no package installation; it has not
-been built or tested against the real daemon here. Synthetic Engine tests are
-not evidence that the host enforces container isolation.
+The Docker/Podman render backend has been removed. Renders run on the host through `runner/openfilm_local.py`, which uses the project builder for the project and `runner/openfilm_render.mjs` for the render.
 The image build checks the pinned package's expected Chromium headless-shell
 revision and requires its binary to be executable as the image's non-root user;
 an empty browser directory does not pass that check. This does not establish
@@ -152,8 +136,7 @@ Agent Zero image above. Its Node 22.22.0, FFmpeg and browser rendered a 180×320
 PNG and a one-second, 180×320 MP4. Local verification decoded both, checked their
 hashes and dimensions, and measured the MP4 duration as one second. The process
 reported zero effective and bounding capabilities; inspection showed network
-mode `none`, a read-only root and UID 1000. The temporary container and files
-were removed. This probe used four mounts and a shell wrapper, not the intended
+mode `none`, a read-only root and UID 1000. The temporary container and files were removed. (Historical: the container runtime has since been removed; see docs/container-runtime-decision.md.) This probe used four mounts and a shell wrapper, not the intended
 two-mount job image or production supervisor; it does not verify that image or
 Coolify. The rootless engine expanded `CapDrop: ["ALL"]` into individual names
 and exposed mounts outside `HostConfig.Mounts`; the current strict Docker
@@ -169,7 +152,7 @@ whose published multi-platform manifest digest is
 images include browsers and system dependencies but not the Playwright package,
 and recommends matching browser and package versions. This is a candidate base,
 not a prepared OpenFilm image: OpenFilm, FFmpeg availability, browser path,
-non-root isolation and rendering must be verified in the resulting image. No
+rendering must be verified in the resulting image. No
 image was pulled or built as part of this research.
 
 An optional `CodexOpenFilmProjectBuilder` creates the editable project in a
@@ -217,8 +200,7 @@ On the development host, OpenFilm source version 0.2.6 at commit `de5a98bd46e2ed
 
 An additional host test packages a synthetic supplied PNG into the editable
 project and checks the rendered pixel, exercising the same private-media path.
-The builder's synthetic Docker-engine test checks its session, project and
-termination evidence; it does not establish actual host isolation.
+The builder's local synthetic test checks its session, project and scope evidence. It does not establish isolation: the container runtime that these probes describe has been removed.
 
 Suggested handoff: brief reference/version; project reference/version; output reference/hash; attempt and cancellation state; verifier identity and evidence; content/rights review disposition; current-version comparison. Stale, missing, unavailable, or failed evidence blocks readiness. An OpenFilm asset may be omitted from a review package only with an explicit blocked state; other text work can continue. No automatic publication.
 

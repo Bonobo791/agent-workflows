@@ -21,7 +21,7 @@ class GHRead:
             if 'HOME' not in self.environment or not Path(self.environment['HOME']).is_absolute(): raise ValueError()
             self.environment['PATH']='/usr/bin:/bin';self.environment['GH_HOST']='github.com';self.environment['GH_PROMPT_DISABLED']='1'
             self.digest=self._digest()
-        except Exception: raise GHReadError('GitHub CLI configuration unavailable') from None
+        except Exception: raise GHReadError('GitHub CLI configuration unavailable')
     def _digest(self):
         fd=os.open(self.executable,os.O_RDONLY|os.O_NOFOLLOW)
         try:
@@ -47,7 +47,7 @@ class GHRead:
                     if len(values[key.data])>(2097152 if key.data=='stdout' else 65536): raise ValueError()
             if process.wait(timeout=max(.01,deadline-time.monotonic()))!=0: raise ValueError()
             value=json.loads(values['stdout']);success=True;return value
-        except Exception: raise GHReadError('GitHub read unavailable') from None
+        except Exception: raise GHReadError('GitHub read unavailable')
         finally:
             if selector is not None:selector.close()
             if process is not None:

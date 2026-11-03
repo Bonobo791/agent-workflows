@@ -9,7 +9,7 @@ import secrets
 import sqlite3
 from runner.adapter import managed_app_server_spec
 from runner.local_process import start_local_process
-from runner.local_scope import LocalScopes, unresolved_scope_rows
+from runner.local_scope import LocalScopes, require_user_manager, unresolved_scope_rows
 from runner.local_preflight import sandbox_preflight, scope_preflight
 from runner.session_store import _WRITERS
 
@@ -25,14 +25,6 @@ class LocalSupervisor:
         dbh=self._db()
         try:
             dbh.execute('CREATE TABLE IF NOT EXISTS local_sessions(run TEXT NOT NULL,role TEXT NOT NULL,session TEXT NOT NULL UNIQUE,binding TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(run,role))')
-            dbh.execute('CREATE TABLE IF NOT EXISTS local_execution_scopes(run TEXT NOT NULL,role TEXT NOT NULL,execution TEXT NOT NULL PRIMARY KEY,session TEXT NOT NULL,unit TEXT NOT NULL UNIQUE,binding TEXT NOT NULL)')
-            dbh.execute('CREATE TABLE IF NOT EXISTS local_execution_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,role TEXT NOT NULL,execution TEXT NOT NULL,session TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
-            dbh.execute("""CREATE TRIGGER IF NOT EXISTS local_execution_scope_audit_insert AFTER INSERT ON local_execution_scopes BEGIN
-                INSERT INTO local_execution_scope_audit(schema_version,run,role,execution,session,unit,status,created) VALUES(1,NEW.run,NEW.role,NEW.execution,NEW.session,NEW.unit,'bound',(julianday('now')-2440587.5)*86400.0); END""")
-            dbh.execute('CREATE TABLE IF NOT EXISTS local_turn_scopes(run TEXT NOT NULL,role TEXT NOT NULL,session TEXT NOT NULL,turn TEXT NOT NULL,unit TEXT NOT NULL UNIQUE,binding TEXT NOT NULL,PRIMARY KEY(run,role,session,turn))')
-            dbh.execute('CREATE TABLE IF NOT EXISTS local_turn_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,role TEXT NOT NULL,session TEXT NOT NULL,turn TEXT NOT NULL,unit TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
-            dbh.execute("""CREATE TRIGGER IF NOT EXISTS local_turn_scope_audit_insert AFTER INSERT ON local_turn_scopes BEGIN
-                INSERT INTO local_turn_scope_audit(schema_version,run,role,session,turn,unit,status,created) VALUES(1,NEW.run,NEW.role,NEW.session,NEW.turn,NEW.unit,'bound',(julianday('now')-2440587.5)*86400.0); END""")
         finally: dbh.close()
     def _db(self): return sqlite3.connect(self.db,timeout=10,isolation_level=None)
     def preflight(self):
@@ -46,21 +38,25 @@ class LocalSupervisor:
         return workspace,hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def _engineering(self,run,role,workspace):
         return bool(self.engineering_root and role in ('implement','test','qa') and workspace==str(Path(self.engineering_root)/'workspaces'/run/'repo'))
-    def can_resume(self,run,role,session,skills,model):
-        if role not in _WRITERS or not isinstance(session,str) or not session: return False
+    def can_resume(self,run,role,session,skills,model): return self._resume_reason(run,role,session,skills,model) is None
+    def _resume_reason(self,run,role,session,skills,model):
+        if role not in _WRITERS or not isinstance(session,str) or not session: return 'invalid role or session'
         try:
             _,binding=self._binding(run,role,skills,model)
             dbh=self._db()
             try:
                 row=dbh.execute('SELECT session,binding,state FROM local_sessions WHERE run=? AND role=?',(run,role)).fetchone()
-                return row==(session,binding,'idle') and not unresolved_scope_rows(dbh,run)
+                if row!=(session,binding,'idle'): return 'session not idle or not recorded'
+                if unresolved_scope_rows(dbh,run): return 'unresolved scope rows'
+                return None
             finally: dbh.close()
-        except Exception: return False
+        except Exception as exc: return f'{type(exc).__name__}: {exc}'
     def start_execution(self,run,role,session,skills,model):
+        require_user_manager(self.backend)
         if not self.preflight() or self.fence(run) is not True: raise LocalSupervisorError('local policy or run fence unavailable')
         workspace,binding=self._binding(run,role,skills,model)
         if session is not None:
-            if not self.can_resume(run,role,session,skills,model): raise LocalSupervisorError('local session unavailable')
+            if not self.can_resume(run,role,session,skills,model): raise LocalSupervisorError(f"local session unavailable: {self._resume_reason(run,role,session,skills,model) or 'state changed'}")
             dbh=self._db()
             try:
                 if dbh.execute("UPDATE local_sessions SET state='active' WHERE run=? AND role=? AND session=? AND binding=? AND state='idle'",(run,role,session,binding)).rowcount!=1: raise LocalSupervisorError('local session already claimed')
@@ -94,7 +90,7 @@ class LocalSessionHandle:
         try:
             if self.session is None:
                 try: dbh.execute("INSERT INTO local_sessions VALUES(?,?,?,?, 'active')",(self.run,self.role,session,self.binding))
-                except sqlite3.IntegrityError: raise LocalSupervisorError('session already bound') from None
+                except sqlite3.IntegrityError: raise LocalSupervisorError('session already bound')
             if not dbh.execute("SELECT 1 FROM local_sessions WHERE run=? AND role=? AND session=? AND binding=? AND state='active'",(self.run,self.role,session,self.binding)).fetchone(): raise LocalSupervisorError('session binding changed')
             self.session=session
         finally: dbh.close()

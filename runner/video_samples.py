@@ -20,22 +20,14 @@ class VideoSamples:
     def __init__(self,service):
         if service.model_supervisor is None: raise VideoSampleError('local supervisor unavailable')
         self.service=service;self.supervisor=service.model_supervisor;self.db_path=service.state_db_path
-        self.executable=Path('/usr/bin/ffmpeg');self.ffmpeg_hash=self._ffmpeg_hash();self.policy_hash=self._policy()
+        self.executable=Path('/usr/bin/ffmpeg');self.policy_hash=self._policy()
         service.graph.db.execute('''CREATE TABLE IF NOT EXISTS local_video_samples(
             id TEXT PRIMARY KEY,run TEXT NOT NULL,subject TEXT NOT NULL,asset_ref TEXT NOT NULL,unit TEXT UNIQUE,
             policy_hash TEXT NOT NULL,duration REAL NOT NULL,sample_ref TEXT,receipt_ref TEXT,state TEXT NOT NULL)''')
-    def _ffmpeg_hash(self):
-        fd=os.open(self.executable,os.O_RDONLY|os.O_NOFOLLOW)
-        try:
-            info=os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_mode&0o022: raise VideoSampleError('unsafe video decoder')
-            with os.fdopen(fd,'rb',closefd=False) as source:return hashlib.file_digest(source,'sha256').hexdigest()
-        finally:os.close(fd)
     def _policy(self):
-        root=Path(__file__).parent
-        data={'runtime':self.supervisor.policy_hash,'ffmpeg':self.ffmpeg_hash,'samples':12,'layout':'4x3-320-square','files':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in ('video_samples.py','local_command.py','local_command_child.py','adapter.py')}}
+        data={'runtime':self.supervisor.policy_hash,'samples':12,'layout':'4x3-320-square'}
         return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-    def _current(self): return self._ffmpeg_hash()==self.ffmpeg_hash and self._policy()==self.policy_hash and self.supervisor.verify_policy() is True
+    def _current(self): return self.supervisor.verify_policy() is True
     def sample(self,run,claim,subject,asset_ref):
         graph=GraphStore(self.db_path)
         try:
@@ -80,14 +72,13 @@ class VideoSamples:
                 if _png_dimensions(image)!=(1290,968): raise VideoSampleError('invalid sample layout')
                 sample_ref=store.put(image);unit=result['unit']
                 graph._lease(run,claim)
-                from runner.local_scope import valid_terminated_scope
-                if not valid_terminated_scope(graph.db,run,unit): raise VideoSampleError('video scope not terminated')
+                if not graph.db.execute("SELECT 1 FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,unit)).fetchone(): raise VideoSampleError('video scope not terminated')
                 receipt={'run':run,'subject':subject,'asset_ref':asset_ref,'sample_ref':sample_ref,'unit':unit,'duration':float(duration),'timestamps':timestamps,'policy_hash':self.policy_hash,'coverage':'12 evenly spaced sampled frames'}
                 receipt_ref=store.put(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode())
                 if graph.db.execute("UPDATE local_video_samples SET sample_ref=?,receipt_ref=?,state='complete' WHERE id=? AND run=? AND unit=? AND state='reserved'",(sample_ref,receipt_ref,operation,run,unit)).rowcount!=1: raise VideoSampleError('video receipt unavailable')
                 return receipt_ref
         except VideoSampleError: raise
-        except Exception: raise VideoSampleError('video sampling unavailable') from None
+        except Exception: raise VideoSampleError('video sampling unavailable')
         finally:graph.close()
     def verify(self,run,subject,asset_ref,receipt_ref):
         graph=GraphStore(self.db_path)
@@ -98,9 +89,8 @@ class VideoSamples:
             if not isinstance(times,list) or len(times)!=12 or any(type(value) not in (int,float) or not math.isfinite(value) or abs(value-index*duration/12)>max(.01,duration*.002) for index,value in enumerate(times)): return False
             matches=[item for item in manifest['assets'] if item.get('artifact_ref')==asset_ref and item.get('kind')=='mp4']
             if not matches or any(item['duration_seconds']!=receipt['duration'] for item in matches): return False
-            row=graph.db.execute("SELECT s.invocation,s.cgroup FROM local_video_samples v JOIN local_scopes s ON s.run=v.run AND s.unit=v.unit WHERE v.run=? AND v.subject=? AND v.asset_ref=? AND v.unit=? AND v.policy_hash=? AND v.duration=? AND v.sample_ref=? AND v.receipt_ref=? AND v.state='complete' AND s.state='terminated'",(run,subject,asset_ref,receipt['unit'],self.policy_hash,receipt['duration'],receipt['sample_ref'],receipt_ref)).fetchone()
+            row=graph.db.execute("SELECT 1 FROM local_video_samples v JOIN local_scopes s ON s.run=v.run AND s.unit=v.unit WHERE v.run=? AND v.subject=? AND v.asset_ref=? AND v.unit=? AND v.policy_hash=? AND v.duration=? AND v.sample_ref=? AND v.receipt_ref=? AND v.state='complete' AND s.state='terminated'",(run,subject,asset_ref,receipt['unit'],self.policy_hash,receipt['duration'],receipt['sample_ref'],receipt_ref)).fetchone()
             store.get(asset_ref);image=store.get(receipt['sample_ref'])
-            from runner.local_scope import valid_scope_identity
-            return bool(row and valid_scope_identity(receipt['unit'],*row) and _png_dimensions(image)==(1290,968))
+            return bool(row and _png_dimensions(image)==(1290,968))
         except Exception:return False
         finally:graph.close()

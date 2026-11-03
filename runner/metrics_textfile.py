@@ -17,8 +17,8 @@ def publish(directory):
         for part in parts:
             child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
             os.close(fd); fd=child
-    except OSError:
-        os.close(fd); raise ValueError('metrics directory unavailable') from None
+    except OSError as exc:
+        os.close(fd); raise ValueError('metrics directory unavailable') from exc
     temporary=None
     try:
         info=os.fstat(fd)

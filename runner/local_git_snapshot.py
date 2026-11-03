@@ -19,14 +19,14 @@ def scoped_git_snapshot(supervisor,run,workspace,head,on_reserved,*,on_started=N
         if not root.is_absolute() or root.resolve(strict=True)!=root or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise ValueError()
         if not work.is_absolute() or work.resolve(strict=True)!=work or not stat.S_ISDIR(winfo.st_mode) or winfo.st_uid!=os.geteuid() or winfo.st_mode&0o077: raise ValueError()
         if supervisor.preflight() is not True or supervisor.fence(run) is not True: raise ValueError()
-    except Exception: raise SnapshotError('scoped Git snapshot unavailable') from None
+    except Exception: raise SnapshotError('scoped Git snapshot unavailable')
     with tempfile.TemporaryDirectory(prefix='git-bundle-',dir=root) as output:
         bundle=str(Path(output)/'checkout.bundle')
         args=['/usr/bin/git','--no-replace-objects','-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-c','credential.helper=','bundle','create',bundle,'HEAD']
         try:
             result=run_scoped_sandbox(supervisor,run,workspace,args,time.monotonic()+60,8192,on_reserved,output_dir=output,on_started=on_started,**({'workspace_claim':workspace_claim} if workspace_claim is not None else {}))
             if result.get('outcome')!='exited' or result.get('exit_code')!=0 or not isinstance(result.get('unit'),str): raise ValueError()
-        except Exception: raise SnapshotError('scoped Git bundle unavailable') from None
+        except Exception: raise SnapshotError('scoped Git bundle unavailable')
         with isolated_git_snapshot(bundle,head,str(root)) as bare:
             yield bare,result['unit']
 
@@ -41,9 +41,9 @@ def isolated_git_snapshot(bundle,head,state_root):
         info=os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1 or info.st_size>512*1024*1024: raise ValueError()
         size=info.st_size
-    except (OSError,ValueError,TypeError):
+    except (OSError,ValueError,TypeError) as exc:
         if fd is not None:os.close(fd)
-        raise SnapshotError('private bundle or state root unavailable') from None
+        raise SnapshotError('private bundle or state root unavailable') from exc
     try:
         with tempfile.TemporaryDirectory(prefix='git-snapshot-',dir=root) as directory:
             temp=Path(directory); local_bundle=temp/'input.bundle';template=temp/'template';template.mkdir(mode=0o700);bare=temp/'repo.git'
@@ -63,6 +63,6 @@ def isolated_git_snapshot(bundle,head,state_root):
                 git('--git-dir='+str(bare),'fetch','--quiet','--no-tags','--no-write-fetch-head','--no-recurse-submodules','--',str(local_bundle),'HEAD:refs/heads/snapshot')
                 if git('--git-dir='+str(bare),'rev-parse','--verify','refs/heads/snapshot^{commit}',capture=True)!=head: raise ValueError()
                 git('--git-dir='+str(bare),'fsck','--full','--strict','--no-reflogs')
-            except (OSError,ValueError,UnicodeError,subprocess.SubprocessError): raise SnapshotError('bundle import or exact commit verification failed') from None
+            except (OSError,ValueError,UnicodeError,subprocess.SubprocessError): raise SnapshotError('bundle import or exact commit verification failed')
             yield str(bare)
     finally:os.close(fd)

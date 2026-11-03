@@ -1,4 +1,5 @@
 """Claim-bound OpenFilm production using an explicitly trusted supervisor."""
+from runner.trace import trace
 import hashlib
 import io
 import json
@@ -36,17 +37,30 @@ def _verify_project(store, ref, asset_count):
             if not item.filename or '\\' in item.filename or ':' in item.filename or path.is_absolute() or any(part in ('','.','..') for part in parts) or item.filename in names or item.flag_bits & 1 or (stat.S_IFMT(mode) and not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))): raise ValueError('unsafe project entry')
             names.add(item.filename)
         required=['film.html'] if asset_count==1 else [f'projects/{index}/film.html' for index in range(asset_count)]
-        if any(name not in names or archive.getinfo(name).file_size==0 for name in required) or archive.testzip() is not None: raise ValueError('editable film unavailable')
+        missing=[name for name in required if name not in names]; empty=[name for name in required if name in names and archive.getinfo(name).file_size==0]; corrupt=archive.testzip()
+        if missing or empty or corrupt is not None: raise ValueError(f"editable film unavailable (missing {missing[:5]}, empty {empty[:5]}, corrupt {corrupt!r}, entries {sorted(names)[:12]})"[:400])
+
+
+def _render_failure_reason(service, result):
+    # The blocked reason names the rejection or the last stderr line, so the step result says why.
+    try:
+        terminal=json.loads(service.artifacts.get(result['terminal_ref']))
+        lines=[line for line in (terminal.get('rejected') or terminal.get('stderr') or '').splitlines() if line.strip()]
+        detail=lines[-1] if lines else ''
+    except Exception:
+        detail=''
+    return f'render failed: {detail[:300]}' if detail else 'render failed'
 
 
 def produce(service, run, queue_claim, graph_claim, backend):
     graph=service.graph
+    trace('render.begin', run=run, timeout=getattr(backend,'timeout_seconds',None))
     if not service.queue.may_start(run,queue_claim): raise OpenFilmStageError('queue claim unavailable')
     if not all(callable(getattr(backend,name,None)) for name in ('ready','execute','cancel','verify_terminal')): raise OpenFilmStageError('isolated render supervisor unavailable')
     timeout=getattr(backend,'timeout_seconds',None)
-    if type(timeout) is not int or not 1<=timeout<=600: raise OpenFilmStageError('bounded render timeout required')
+    if type(timeout) is not int or not 1<=timeout<=1800: raise OpenFilmStageError('bounded render timeout required')
     try: ready=_bounded(backend.ready,time.monotonic()+timeout,lambda:not service.queue.may_start(run,queue_claim))
-    except Exception: raise OpenFilmStageError('isolated render supervisor unavailable') from None
+    except Exception as exc: raise OpenFilmStageError('isolated render supervisor unavailable') from exc
     if ready is not True: raise OpenFilmStageError('isolated render supervisor unavailable')
     runner=GraphRunner(graph,service.artifacts,lambda *_:None,lambda *_:False,skill_resolver=service.skill_resolver,required_skills=service.required_skills)
     runner._verify_upstream_skills(run,'asset_production',graph_claim)
@@ -67,10 +81,10 @@ def produce(service, run, queue_claim, graph_claim, backend):
         validate_sources(service.artifacts,register_ref,source_record['_source_verification'])
         validate_brief(service.artifacts,brief,content_ref,register_ref,social_draft_inputs(service,run))
         canonical_text=service.artifacts.get(content_ref).decode('utf-8')
-    except Exception: raise OpenFilmStageError('asset brief or approved source unavailable') from None
+    except Exception as exc: raise OpenFilmStageError('asset brief or approved source unavailable') from exc
     if callable(getattr(backend,'blocker',None)):
         try: blocker=_bounded(lambda:backend.blocker(brief),time.monotonic()+timeout,lambda:not service.queue.may_start(run,queue_claim))
-        except Exception: raise OpenFilmStageError('render capability unavailable') from None
+        except Exception as exc: raise OpenFilmStageError('render capability unavailable') from exc
         if blocker is not None:
             if blocker not in ('supplied media unavailable or unsupported','project builder does not support this brief'): raise OpenFilmStageError('render capability unavailable')
             ref=service.artifacts.put(json.dumps({'status':'blocked','reason':blocker,'outputs':[]},sort_keys=True).encode())
@@ -93,22 +107,24 @@ def produce(service, run, queue_claim, graph_claim, backend):
             graph.finish(run,'asset_production',snapshot,'blocked',ref,graph_claim,skill_fingerprint=fingerprint,queue_claim=queue_claim)
             return {'stage':'asset_production','status':'blocked','artifact_ref':ref,'reason':'platform constraints unsupported or unclear'}
         verify_platform(service,run,brief_ref,brief,platform_ref,timeout,cancelled)
-    except UncertainExecutorError:
+    except UncertainExecutorError as exc:
         try: service.fence_execution(run)
         except Exception: pass
-        raise PlatformReviewUncertain('platform review outcome uncertain; inspect worker before retry') from None
-    except Exception:
+        raise PlatformReviewUncertain('platform review outcome uncertain; inspect worker before retry') from exc
+    except Exception as exc:
+        trace('render.platform_unavailable', run=run, error=f'{type(exc).__name__}: {str(exc)[:400]}')
         ref=service.artifacts.put(json.dumps({'status':'blocked','reason':'current platform constraints unavailable','outputs':[]},sort_keys=True).encode())
         graph.finish(run,'asset_production',snapshot,'blocked',ref,graph_claim,skill_fingerprint=fingerprint,queue_claim=queue_claim)
         return {'stage':'asset_production','status':'blocked','artifact_ref':ref,'reason':'current platform constraints unavailable'}
     input_hash=hashlib.sha256(json.dumps({'brief':brief_ref,'snapshot':snapshot,'skills':fingerprint},sort_keys=True,separators=(',',':')).encode()).hexdigest()
     try: attempt=graph.begin_attempt(run,'asset_production',input_hash,graph_claim,2)
-    except GraphError as exc: raise OpenFilmStageError(str(exc)) from None
+    except GraphError as exc: raise OpenFilmStageError(str(exc)) from exc
     attempt_id=hashlib.sha256(json.dumps([run,'asset_production',input_hash,attempt],separators=(',',':')).encode()).hexdigest()
     def cancelled(): return not service.queue.may_start(run,queue_claim)
     terminated=False
     try:
         result=_bounded(lambda:backend.execute(run=run,attempt_id=attempt_id,brief_ref=brief_ref,brief=brief,canonical=canonical_text,graph_claim=graph_claim,queue_claim=queue_claim),time.monotonic()+timeout,cancelled)
+        trace('render.backend', run=run, type=type(result).__name__, keys=sorted(result) if isinstance(result,dict) else None, status=result.get('status') if isinstance(result,dict) else None, outputs=result.get('outputs') if isinstance(result,dict) else None)
         if not isinstance(result,dict) or set(result)!={'attempt_id','status','root','project_ref','outputs','terminal_ref'} or result['attempt_id']!=attempt_id or result['status'] not in ('exited','failed'): raise OpenFilmStageError('render outcome uncertain')
         verified=_bounded(lambda:backend.verify_terminal(run,attempt_id,brief_ref,result),time.monotonic()+timeout,cancelled)
         if cancelled() or verified is not True: raise OpenFilmStageError('render termination unverified')
@@ -116,14 +132,15 @@ def produce(service, run, queue_claim, graph_claim, backend):
         service.artifacts.get(result['terminal_ref'])
         supervisor_ref=service.artifacts.put(json.dumps(result,sort_keys=True,separators=(',',':')).encode())
         if result['status']=='failed':
-            manifest={'status':'blocked','reason':'render failed','brief_ref':brief_ref,'attempt_id':attempt_id,'terminal_ref':result['terminal_ref'],'outputs':[]}
+            manifest={'status':'blocked','reason':_render_failure_reason(service,result),'brief_ref':brief_ref,'attempt_id':attempt_id,'terminal_ref':result['terminal_ref'],'outputs':[]}
             try:
                 failure=result['outputs']
                 if isinstance(failure,list) and len(failure)==1 and isinstance(failure[0],dict) and set(failure[0])=={'look_report_ref'}:
                     report_ref=failure[0]['look_report_ref']; report=json.loads(service.artifacts.get(report_ref))
                     if isinstance(report,dict) and set(report)=={'ok','lines'} and report['ok'] is False and isinstance(report['lines'],list) and all(isinstance(line,str) for line in report['lines']):
                         manifest.update(look_report_ref=report_ref,project_ref=result['project_ref'])
-                        if any(line.startswith('asset ') for line in report['lines']): manifest['reason']='text layout check failed; see visual report'
+                        failing=next((line for line in report['lines'] if line.startswith('asset ')), None)
+                        if failing is not None: manifest['reason']='text layout check failed: '+failing[:300]
             except (TypeError,ValueError,KeyError,ArtifactError): pass
             status='blocked'
         else:
@@ -155,6 +172,7 @@ def produce(service, run, queue_claim, graph_claim, backend):
                     if not isinstance(report_data,dict) or set(report_data)!={'ok','lines'} or report_data['ok'] is not True or not isinstance(report_data['lines'],list) or any(not isinstance(line,str) for line in report_data['lines']) or '✓ sampled text layout inspected' not in report_data['lines'] or not any(line.startswith('✓ ') and 'same picture' in line for line in report_data['lines']): raise OpenFilmStageError('visual check unavailable')
                     if any(line.startswith('! text cut off ') for line in report_data['lines']): raise TextCutoffError()
                     if spec['kind']=='mp4' and any(line.startswith('! every frame looks the same') for line in report_data['lines']): raise StaticVideoError()
+                    trace('render.asset', run=run, channel=spec['channel'], kind=spec['kind'], status=checked.get('status'), audio_streams=checked.get('audio_streams'), previews=len(preview_refs), report_lines=report_data['lines'])
                     assets.append({'channel':spec['channel'],'kind':spec['kind'],**checked,'previews':preview_refs,'look_report_ref':report_ref})
                 manifest={'status':'awaiting_review','brief_ref':brief_ref,'content_ref':content_ref,'platform_ref':platform_ref,'attempt_id':attempt_id,'project_ref':result['project_ref'],'terminal_ref':result['terminal_ref'],'supervisor_ref':supervisor_ref,'assets':assets,'outputs':[]}
                 status='awaiting_review'
@@ -167,16 +185,18 @@ def produce(service, run, queue_claim, graph_claim, backend):
             except StaticVideoError:
                 manifest={'status':'blocked','reason':'video has no visible motion','brief_ref':brief_ref,'attempt_id':attempt_id,'terminal_ref':result['terminal_ref'],'project_ref':result['project_ref'],'asset_ref':checked['artifact_ref'],'look_report_ref':report_ref,'previews':preview_refs,'outputs':[]}
                 status='blocked'
-            except (ValueError,KeyError,TypeError,OSError,zipfile.BadZipFile,ArtifactError,AdapterError,OpenFilmStageError):
-                manifest={'status':'blocked','reason':'render output or project failed technical verification','brief_ref':brief_ref,'attempt_id':attempt_id,'terminal_ref':result['terminal_ref'],'outputs':[]}
+            except (ValueError,KeyError,TypeError,OSError,zipfile.BadZipFile,ArtifactError,AdapterError,OpenFilmStageError) as exc:
+                trace('render.technical_failure', run=run, error=f'{type(exc).__name__}: {str(exc)[:600]}')
+                manifest={'status':'blocked','reason':f'render output or project failed technical verification ({type(exc).__name__}: {str(exc)[:160]})','brief_ref':brief_ref,'attempt_id':attempt_id,'terminal_ref':result['terminal_ref'],'outputs':[]}
                 status='blocked'
+        trace('render.manifest', run=run, status=status, reason=manifest.get('reason'))
         ref=service.artifacts.put(json.dumps(manifest,sort_keys=True,separators=(',',':')).encode())
         graph.finish(run,'asset_production',snapshot,status,ref,graph_claim,completion_input=input_hash,skill_fingerprint=fingerprint,queue_claim=queue_claim)
-        return {'stage':'asset_production','status':status,'artifact_ref':ref}
-    except Exception:
+        return {'stage':'asset_production','status':status,'artifact_ref':ref,'reason':manifest.get('reason')}
+    except Exception as exc:
         if not terminated:
             try: _bounded(lambda:backend.cancel(run,attempt_id),time.monotonic()+timeout,lambda:False)
             except Exception: pass
         try: service.fence_execution(run)
         except Exception: pass
-        raise OpenFilmStageError('render outcome requires inspection') from None
+        raise OpenFilmStageError(f'render outcome requires inspection ({type(exc).__name__}: {str(exc)[:300]})') from exc

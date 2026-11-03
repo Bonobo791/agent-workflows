@@ -34,7 +34,7 @@ class ConfiguredTask:
                 try:
                     if (type(item['number']) is not int or item['head']['ref']!=branch or item['head']['repo']['full_name']!=c['github_owner']+'/'+c['github_repo']): raise ValueError()
                     existing.append({'kind':'pull_request','number':item['number']})
-                except (KeyError,TypeError,ValueError): raise ConfiguredTaskError('pull request discovery incomplete') from None
+                except (KeyError,TypeError,ValueError): raise ConfiguredTaskError('pull request discovery incomplete')
             if len(items)<100: return existing
         raise ConfiguredTaskError('pull request discovery incomplete')
     def submit(self,run,workflow,project,number):
@@ -73,7 +73,7 @@ class ConfiguredTask:
                     records=service.graph.db.execute("SELECT b.manifest FROM action_bindings b JOIN external_actions a USING(run,action,version) WHERE b.run=? AND b.action LIKE 'push:%' AND b.version=? AND a.status IN ('executed','desired_state_observed')",(run,remote_head)).fetchall()
                     if not any((lambda target:target.get('repo')==current['repository'] and target.get('branch')==branch and target.get('head')==remote_head)(json.loads(row[0])) for row in records): return False
                     from runner.engineering_workspace import EngineeringWorkspace
-                    root=service.model_supervisor.engineering_root if service.model_supervisor is not None else service.docker_supervisor.config.job_root.parent
+                    root=service.model_supervisor.engineering_root
                     registry=EngineeringWorkspace(root)
                     try: registry._git(current['path'],'merge-base','--is-ancestor',remote_head,head)
                     finally: registry.close()
@@ -81,6 +81,8 @@ class ConfiguredTask:
                     records=service.graph.db.execute("SELECT result FROM pr_bridge_operations WHERE run=? AND kind='draft' AND state IN ('executed','desired_state_observed') AND result IS NOT NULL",(run,)).fetchall()
                     prior=[json.loads(service.artifacts.get(row[0])).get('result') for row in records]
                     if not any(isinstance(value,dict) and value.get('number')==item['number'] for value in prior): return False
+                    if remote_head is None:
+                        remote_head=self.github.request('GET',prefix+'/git/ref/heads/'+urllib.parse.quote(branch,safe='/')).get('object',{}).get('sha')
                     remote=self.github.request('GET',prefix+'/pulls/'+str(item['number']))
                     if remote.get('number')!=item['number'] or remote.get('state')!='open' or remote_head is None or remote.get('head',{}).get('sha')!=remote_head or remote.get('head',{}).get('ref')!=branch or remote.get('head',{}).get('repo',{}).get('full_name')!=current['repository'] or remote.get('base',{}).get('ref')!=c.get('github_base') or remote.get('base',{}).get('repo',{}).get('full_name')!=current['repository']: return False
                 else: return False

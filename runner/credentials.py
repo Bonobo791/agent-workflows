@@ -17,7 +17,7 @@ class CredentialStore:
 
     def _directory(self):
         try: fd=os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        except OSError: raise CredentialError('private directory unavailable') from None
+        except OSError: raise CredentialError('private directory unavailable')
         info=os.fstat(fd)
         if info.st_uid != os.geteuid() or info.st_mode & 0o077:
             os.close(fd); raise CredentialError('directory must be owner-only')
@@ -33,8 +33,8 @@ class CredentialStore:
                 info=os.fstat(lock)
                 if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077: raise CredentialError('unsafe lock')
                 fcntl.flock(lock, fcntl.LOCK_EX)
-            except OSError:
-                raise CredentialError('credential storage unavailable') from None
+            except OSError as exc:
+                raise CredentialError('credential storage unavailable') from exc
             yield _Record(directory)
         finally:
             if lock is not None:
@@ -51,7 +51,7 @@ class _Record:
                 if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_size > 65536: raise CredentialError('unsafe credential file')
                 with os.fdopen(fd, 'r', encoding='utf-8', closefd=False) as file: return json.load(file)
             finally: os.close(fd)
-        except (OSError, ValueError): raise CredentialError('credential file unavailable') from None
+        except (OSError, ValueError): raise CredentialError('credential file unavailable')
     def save(self, data):
         name='.credentials-' + secrets.token_hex(16)
         fd=None
@@ -63,7 +63,7 @@ class _Record:
                 fd=None; file.write(encoded); file.flush(); os.fsync(file.fileno())
             os.replace(name, 'credentials.json', src_dir_fd=self.directory, dst_dir_fd=self.directory)
             os.fsync(self.directory)
-        except (OSError, TypeError, ValueError): raise CredentialError('credential write failed') from None
+        except (OSError, TypeError, ValueError): raise CredentialError('credential write failed')
         finally:
             if fd is not None: os.close(fd)
             try: os.unlink(name, dir_fd=self.directory)

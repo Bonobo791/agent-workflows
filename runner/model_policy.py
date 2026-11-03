@@ -29,7 +29,7 @@ class ModelPolicy:
             if len(matches)!=1: raise ModelPolicyError('GPT-6.1 Terra with medium reasoning unavailable or ambiguous')
             self._model=matches[0]; return self._model
         except ModelPolicyError: raise
-        except Exception: raise ModelPolicyError('model discovery unavailable') from None
+        except Exception: raise ModelPolicyError('model discovery unavailable')
     def for_role(self,role):
         if not isinstance(role,str) or not role: raise ModelPolicyError('role required')
         if self._model is None: raise ModelPolicyError('GPT-6.1 Terra with medium reasoning not discovered')

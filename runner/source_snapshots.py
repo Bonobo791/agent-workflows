@@ -34,7 +34,7 @@ def _source_view(content,content_type):
     if content_type not in ('text/html','application/xhtml+xml'):raise SourceFetchError('source view too large')
     try:
         parser=_SourceText();parser.feed(content);parser.close();text=parser.text()
-    except (ValueError,RecursionError):raise SourceFetchError('source extraction unavailable') from None
+    except (ValueError,RecursionError):raise SourceFetchError('source extraction unavailable')
     if not text or len(text)>MAX_MODEL_SOURCE_CHARS:raise SourceFetchError('source view too large or empty')
     return text,'extracted_text'
 
@@ -47,7 +47,7 @@ class SourceSnapshots:
             policy_hash TEXT NOT NULL,created REAL NOT NULL)''')
     def _policy(self):
         fetcher=self.fetcher
-        policy={'urls':sorted(fetcher.urls),'max_bytes':fetcher.max_bytes,'timeout':fetcher.timeout,'version':1,'fetcher_sha256':hashlib.sha256(Path(__file__).with_name('source_fetch.py').read_bytes()).hexdigest(),'snapshot_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+        policy={'urls':sorted(fetcher.urls),'max_bytes':fetcher.max_bytes,'timeout':fetcher.timeout,'version':1,'snapshot_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
         return hashlib.sha256(json.dumps(policy,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def capture(self,run,claim,register_ref,draft_ref,cancelled):
         graph=self.service.graph; store=self.service.artifacts
@@ -61,7 +61,7 @@ class SourceSnapshots:
             if cancelled() or not isinstance(source,dict) or set(source)!={'id','url','evidence_id'} or any(not isinstance(source[k],str) or not source[k].strip() for k in source) or source['id'] in seen: raise SourceFetchError('source request invalid')
             seen.add(source['id']); fetched=self.fetcher.fetch(source['url'],cancelled=cancelled); content=fetched['content'].encode('utf-8');total+=len(content)
             try: validate_content(fetched['content_type'],content)
-            except (ValueError,UnicodeError): raise SourceFetchError('source content invalid') from None
+            except (ValueError,UnicodeError): raise SourceFetchError('source content invalid')
             if fetched['url']!=source['url'] or len(content)>self.fetcher.max_bytes or total>MAX_SOURCE_BUNDLE or hashlib.sha256(content).hexdigest()!=fetched['sha256']: raise SourceFetchError('source content invalid')
             items.append({**source,'content_type':fetched['content_type'],'content_ref':store.put(content)})
         if cancelled() or self._policy()!=self.policy_hash: raise SourceFetchError('source request cancelled or policy changed')

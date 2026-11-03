@@ -21,7 +21,7 @@ class Lifecycle:
             origin=urllib.parse.urlsplit(target['origin']); host=origin.hostname; port=origin.port
             canonical=host if port is None else f'{host}:{port}'
             if origin.scheme!='https' or not host or host.endswith('.') or origin.netloc!=canonical or port==443 or origin.path not in ('','/') or origin.query or origin.fragment: raise ValueError('canonical HTTPS origin required')
-        except (ValueError,TypeError): raise ValueError('canonical HTTPS origin required') from None
+        except (ValueError,TypeError): raise ValueError('canonical HTTPS origin required')
         if any(not re.fullmatch(r'[a-z0-9_-]{1,128}',target[key]) for key in ('service','application')): raise ValueError('canonical target IDs required')
         if timeout<=0: raise ValueError('positive timeout required')
         self.target=dict(target); self.target['origin']=self.target['origin'].rstrip('/'); self.observer=observer; self.controller=controller; self.auto=False; self.timeout=timeout; self.inflight={}
@@ -67,7 +67,7 @@ class Lifecycle:
                 done.set()
         threading.Thread(target=invoke,daemon=True).start()
         if not done.wait(self.timeout): raise LifecycleError('lifecycle operation timed out')
-        if not result[0][0]: raise LifecycleError('lifecycle operation failed') from None
+        if not result[0][0]: raise LifecycleError('lifecycle operation failed')
         return result[0][1]
     def close(self): self.db.close()
     def enable_auto(self,*,approved_policy,verify_policy):
@@ -154,9 +154,9 @@ class Lifecycle:
             return True
         try:
             if self._call(self.observer.run_if_current,self.target,state['incarnation'],issue,tracking_key=run,on_complete=lambda:self._complete_call(run,call_id)) is not True: raise LifecycleError('guard did not issue stop')
-        except Exception:
+        except Exception as exc:
             self.db.execute("UPDATE worker_lifecycle SET status='uncertain' WHERE run=? AND status='requesting'",(run,))
-            raise LifecycleError('stop outcome uncertain; inspect before retry') from None
+            raise LifecycleError('stop outcome uncertain; inspect before retry') from exc
         self.db.execute("UPDATE worker_lifecycle SET status='requested' WHERE run=? AND status='requesting'",(run,))
     def confirm_stopped(self,run,evidence):
         self.db.execute('BEGIN IMMEDIATE')
@@ -198,9 +198,9 @@ class Lifecycle:
             return True
         try:
             if self._call(self.observer.run_if_stopped,self.target,state['incarnation'],issue,tracking_key=run,on_complete=lambda:self._complete_call(run,call_id)) is not True: raise LifecycleError('guard did not issue restart')
-        except Exception:
+        except Exception as exc:
             self.db.execute("UPDATE worker_lifecycle SET status='restart_uncertain' WHERE run=? AND status='restart_requesting'",(run,))
-            raise LifecycleError('restart outcome uncertain; inspect before retry') from None
+            raise LifecycleError('restart outcome uncertain; inspect before retry') from exc
         self.db.execute("UPDATE worker_lifecycle SET status='restart_requested' WHERE run=? AND status='restart_requesting'",(run,))
     def confirm_restarted(self,run,evidence):
         self.db.execute('BEGIN IMMEDIATE')

@@ -38,7 +38,7 @@ class PRBridge:
         c=intake.config
         if c.get('run')!=run or c.get('workflow')!='engineering' or not c.get('github_base'): raise PRBridgeError('exact repository and base branch required')
         def locked(selected):
-            supervisor=service.model_supervisor or service.docker_supervisor
+            supervisor=service.model_supervisor
             fence=getattr(supervisor,'fence',None) if service.model_supervisor is not None else getattr(supervisor,'fence_ready',None)
             if selected!=run or not service.queue.may_start(run,queue_claim) or not callable(fence) or fence(run) is not True: return False
             try: service.graph._lease(run,graph_claim); return True
@@ -60,7 +60,7 @@ class PRBridge:
         value=loop.github.http.request('GET',loop.github.prefix+'/pulls/'+str(number))
         try:
             if value['state']!='open' or value['number']!=number or value['head']['ref']!=target['branch'] or value['head']['repo']['full_name']!=target['repo'] or value['base']['ref']!=target['base'] or value['base']['repo']['full_name']!=target['repo'] or value['head']['sha']!=target['head'] or (node is not None and value['node_id']!=node): raise ValueError('PR target mismatch')
-        except (KeyError,TypeError): raise PRBridgeError('PR target unavailable') from None
+        except (KeyError,TypeError): raise PRBridgeError('PR target unavailable')
         return value
     @staticmethod
     def _action(loop,target,kind,args):
@@ -112,7 +112,7 @@ class PRBridge:
             if not row or row[:2]!=(run,proposal['kind']) or proposal['run']!=run or loop.target(run)!=proposal['target'] or approval_package(self.service,run)!=proposal['package'] or self._action(loop,{**proposal['target'],'run':run},proposal['kind'],proposal['args'])!=proposal['action']: raise ValueError('stale proposal')
             if proposal['kind']=='ready' and self.service.graph.db.execute("SELECT 1 FROM pr_review_blockers WHERE run=? AND number=? AND state='open'",(run,proposal['args']['number'])).fetchone(): raise ValueError('valid review findings require correction')
             return proposal,row[2]
-        except Exception: raise PRBridgeError('proposal unavailable or stale') from None
+        except Exception: raise PRBridgeError('proposal unavailable or stale')
     def _require_claims(self,db,run,queue_claim,graph_claim):
         claims=db.execute("SELECT j.token,j.expires,c.token,c.expires FROM jobs j JOIN graph_runs r ON r.id=j.run AND r.status='active' JOIN graph_claims c ON c.run=r.id AND c.task_id=r.task_id WHERE j.run=? AND j.status='running'",(run,)).fetchone()
         if not claims or not all(isinstance(value,str) for value in (queue_claim,graph_claim,claims[0],claims[2])) or not secrets.compare_digest(queue_claim,claims[0]) or not secrets.compare_digest(graph_claim,claims[2]) or claims[1] is None or claims[3] is None or claims[1]<=time.time() or claims[3]<=self.service.graph.clock(): raise PRBridgeError('current claims unavailable')
@@ -151,7 +151,7 @@ class PRBridge:
                 self._require_claims(db,run,queue_claim,graph_claim)
                 db.execute('COMMIT');return {'revoked':True,'proposal':ref}
             except Exception: db.execute('ROLLBACK');raise
-        except Exception: raise PRBridgeError('approval withdrawal unavailable') from None
+        except Exception: raise PRBridgeError('approval withdrawal unavailable')
 
     def reauthorize(self,run,queue_claim,graph_claim,ref):
         """Permit a new explicit approval only when an old attempt did not execute."""
@@ -191,10 +191,10 @@ class PRBridge:
                 if kind=='ready': self._record_stage(run,graph_claim,'ready',{'proposal':ref,'result_ref':output,'number':args['number'],'head':proposal['target']['head']})
                 self.service.graph.db.execute("UPDATE pr_bridge_operations SET state='executed' WHERE proposal=? AND state='observed'",(ref,))
                 return {'executed':True,'result_ref':output}
-            except Exception:
+            except Exception as exc:
                 status=loop.ledger.db.execute('SELECT status FROM external_actions WHERE run=? AND action=? AND version=?',(run,proposal['action'],proposal['target']['head'])).fetchone()
                 if status==('not_executed',): self.service.graph.db.execute("UPDATE pr_bridge_operations SET state='not_executed' WHERE proposal=? AND state='uncertain'",(ref,))
-                raise PRBridgeError('action outcome requires independent inspection') from None
+                raise PRBridgeError('action outcome requires independent inspection') from exc
         finally: loop.ledger.db.close()
     def _corrected_by_review(self,run,head,old_head,review_ref):
         from runner.structured import parse_marketing_result

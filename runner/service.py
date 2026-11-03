@@ -28,9 +28,6 @@ class ServiceError(RuntimeError): pass
 class Service:
     def __init__(self,root,skill_resolver=None,required_skills=None,lifecycle=None,lifecycle_policy_verifier=None):
         self.lifecycle=lifecycle
-        self.docker_assignments=None
-        self.docker_supervisor=None
-        self.docker_executor=None
         self.model_supervisor=None
         self.model_executor=None
         self.session_store=None
@@ -66,7 +63,7 @@ class Service:
                     if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode & 0o077: raise ServiceError('unsafe state database')
                 finally: os.close(fd)
             finally: os.close(directory)
-        except OSError: raise ServiceError('state storage unavailable') from None
+        except OSError as exc: raise ServiceError('state storage unavailable') from exc
         self.graph=GraphStore(str(root/'state.db'))
         self.graph.register(marketing_definition()); self.graph.register(engineering_definition())
         self.provenance=Provenance(self.graph)
@@ -76,7 +73,6 @@ class Service:
         self.artifacts=ArtifactStore(str(artifacts))
     def close(self):
         if self.session_store is not None: self.session_store.close()
-        if self.docker_assignments is not None: self.docker_assignments.close()
         self.queue.close(); self.actions.db.close(); self.graph.close()
     def create(self,run,workflow,task): self.graph.create(run,workflow,task_id=task)
     def enqueue(self,run):
@@ -115,7 +111,6 @@ class Service:
             raise ServiceError('recovery evidence unavailable') from exc
     def recover_invalid_draft(self,run,execution):
         from runner.checkpoint import _checkpoint_runtime,ensure_quiescent
-        from runner.local_scope import valid_terminated_scope
         from runner.structured import parse_marketing_result
         if self.task_intake is None or self.task_intake.revalidate(run) is not True: raise ServiceError('fresh local task required')
         db,lifecycle=_checkpoint_runtime(self);target=lifecycle.target['manual_target'];inc=lifecycle.incarnation
@@ -127,13 +122,9 @@ class Service:
             if row!=('marketing',marketing_definition().fingerprint(),'cancelled') or not assignment or assignment[0]!=target or assignment[1]==inc or assignment[2:]!=('stopped','terminated_and_fenced') or db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()!=(inc,'available') or db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()!=('cancelled',None,None): raise ServiceError('confirmed stopped replacement required')
             attempts=db.execute("SELECT stage,version FROM graph_attempts WHERE run=? AND status='uncertain'",(run,)).fetchall()
             if len(attempts)!=1 or attempts[0][0]!='canonical_draft' or db.execute("SELECT 1 FROM graph_stages WHERE run=? AND stage NOT IN ('intake','brief')",(run,)).fetchone() or db.execute("SELECT status FROM graph_stages WHERE run=? AND stage='brief'",(run,)).fetchone()!=('passed',): raise ServiceError('draft attempt unavailable')
-            launch=db.execute('SELECT role,status FROM execution_launch_audit WHERE run=? AND execution=? ORDER BY id DESC LIMIT 1',(run,execution)).fetchone()
-            binding=db.execute("SELECT session,unit,binding FROM local_execution_scopes WHERE run=? AND role='canonical_draft' AND execution=?",(run,execution)).fetchone()
-            if launch!=('canonical_draft','completed') or not binding or not valid_terminated_scope(db,run,binding[1]): raise ServiceError('completed draft scope required')
-            turns=db.execute("SELECT turn FROM execution_link_audit WHERE run=? AND role='canonical_draft' AND execution=? AND session=? AND status='completed'",(run,execution,binding[0])).fetchall()
-            if len(turns)!=1: raise ServiceError('completed draft turn unavailable')
-            turn=turns[0][0]
-            if db.execute("SELECT unit,binding FROM local_turn_scopes WHERE run=? AND role='canonical_draft' AND session=? AND turn=?",(run,binding[0],turn)).fetchone()!=binding[1:]: raise ServiceError('draft scope binding mismatch')
+            launch=db.execute("SELECT role,launch_status,session,turn FROM execution_launches WHERE run=? AND execution=?",(run,execution)).fetchone()
+            if not launch or launch[:2]!=('canonical_draft','completed') or not launch[2] or not launch[3]: raise ServiceError('completed draft launch required')
+            binding=launch[2:3]; turn=launch[3]
             record=db.execute("SELECT input_versions,output_refs,response_ref FROM execution_turn_audit WHERE run=? AND role='canonical_draft' AND session=? AND turn=? AND status='completed'",(run,binding[0],turn)).fetchone()
             completed=db.execute("SELECT input_versions,output_refs FROM completed_turn_outputs WHERE run=? AND role='canonical_draft' AND session=? AND turn=?",(run,binding[0],turn)).fetchone()
             if not record or completed!=record[:2] or db.execute("SELECT output_hash FROM execution_completions WHERE run=? AND role='canonical_draft' AND session=?",(run,binding[0])).fetchone()!=(record[2],): raise ServiceError('draft completion evidence mismatch')
@@ -164,13 +155,13 @@ class Service:
             if row!=('marketing',marketing_definition().fingerprint(),'cancelled') or not assignment or assignment[0]!=target or assignment[1]==inc or assignment[2:]!=('stopped','terminated_and_fenced') or db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()!=(inc,'available') or db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()!=('cancelled',None,None): raise ServiceError('confirmed stopped replacement required')
             attempt=db.execute("SELECT version,count FROM graph_attempts WHERE run=? AND stage='canonical_draft' AND status='uncertain'",(run,)).fetchone()
             prior=db.execute('SELECT execution,attempt_version,created FROM invalid_draft_recovery_audit WHERE run=? ORDER BY id DESC LIMIT 1',(run,)).fetchone()
-            latest=db.execute('SELECT role,status,created FROM execution_launch_audit WHERE run=? AND execution=? ORDER BY id DESC LIMIT 1',(run,execution)).fetchone()
+            latest=db.execute('SELECT role,launch_status,created FROM execution_launches WHERE run=? AND execution=?',(run,execution)).fetchone()
             if not attempt or attempt[1]<1 or not prior or prior[1]!=attempt[0] or latest is None or latest[:2]!=('canonical_draft','uncertain') or latest[2]<prior[2] or execution==prior[0]: raise ServiceError('uncertain retry evidence unavailable')
-            uncertain=db.execute("SELECT execution FROM execution_launch_audit WHERE run=? AND id IN (SELECT MAX(id) FROM execution_launch_audit WHERE run=? GROUP BY execution) AND status='uncertain'",(run,run)).fetchall()
+            uncertain=db.execute("SELECT execution FROM execution_launches WHERE run=? AND launch_status='uncertain'",(run,)).fetchall()
             if uncertain!=[(execution,)]: raise ServiceError('other launches remain uncertain')
-            if db.execute('SELECT 1 FROM local_execution_scopes WHERE run=? AND execution=?',(run,execution)).fetchone() or db.execute('SELECT 1 FROM execution_link_audit WHERE run=? AND execution=?',(run,execution)).fetchone(): raise ServiceError('draft launch has bound evidence')
-            binding=db.execute("SELECT session,unit,binding FROM local_execution_scopes WHERE run=? AND role='canonical_draft' AND execution=?",(run,prior[0])).fetchone()
-            if not binding or db.execute("SELECT session,binding,state FROM local_sessions WHERE run=? AND role='canonical_draft'",(run,)).fetchone()!=(binding[0],binding[2],'idle') or db.execute("SELECT 1 FROM graph_sessions WHERE run=? AND role='canonical_draft'",(run,)).fetchone(): raise ServiceError('draft session unavailable')
+            if db.execute('SELECT 1 FROM execution_launches WHERE run=? AND execution=? AND turn IS NOT NULL',(run,execution)).fetchone(): raise ServiceError('draft launch has bound evidence')
+            binding=db.execute("SELECT session FROM execution_launches WHERE run=? AND role='canonical_draft' AND execution=?",(run,prior[0])).fetchone()
+            if not binding or db.execute("SELECT session,state FROM local_sessions WHERE run=? AND role='canonical_draft'",(run,)).fetchone()!=(binding[0],'idle') or db.execute("SELECT 1 FROM graph_sessions WHERE run=? AND role='canonical_draft'",(run,)).fetchone(): raise ServiceError('draft session unavailable')
             if db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone() or db.execute("SELECT 1 FROM jobs WHERE run<>? AND status IN ('running','cancelling','uncertain')",(run,)).fetchone() or db.execute("SELECT 1 FROM graph_stages WHERE run=? AND stage NOT IN ('intake','brief')",(run,)).fetchone() or db.execute('SELECT 1 FROM external_actions WHERE run=?',(run,)).fetchone(): raise ServiceError('run not safe to replay')
             ensure_quiescent(db,run,('canonical_draft',attempt[0]))
             db.execute("INSERT INTO unbound_draft_retry_audit(run,execution,attempt_version,original_status,created) VALUES(?,?,?,'uncertain',?)",(run,execution,attempt[0],time.time()))
@@ -184,7 +175,6 @@ class Service:
             raise ServiceError('draft retry evidence unavailable') from exc
     def retry_uncertain_source_review(self,run,new_run,execution):
         from runner.checkpoint import _checkpoint_runtime,ensure_quiescent
-        from runner.local_scope import valid_terminated_scope
         if not isinstance(new_run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',new_run) or new_run==run: raise ServiceError('invalid replacement run')
         if self.task_intake is None or self.task_intake.revalidate(run) is not True: raise ServiceError('fresh local task required')
         db,lifecycle=_checkpoint_runtime(self);target=lifecycle.target['manual_target'];inc=lifecycle.incarnation
@@ -196,9 +186,9 @@ class Service:
             if not row or row[0:2]!=('marketing',marketing_definition().fingerprint()) or row[3]!='cancelled' or not assignment or assignment[0]!=target or assignment[1]==inc or assignment[2:]!=('stopped','terminated_and_fenced') or db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()!=(inc,'available') or db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()!=('cancelled',None,None): raise ServiceError('confirmed stopped replacement required')
             attempts=db.execute("SELECT stage,version,status FROM graph_attempts WHERE run=? AND status NOT IN ('completed','failed','not_executed')",(run,)).fetchall()
             if len(attempts)!=1 or attempts[0][0]!='brief' or attempts[0][2]!='uncertain': raise ServiceError('uncertain brief required')
-            launches=db.execute("SELECT role,execution,status FROM execution_launch_audit WHERE run=? AND id IN (SELECT MAX(id) FROM execution_launch_audit WHERE run=? GROUP BY execution) AND status='uncertain'",(run,run)).fetchall()
-            binding=db.execute("SELECT session,unit FROM local_execution_scopes WHERE run=? AND role='source_review' AND execution=?",(run,execution)).fetchone()
-            if launches!=[('source_review',execution,'uncertain')] or not binding or not valid_terminated_scope(db,run,binding[1]) or db.execute('SELECT 1 FROM execution_link_audit WHERE run=? AND execution=?',(run,execution)).fetchone(): raise ServiceError('source review evidence unavailable')
+            launches=db.execute("SELECT role,execution FROM execution_launches WHERE run=? AND launch_status='uncertain'",(run,)).fetchall()
+            binding=db.execute("SELECT session,turn FROM execution_launches WHERE run=? AND role='source_review' AND execution=?",(run,execution)).fetchone()
+            if launches!=[('source_review',execution)] or not binding or not binding[0] or binding[1] is not None: raise ServiceError('source review evidence unavailable')
             tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             for table in ('tool_audit','execution_completions'):
                 if table in tables and db.execute(f'SELECT 1 FROM {table} WHERE run=? AND session=?',(run,binding[0])).fetchone(): raise ServiceError('source review outcome observed')
@@ -234,14 +224,11 @@ class Service:
             self.lifecycle.automatic_stop(run)
             return self.lifecycle.status(run)
         result=self.lifecycle.manual_stop(run)
-        if isinstance(self.lifecycle,ManualLifecycle) and self.docker_supervisor is not None:
-            rows=self.graph.db.execute("SELECT m.assignment,a.container_id,COALESCE(a.state,'unresolved') FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated') ORDER BY m.assignment",(run,)).fetchall()
-            result['docker_assignments']=[{'assignment':row[0],'container_id':row[1],'state':row[2]} for row in rows]
         if isinstance(self.lifecycle,ManualLifecycle):
             tables={row[0] for row in self.graph.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('local_scopes','engineering_workspaces','engineering_local_scopes')")}
             if 'local_scopes' in tables:
                 columns={row[1] for row in self.graph.db.execute('PRAGMA table_info(local_scopes)')}
-                if {'run','unit','invocation','cgroup','state'}<=columns:
+                if {'run','unit','state'}<=columns:
                     from runner.local_scope import unresolved_scope_rows
                     rows=unresolved_scope_rows(self.graph.db,run)
                     result['local_scopes']=[{'unit':row[0],'state':row[1]} for row in rows]
@@ -277,17 +264,7 @@ class Service:
         if self.lifecycle.status(run)['incarnation']!=self.lifecycle.incarnation: raise ServiceError('scope incarnation unavailable')
         scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
         try:
-            result=scopes.inspect(run,unit); result['execution']=None
-            db=self.graph.db
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_execution_scopes'").fetchone():
-                row=db.execute('SELECT execution,role,session FROM local_execution_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
-                if row:
-                    turns=db.execute("SELECT DISTINCT turn FROM execution_link_audit WHERE run=? AND role=? AND execution=? AND session=? AND status='observed' LIMIT 2",(run,row[1],row[0],row[2])).fetchall()
-                    if len(turns)>1: raise ServiceError('scope turn identity ambiguous')
-                    turn=turns[0][0] if turns else None
-                    completed=bool(turn and db.execute("SELECT 1 FROM execution_link_audit WHERE run=? AND role=? AND execution=? AND session=? AND turn=? AND status='completed'",(run,row[1],row[0],row[2],turn)).fetchone())
-                    result['execution']={'execution':row[0],'role':row[1],'session':row[2],'turn':turn,'completed':completed}
-            return result
+            return scopes.inspect(run,unit)
         finally: scopes.close()
     def _require_fenced_local(self,run):
         from runner.manual_lifecycle import ManualLifecycle
@@ -324,9 +301,7 @@ class Service:
         if self.model_supervisor is None: raise ServiceError('local manual supervisor unavailable')
         scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
         try:
-            fenced=(self.lifecycle.target['manual_target'],self.lifecycle.incarnation)
-            if scopes.state(run,unit)=='stopping':scopes.reconcile_witnessed_stop(run,unit,fenced)
-            else:scopes.reconcile_confirmed(run,unit,fenced)
+            scopes.reconcile(run,unit)
             return {'unit':unit,'state':'terminated'}
         finally:scopes.close()
     def _cancel(self,run,token=None,require_job=False,completed=False):
@@ -363,23 +338,23 @@ class Service:
         service=None
         try:
             service=Service(Path(self.state_db_path).parent,lifecycle=lifecycle)
-            service.model_supervisor=self.model_supervisor; service.docker_supervisor=self.docker_supervisor
+            service.model_supervisor=self.model_supervisor
             return service.request_lifecycle_stop(run)
         finally:
             lifecycle.close()
             if service is not None: service.close()
     def cancel(self,run,token): self._cancel(run,token=token)
-    def verify_terminal(self,run):
+    def _terminal_reason(self,run):
         try:
             row=self.graph.db.execute('SELECT workflow,status FROM graph_runs WHERE id=?',(run,)).fetchone()
-            if not row or row[1]!='active': return False
+            if not row or row[1]!='active': return 'run not active'
             terminal='assembly' if row[0]=='marketing' else 'post_ready'
             expected='awaiting_review' if row[0]=='marketing' else 'passed'
             state=self.graph.get(run,terminal)
-            if not state or state['status']!=expected: return False
-            if self.graph.db.execute("SELECT 1 FROM graph_attempts WHERE run=? AND status='uncertain' LIMIT 1",(run,)).fetchone(): return False
-            if self.graph.db.execute("SELECT 1 FROM external_actions WHERE run=? AND status IN ('approved','uncertain') LIMIT 1",(run,)).fetchone(): return False
-            if self.graph.db.execute('SELECT 1 FROM action_followups WHERE run=? LIMIT 1',(run,)).fetchone(): return False
+            if not state or state['status']!=expected: return 'terminal stage not ready'
+            if self.graph.db.execute("SELECT 1 FROM graph_attempts WHERE run=? AND status='uncertain' LIMIT 1",(run,)).fetchone(): return 'uncertain attempt recorded'
+            if self.graph.db.execute("SELECT 1 FROM external_actions WHERE run=? AND status IN ('approved','uncertain') LIMIT 1",(run,)).fetchone(): return 'external action unresolved'
+            if self.graph.db.execute('SELECT 1 FROM action_followups WHERE run=? LIMIT 1',(run,)).fetchone(): return 'action follow-up pending'
             if row[0]=='marketing':
                 configured=self.graph.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_input_versions'").fetchone()
                 admitted=configured and self.graph.db.execute('SELECT 1 FROM task_input_versions WHERE run=?',(run,)).fetchone()
@@ -390,49 +365,52 @@ class Service:
                     if dispatcher is None:
                         dispatcher=object.__new__(StageDispatcher); dispatcher.service=self
                     brief_state=self.graph.get(run,'brief')
-                    if not brief_state or brief_state['status']!='passed': return False
+                    if not brief_state or brief_state['status']!='passed': return 'brief stage not passed'
                     brief=json.loads(self.artifacts.get(brief_state['version']))
-                    if not isinstance(brief.get('outputs'),list) or len(brief['outputs'])!=2: return False
+                    if not isinstance(brief.get('outputs'),list) or len(brief['outputs'])!=2: return 'brief outputs invalid'
                     validate(self.artifacts,brief['outputs'][1],brief['_source_verification'])
                     assembly=json.loads(self.artifacts.get(state['version']))
                     for stage in ('brief','canonical_draft','canonical_review','freeze',*[item for channel in CHANNELS for item in (channel+'_draft',channel+'_review')],'asset_brief','asset_production'):
                         current=self.graph.get(run,stage); included=assembly['stages'].get(stage)
-                        if not current or not included or any(included.get(key)!=current[key] for key in ('status','version','revision')): return False
+                        if not current or not included or any(included.get(key)!=current[key] for key in ('status','version','revision')): return 'assembly stage record mismatch'
                     for review_stage in ('canonical_review',*[channel+'_review' for channel in CHANNELS]): dispatcher._verify_recorded_review(run,review_stage)
                     asset=self.graph.get(run,'asset_production')
                     asset_record=json.loads(self.artifacts.get(asset['version']))
                     from runner.openfilm_platform import verify_platform_block
-                    if not verify_platform_block(self,run,asset_record): return False
-                    if asset['status']=='passed' and 'manifest_ref' not in asset_record: return False
+                    if not verify_platform_block(self,run,asset_record): return 'platform block unverified'
+                    if asset['status']=='passed' and 'manifest_ref' not in asset_record: return 'asset manifest missing'
                     if 'manifest_ref' in asset_record:
                         from runner.openfilm_review import verify_evidence
-                        if asset_record.get('status')!=asset['status'] or not verify_evidence(self,run,asset_record): return False
+                        if asset_record.get('status')!=asset['status'] or not verify_evidence(self,run,asset_record): return 'asset evidence unverified'
             inspector=GraphRunner(self.graph,self.artifacts,lambda *_:None,lambda *_:False,skill_resolver=self.skill_resolver,required_skills=self.required_skills)
             for stage,version in self.graph.db.execute('SELECT stage,version FROM graph_stages WHERE run=?',(run,)):
                 record=inspector._validate_artifact_graph(version)
                 for ref in record.get('_verified_evidence',[]):
                     proof=json.loads(self.artifacts.get(ref))
                     role=proof.get('reviewer_role'); session=proof.get('reviewer_session'); skills=proof.get('skills')
-                    if proof.get('run')!=run or proof.get('stage')!=stage or proof.get('subject_hash')!=record.get('_subject_hash') or not isinstance(skills,dict): return False
-                    if set(skills)!=set(self.required_skills.get(role,[])): return False
+                    if proof.get('run')!=run or proof.get('stage')!=stage or proof.get('subject_hash')!=record.get('_subject_hash') or not isinstance(skills,dict): return 'review proof mismatch'
+                    if set(skills)!=set(self.required_skills.get(role,[])): return 'review skill set mismatch'
                     if skills:
-                        if not self.skill_resolver: return False
+                        if not self.skill_resolver: return 'skill resolver unavailable'
                         resolved=self.skill_resolver.resolve(list(skills))
-                        if {name:item['sha256'] for name,item in resolved.items()}!=skills: return False
-                    if not self.provenance.verify(run,role,session,skills) or not self.provenance.completed(run,role,session) or not self.provenance.subject_matches(run,role,session,record['_subject_hash']): return False
-                    if self.provenance.completion_hash(run,role,session)!=proof.get('review_output_ref'): return False
+                        if {name:item['sha256'] for name,item in resolved.items()}!=skills: return 'review skill hash mismatch'
+                    if not self.provenance.verify(run,role,session,skills) or not self.provenance.completed(run,role,session) or not self.provenance.subject_matches(run,role,session,record['_subject_hash']): return 'review provenance unverified'
+                    if self.provenance.completion_hash(run,role,session)!=proof.get('review_output_ref'): return 'review completion mismatch'
                     review=parse_marketing_result(self.artifacts.get(proof['review_output_ref']).decode('utf-8'),role)
-                    if review['status']!='passed' or record['_subject_hash'] not in review['input_versions']: return False
+                    if review['status']!='passed' or record['_subject_hash'] not in review['input_versions']: return 'review not passed for subject'
                 names=self.required_skills.get(stage,[])
-                if names and not self.skill_resolver: return False
+                if names and not self.skill_resolver: return 'skill resolver unavailable'
                 skills=self.skill_resolver.resolve(names) if names else {}
                 fingerprint=hashlib.sha256(json.dumps({name:item['sha256'] for name,item in skills.items()},sort_keys=True).encode()).hexdigest()
                 recorded=self.graph.db.execute('SELECT fingerprint FROM graph_skill_state WHERE run=? AND stage=?',(run,stage)).fetchone()
-                if (not recorded and names) or (recorded and recorded[0]!=fingerprint): return False
-            return True
-        except Exception: return False
+                if (not recorded and names) or (recorded and recorded[0]!=fingerprint): return 'skill fingerprint mismatch'
+            return None
+        except Exception as exc: return f'{type(exc).__name__}: {exc}'
+    def verify_terminal(self,run): return self._terminal_reason(run) is None
     def _complete_legacy_graph(self,db,run,job):
-        if job!=('completed',) or not self.verify_terminal(run) or not self._completion_approval(run,db):raise ServiceError('completed job evidence unavailable')
+        if job!=('completed',):raise ServiceError('completed job evidence unavailable')
+        if not self.verify_terminal(run):raise ServiceError(f"completed job evidence unavailable: {self._terminal_reason(run) or 'state changed'}")
+        if not self._completion_approval(run,db):raise ServiceError('completed job evidence unavailable: human approval not granted')
         claim=db.execute('SELECT task_id FROM graph_claims WHERE run=?',(run,)).fetchone()
         if claim and claim!=db.execute('SELECT task_id FROM graph_runs WHERE id=?',(run,)).fetchone():raise ServiceError('graph task changed')
         release=self._record_claim_release(db,run,claim[0]) if claim else None
@@ -442,7 +420,7 @@ class Service:
         if not self._completed_graph(db,run,release):raise ServiceError('graph completion evidence unavailable')
     def _require_completion_input(self,run):
         from runner.queue import QueueError
-        if not self.verify_terminal(run):raise QueueError('verified workflow completion required')
+        if not self.verify_terminal(run):raise QueueError(f"verified workflow completion required: {self._terminal_reason(run) or 'state changed'}")
         if self.graph._definition(run).name=='marketing':
             try: fresh=self.task_intake is not None and self.task_intake.revalidate(run) is True
             except Exception: fresh=False
@@ -493,20 +471,6 @@ class Service:
     def approve(self,run,action,version,actor):
         if action=='enable_lifecycle':
             if run!='controller' or self.lifecycle is None or version!=self.lifecycle.policy_hash: raise ServiceError('controller policy mismatch')
-        elif action=='docker_config':
-            if run!='controller' or self.docker_supervisor is None or self.docker_supervisor.config is None or version!=self.docker_supervisor.config.policy_hash: raise ServiceError('Docker policy mismatch')
-        elif action=='command_policy':
-            if run!='controller' or self.command_supervisor is None or not self.command_supervisor.policy_hash or version!=self.command_supervisor.policy_hash: raise ServiceError('command policy mismatch')
-        elif action=='openfilm_policy':
-            if run!='controller' or self.openfilm_backend is None or version!=self.openfilm_backend.policy_hash or self.openfilm_backend._policy()!=version: raise ServiceError('OpenFilm policy mismatch')
-        elif action=='openfilm_builder_policy':
-            builder=getattr(self.openfilm_backend,'builder',None)
-            if run!='controller' or builder is None or version!=getattr(builder,'policy_hash',None) or not callable(getattr(builder,'_policy',None)) or builder._policy()!=version: raise ServiceError('OpenFilm builder policy mismatch')
-        elif action=='audio_policy':
-            transcriber=self.audio_transcriber
-            if run!='controller' or transcriber is None or version!=transcriber.policy_hash or transcriber._current() is not True: raise ServiceError('audio policy mismatch')
-        elif action=='docker_kill':
-            if self.docker_supervisor is None or self.docker_supervisor.config is None or version!=self.docker_supervisor.escalation_version(run,self.docker_supervisor.config.policy_hash): raise ServiceError('Docker escalation mismatch')
         elif action=='freeze':
             review=self.graph.get(run,'canonical_review')
             if not review or review['status']!='passed' or review['version']!=version: raise ServiceError('review version unavailable or stale')
@@ -517,29 +481,26 @@ class Service:
             if prior and prior[0]=='executed' and setting and setting[0]==0:
                 self.actions.reauthorize_completed(run,action,version,actor); return
         self.actions.approve(run,action,version,actor)
-    def docker_escalate(self,assignment):
-        if self.docker_supervisor is None or self.docker_supervisor.config is None: raise ServiceError('Docker supervisor unavailable')
-        return self.docker_supervisor.escalate(assignment,self.actions,self.docker_supervisor.config.policy_hash)
     def enable_lifecycle_auto(self):
         if self.lifecycle is None or not callable(self.lifecycle_policy_verifier): raise ServiceError('tested lifecycle policy unavailable')
         version=self.lifecycle.policy_hash; scope='lifecycle-policy:'+self.lifecycle.target_hash
         try: self.actions.reserve_scoped('controller','enable_lifecycle',version,scope)
-        except ActionConflict: raise ServiceError('exact policy approval required') from None
+        except ActionConflict as exc: raise ServiceError('exact policy approval required') from exc
         try:
             self.lifecycle.enable_auto(approved_policy=version,verify_policy=self.lifecycle_policy_verifier)
-        except Exception:
+        except Exception as exc:
             self.actions.resolve_scoped('controller','enable_lifecycle',version,scope,'not_executed')
-            raise ServiceError('lifecycle policy test unavailable or failed') from None
+            raise ServiceError('lifecycle policy test unavailable or failed') from exc
         try: self.actions.resolve_scoped('controller','enable_lifecycle',version,scope,'executed')
-        except Exception:
+        except Exception as exc:
             self.lifecycle.disable_auto()
-            raise ServiceError('controller authorization outcome uncertain') from None
+            raise ServiceError('controller authorization outcome uncertain') from exc
     def restore_lifecycle_auto(self):
         if self.lifecycle is None or not callable(self.lifecycle_policy_verifier): raise ServiceError('tested lifecycle policy unavailable')
         row=self.actions.db.execute("SELECT status FROM external_actions WHERE run='controller' AND action='enable_lifecycle' AND version=?",(self.lifecycle.policy_hash,)).fetchone()
         if not row or row[0]!='executed': raise ServiceError('approved lifecycle policy unavailable')
         try: self.lifecycle.restore_auto(self.lifecycle_policy_verifier)
-        except Exception: raise ServiceError('lifecycle policy revalidation failed') from None
+        except Exception as exc: raise ServiceError('lifecycle policy revalidation failed') from exc
     def disable_lifecycle_auto(self):
         if self.lifecycle is None: raise ServiceError('lifecycle supervisor unavailable')
         self.lifecycle.disable_auto()
@@ -556,11 +517,11 @@ class Service:
                     skills=self.skill_resolver.resolve(names) if names else {}
                     hashes={name:skill['sha256'] for name,skill in skills.items()}
                     special_fingerprint=hashlib.sha256(json.dumps(hashes,sort_keys=True).encode()).hexdigest()
-                except Exception:
+                except Exception as exc:
                     if self.graph.get(run,stage):
                         snapshot=self.graph.prepare(run,stage,token)
                         self.graph.invalidate(run,stage,snapshot,token)
-                    raise ServiceError('required skills unavailable') from None
+                    raise ServiceError('required skills unavailable') from exc
                 GraphRunner(self.graph,self.artifacts,lambda *_:None,lambda *_:False,skill_resolver=self.skill_resolver,required_skills=self.required_skills)._verify_upstream_skills(run,stage,token)
             if workflow=='marketing' and stage=='asset_production':
                 snapshot=self.graph.prepare(run,stage,token)
@@ -575,18 +536,18 @@ class Service:
                     entry=self.graph.get(run,name)
                     if entry:
                         try: artifact=json.loads(self.artifacts.get(entry['version']))
-                        except Exception: raise ServiceError('review artifact unavailable') from None
+                        except Exception as exc: raise ServiceError('review artifact unavailable') from exc
                         contents=[]
                         try:
                             for output in artifact.get('outputs',[]): contents.append(self.artifacts.get(output).decode('utf-8'))
-                        except Exception: raise ServiceError('review content unavailable') from None
+                        except Exception as exc: raise ServiceError('review content unavailable') from exc
                         summary[name]={**entry,'artifact':artifact,'contents':contents}
                         if name=='asset_production':
                             from runner.openfilm_platform import verify_platform_block
                             if not verify_platform_block(self,run,artifact): raise ServiceError('platform block evidence unavailable')
                             if 'look_report_ref' in artifact:
                                 try: summary[name]['visual_report']=json.loads(self.artifacts.get(artifact['look_report_ref']))
-                                except Exception: raise ServiceError('visual report unavailable') from None
+                                except Exception as exc: raise ServiceError('visual report unavailable') from exc
                         if name=='asset_production' and 'manifest_ref' in artifact:
                             from runner.openfilm_review import verify_evidence
                             if entry['status']!=artifact.get('status') or not verify_evidence(self,run,artifact): raise ServiceError('asset review evidence unavailable')
@@ -595,7 +556,7 @@ class Service:
                             summary[name]['asset_report']=json.loads(self.artifacts.get(artifact['report_ref']))
                         if name=='brief' and artifact.get('_source_verification'):
                             try: summary[name]['source_verification']=json.loads(self.artifacts.get(artifact['_source_verification']))
-                            except Exception: raise ServiceError('source verification unavailable') from None
+                            except Exception as exc: raise ServiceError('source verification unavailable') from exc
                 ref=self.artifacts.put(json.dumps({'stages':summary},sort_keys=True).encode())
                 self.graph.finish(run,stage,snapshot,'awaiting_review',ref,token,skill_fingerprint=special_fingerprint)
                 return 'awaiting_review'
@@ -649,7 +610,7 @@ class Service:
                 try:
                     if names and not self.skill_resolver: raise ValueError('resolver unavailable')
                     if names: self.skill_resolver.resolve(names)
-                except Exception: raise ServiceError('required skills unavailable') from None
+                except Exception as exc: raise ServiceError('required skills unavailable') from exc
                 GraphRunner(self.graph,self.artifacts,lambda *_:None,lambda *_:False,skill_resolver=self.skill_resolver,required_skills=self.required_skills)._verify_upstream_skills(run,stage,token)
                 if evidence: raise ServiceError('freeze accepts no replacement content')
                 prior=self.graph.get(run,'canonical_review')
@@ -673,8 +634,8 @@ class Service:
                     result=GraphRunner(self.graph,self.artifacts,lambda name,i,_session: i['data'] if self.required_skills.get(name) else i,gate,skill_resolver=self.skill_resolver,required_skills=self.required_skills).execute(run,stage,token,frozen,required_dependencies={'canonical_review':prior['revision']})
                     self.actions.resolve(run,'freeze',version,'executed')
                     return result
-                except Exception: raise ServiceError('freeze outcome requires inspection') from None
+                except Exception as exc: raise ServiceError('freeze outcome requires inspection') from exc
             ref=GraphRunner(self.graph,self.artifacts,lambda name,i,_session: i['data'] if self.required_skills.get(name) else i,gate,skill_resolver=self.skill_resolver,required_skills=self.required_skills).execute(run,stage,token,evidence)
             outcome=self.graph.get(run,stage)['status']
             return ref if outcome=='passed' else outcome
-        except (GraphError,ActionConflict,ExecutionError) as exc: raise ServiceError(str(exc)) from None
+        except (GraphError,ActionConflict,ExecutionError) as exc: raise ServiceError(str(exc)) from exc

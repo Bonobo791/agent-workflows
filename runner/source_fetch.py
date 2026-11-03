@@ -22,7 +22,7 @@ def validate_content(content_type,data):
     if content_type=='application/json':
         def invalid(_): raise ValueError('invalid JSON constant')
         try: json.loads(text,parse_constant=invalid)
-        except (ValueError,RecursionError): raise ValueError('invalid JSON source') from None
+        except (ValueError,RecursionError): raise ValueError('invalid JSON source')
     return text
 
 class _PinnedHTTPS(http.client.HTTPSConnection):
@@ -68,7 +68,7 @@ class SourceFetcher:
             try:
                 parsed=urlsplit(url);host=parsed.hostname
                 if not 1<=len(url)<=4096 or any(ord(c)<32 or ord(c)==127 for c in url) or parsed.scheme!='https' or not host or parsed.username is not None or parsed.password is not None or parsed.port not in (None,443) or parsed.fragment: raise ValueError()
-            except ValueError: raise SourceFetchError('invalid approved source URL') from None
+            except ValueError: raise SourceFetchError('invalid approved source URL')
             if not isinstance(host,str) or len(host)>253 or host!=host.lower() or not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+',host): raise SourceFetchError('invalid source host')
             try: ipaddress.ip_address(host)
             except ValueError: hosts.add(host);continue
@@ -100,7 +100,7 @@ class SourceFetcher:
             validate_content(result['content_type'],content)
             if cancelled() or time.monotonic()>deadline: raise ValueError('source request expired')
             return result
-        except Exception: raise SourceFetchError('source retrieval failed, timed out or was cancelled') from None
+        except Exception: raise SourceFetchError('source retrieval failed, timed out or was cancelled')
         finally:
             if process is not None and process.poll() is None:
                 try: process.kill()
@@ -134,7 +134,7 @@ class SourceFetcher:
             if len(data)>self.max_bytes or not data: raise ValueError('source response size invalid')
             content=validate_content(content_type,data)
             return {'url':url,'content_type':content_type,'sha256':hashlib.sha256(data).hexdigest(),'content':content}
-        except (OSError,ValueError,TypeError,UnicodeError,http.client.HTTPException): raise SourceFetchError('source retrieval failed or was disallowed') from None
+        except (OSError,ValueError,TypeError,UnicodeError,http.client.HTTPException): raise SourceFetchError('source retrieval failed or was disallowed')
         finally:
             if connection is not None: connection.close()
 

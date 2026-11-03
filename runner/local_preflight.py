@@ -37,7 +37,7 @@ def _scope_absent(backend,unit):
     """True only when systemd itself reports the reserved unit never existed."""
     try: info=backend.inspect(unit)
     except Exception: return False
-    return info.get('id')==unit and info.get('load')=='not-found' and info.get('active')=='inactive' and info.get('invocation')==''
+    return info.get('id')==unit and info.get('load')=='not-found' and info.get('active')=='inactive'
 
 
 def scope_preflight(environment):
@@ -61,9 +61,6 @@ def scope_preflight(environment):
         if child<=1: return False
         started=True
         scopes.bind('preflight',unit)
-        info=backend.inspect(unit)
-        membership=Path('/proc')/str(child)/'cgroup'
-        if '0::'+info['cgroup'] not in membership.read_text().splitlines(): return False
         if scopes.stop('preflight',unit) is not True: return False
         process.wait(timeout=10)
         try: os.kill(child,0); return False

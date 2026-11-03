@@ -1,4 +1,5 @@
 """Graph stage selection for a claimed task; external actions remain gated."""
+from runner.trace import trace
 from runner.graph import GraphError
 
 class StageError(RuntimeError): pass
@@ -67,12 +68,16 @@ class StageDispatcher:
                     if not callable(supports) or supports(current['version']) is True: return 'asset_review'
                 if current['status'] in ('awaiting_review','awaiting_approval','rate_limited'): return current['status']
                 continue
+            if stage.endswith('_review'):
+                writer=graph.get(run,stage[:-len('_review')]+'_draft')
+                if writer and writer['status'] in ('blocked','failed'): continue
             try: graph.prepare(run,stage,claim)
             except GraphError: continue
             return stage
         return 'blocked' if any((graph.get(run,name) or {}).get('status') in ('blocked','failed') for name in definition.dependencies) else None
     def step(self,run,queue_claim,graph_claim):
         result=self._step(run,queue_claim,graph_claim)
+        trace('step', run=run, stage=result.get('stage'), status=result.get('status'), reason=result.get('reason'))
         if result.get('status')!='awaiting_approval' or result.get('stage') not in ('freeze','open_draft','triage','ready','post_ready'):
             self.service.graph.db.execute('DELETE FROM approval_waits WHERE run=?',(run,))
         return result
@@ -120,7 +125,7 @@ class StageDispatcher:
         try:
             record=json.loads(service.artifacts.get(review['version']))
             if review['status']!='blocked' or record.get('_blocked_reason')!='source coverage review unavailable or incomplete': raise ValueError()
-        except Exception: raise StageError('coverage retry unavailable') from None
+        except Exception as exc: raise StageError('coverage retry unavailable') from exc
         graph.invalidate(run,'canonical_review',graph.prepare(run,'canonical_review',graph_claim),graph_claim,reason='upstream_unavailable')
         return {'stage':'canonical_review','status':'invalidated'}
     def _verify_awaiting_draft(self,run,version,feedback=None):
@@ -199,7 +204,7 @@ class StageDispatcher:
                     bound_task=admitted
                     if not isinstance(inputs,list) or not inputs: raise ValueError('review inputs unavailable')
                     if inputs[1:3]!=[content,admitted]: legacy[name]=state['version']
-                except Exception: raise StageError('review migration evidence unavailable') from None
+                except Exception as exc: raise StageError('review migration evidence unavailable') from exc
             if legacy:
                 self.service.graph.invalidate_legacy_channel_reviews(run,graph_claim,queue_claim,legacy,freeze['version'],bound_task)
             draft=self.service.graph.get(run,'canonical_draft')
@@ -227,7 +232,7 @@ class StageDispatcher:
         if self.service.graph._definition(run).name=='engineering' and stage in ('implement','test','qa'):
             try:
                 from runner.engineering_workspace import EngineeringWorkspace
-                supervisor=self.service.model_supervisor or self.service.docker_supervisor
+                supervisor=self.service.model_supervisor
                 local=self.service.model_supervisor is not None
                 registry=EngineeringWorkspace(supervisor.engineering_root if local else supervisor.config.job_root.parent)
                 try:
@@ -253,7 +258,7 @@ class StageDispatcher:
             row=self.service.graph.db.execute('SELECT artifact_ref FROM task_input_versions WHERE run=?',(run,)).fetchone()
             if not row: raise StageError('admitted task unavailable')
             try: task=json.loads(self.service.artifacts.get(row[0]))
-            except Exception: raise StageError('admitted task artifact unavailable') from None
+            except Exception as exc: raise StageError('admitted task artifact unavailable') from exc
             self.service.complete(run,'intake',graph_claim,{'task':task,'today':datetime.date.today().isoformat()})
             return {'stage':'intake','status':self.service.graph.get(run,'intake')['status']}
         if stage=='freeze':
@@ -289,7 +294,7 @@ class StageDispatcher:
         from runner.structured import RESULT_INSTRUCTIONS
         from workflows.marketing.adapters import PROMPTS
         service=self.service
-        executor=service.model_executor or service.docker_executor
+        executor=service.model_executor
         if executor is None or service.model_policy is None or service.skill_resolver is None: return {'stage':stage,'status':'blocked','reason':'configured Codex runtime and skills required'}
         names=service.required_skills.get(stage)
         if not isinstance(names,list) or not names: return {'stage':stage,'status':'blocked','reason':'required role skills unavailable'}
@@ -321,9 +326,9 @@ class StageDispatcher:
                 if subject_stage=='brief':
                     from runner.source_register import validate
                     validate(service.artifacts,upstream['outputs'][1],upstream['_source_verification'])
-            except Exception: raise StageError('upstream artifact unavailable') from None
+            except Exception as exc: raise StageError('upstream artifact unavailable') from exc
         try: task=service.artifacts.get(task_ref).decode('utf-8')
-        except Exception: raise StageError('admitted task artifact unavailable') from None
+        except Exception as exc: raise StageError('admitted task artifact unavailable') from exc
         refs=[task_ref]
         artifacts={'subject':task}
         from workflows.marketing.gates import CHANNELS
@@ -344,7 +349,7 @@ class StageDispatcher:
                 refs.extend([register,proof])
                 snapshots=_source_snapshot_inputs(service,run,brief_record)
                 if snapshots: refs.append(snapshots[0]); artifacts['source_snapshots']=snapshots[1]
-            except Exception: raise StageError('verified channel source evidence unavailable') from None
+            except Exception as exc: raise StageError('verified channel source evidence unavailable') from exc
         if stage=='canonical_draft':
             try:
                 register=upstream['outputs'][1];proof=upstream['_source_verification']
@@ -353,7 +358,7 @@ class StageDispatcher:
                 refs.extend([register,proof])
                 snapshots=_source_snapshot_inputs(service,run,upstream)
                 if snapshots: refs.append(snapshots[0]);artifacts['source_snapshots']=snapshots[1]
-            except Exception: raise StageError('verified source evidence unavailable') from None
+            except Exception as exc: raise StageError('verified source evidence unavailable') from exc
         if stage.endswith('_review') and stage.removesuffix('_review') in CHANNELS:
             channel=stage.removesuffix('_review')
             asset_inputs=self._channel_asset_inputs(run,channel)
@@ -373,7 +378,7 @@ class StageDispatcher:
                 refs.extend([brief,register,proof])
                 snapshots=_source_snapshot_inputs(service,run,brief_record)
                 if snapshots: refs.append(snapshots[0]);artifacts['source_snapshots']=snapshots[1]
-            except Exception: raise StageError('brief and source register unavailable') from None
+            except Exception as exc: raise StageError('brief and source register unavailable') from exc
         page_rule_ref=None
         if stage=='canonical_review':
             try:
@@ -398,11 +403,11 @@ class StageDispatcher:
                 artifacts['social_drafts']=social_drafts
                 refs.extend([register,proof,row[0]])
                 refs.extend(item['ref'] for item in social_drafts.values())
-            except Exception: raise StageError('verified source register unavailable') from None
+            except Exception as exc: raise StageError('verified source register unavailable') from exc
         feedback=None
         if feedback_ref is not None:
             try: feedback=service.artifacts.get(feedback_ref).decode('utf-8')
-            except Exception: raise StageError('review correction unavailable') from None
+            except Exception as exc: raise StageError('review correction unavailable') from exc
             refs.append(feedback_ref)
             try:
                 feedback_record=json.loads(feedback)
@@ -421,7 +426,7 @@ class StageDispatcher:
                     artifacts['page_rules']=json.loads(policy)
                     refs.append(page_issue)
                     refs.append(policy_ref)
-            except Exception: raise StageError('source review feedback unavailable') from None
+            except Exception as exc: raise StageError('source review feedback unavailable') from exc
         try: model=service.model_policy.for_role(stage)['model']
         except Exception:
             self._discover_model(run,queue_claim,graph_claim)
@@ -456,16 +461,21 @@ class StageDispatcher:
             if review_stage: instructions=instructions.replace('passed, blocked, failed, or awaiting_review','passed or blocked')
             prompt=instructions+'\n'+json.dumps(payload,ensure_ascii=False)
             if name=='asset_brief':
-                prompt+='\nWrite result.txt as JSON with exactly these top-level keys: {"content_ref": input_versions[0], "social_drafts": {"linkedin": "draft artifact hash"}, "assets": [{"channel": "linkedin", "kind": "png", "width": 1200, "height": 627, "duration_seconds": null, "approved_text": ["short exact excerpt", "exact full channel draft"], "claim_ids": ["source register ID"], "media": [{"artifact_ref": "hash", "rights_ref": "hash"}], "captions": "", "alt_text": ""}]}. Each asset must contain exactly the listed keys; do not add fields. Replace the example values; channel is one of linkedin, x, facebook, instagram, or reddit; kind is png or mp4; duration_seconds is null for png or seconds for mp4. Bind every supplied social draft channel to its exact artifact ref, including channels without a requested visual. Include the exact full text for each channel in its matching asset approved_text for traceability, plus any short exact excerpt requested for display. The full draft is not a requirement to render every word: use the short requested excerpt and leave source notes, claim IDs and metadata off the visual. Use only requested asset channels and kinds from the admitted task, with one asset entry per requested file. An Instagram Reel uses the existing Instagram draft; there is no separate Reel draft stage. For multiple Instagram assets, bind each to the same exact Instagram draft. Use the supplied source_verification and any source_snapshots as upstream evidence; do not request a duplicate evidence artifact when a verified proof is present. Use alt_text to describe the requested visual treatment; assets for different channels must have distinct compositions even when their approved text is the same. Every final visual and social deliverable must be composed through OpenFilm. Keep text readable with clear spacing, high contrast and safe margins. Use empty media when no supplied rights-cleared media is needed. Video captions and alt text are required. Do not invent artifact references.'
+                prompt+='\nWrite result.txt as JSON with exactly these top-level keys: {"content_ref": input_versions[0], "social_drafts": {"linkedin": "draft artifact hash"}, "assets": [{"channel": "linkedin", "kind": "png", "width": 1200, "height": 627, "duration_seconds": null, "approved_text": [], "claim_ids": ["source register ID"], "media": [{"artifact_ref": "hash", "rights_ref": "hash"}], "captions": "", "alt_text": ""}]}. Each asset must contain exactly the listed keys; do not add fields. Replace the example values; channel is one of linkedin, x, facebook, instagram, or reddit; kind is png or mp4; duration_seconds is null for png or seconds for mp4. The pipeline sets content_ref and social_drafts; do not write them. The pipeline sets approved_text and attaches the stored draft of each channel; leave approved_text empty. Leave source notes, claim IDs and metadata off the visual. Use only requested asset channels and kinds from the admitted task, with one asset entry per requested file. An Instagram Reel uses the existing Instagram draft; there is no separate Reel draft stage. For multiple Instagram assets, bind each to the same exact Instagram draft. Use the supplied source_verification and any source_snapshots as upstream evidence; do not request a duplicate evidence artifact when a verified proof is present. Use alt_text to describe the requested visual treatment; assets for different channels must have distinct compositions even when their approved text is the same. Every final visual and social deliverable must be composed through OpenFilm. Keep text readable with clear spacing, high contrast and safe margins. Use empty media when no supplied rights-cleared media is needed. Video captions and alt text are required. Do not invent artifact references.'
                 prompt+='\nPreserve explicit placement and no-overlap constraints from the task in alt_text. No shape, border, ring, arc or animation may touch, cross or sit behind text.'
+            trace('stage.call', run=run, stage=name, refs=refs, skills=sorted(hashes), prompt_chars=len(prompt), review=review_stage, session=session)
             args=dict(run=run,role=name,claim=graph_claim,skills=hashes,prompt=prompt,model=model,input_versions=refs,output_paths=['result.txt','sources.json'] if name=='brief' else ['result.txt'],cancelled=lambda:not active())
             if service.model_executor is not None: args['instruction_length']=len(instructions)
             if review_stage:
                 args['prompt']+='\nReview subject: '+task_ref
                 result=executor.review(subject=task_ref,**args)
             else: result=executor.execute(session_id=session,**args)
-            parsed=parse_marketing_result(result['output'],name)
-            if parsed['input_versions']!=refs or parsed['outputs']!=result['outputs'] or not parsed['outputs']: raise StageError('stage output or input binding invalid')
+            try: parsed=parse_marketing_result(result['output'],name)
+            except Exception as exc:
+                trace('stage.unparsed', run=run, stage=name, error=f'{type(exc).__name__}: {exc}', head=str(result.get('output',''))[:300])
+                raise
+            trace('stage.parsed', run=run, stage=name, status=parsed['status'], reason=parsed.get('reason'), inputs_match=parsed['input_versions']==refs, outputs=parsed['outputs'], executor_outputs=result['outputs'], outputs_match=parsed['outputs']==result['outputs'])
+            if parsed['input_versions']!=refs or parsed['outputs']!=result['outputs'] or not parsed['outputs']: raise StageError(f"stage output or input binding invalid (inputs {parsed['input_versions']!r} vs {refs!r}; outputs {parsed['outputs']!r} vs {result['outputs']!r})"[:600])
             parsed['session_id']=result['session_id']
             if review_stage: parsed['_review_evidence']=result.get('evidence_ref')
             if name=='canonical_review' and page_rule_ref: parsed['_page_rules']=page_rule_ref
@@ -490,7 +500,12 @@ class StageDispatcher:
                     current_social_drafts=social_draft_inputs(service,run)
                     if not current_social_drafts: raise ValueError('social drafts unavailable')
                     brief=json.loads(data)
-                    if 'social_drafts' not in brief: raise ValueError('OpenFilm social copy binding missing')
+                    brief['content_ref']=task_ref
+                    heading=next((line.strip() for line in service.artifacts.get(task_ref).decode('utf-8').splitlines() if line.startswith('# ')),None)
+                    for asset in brief['assets'] if isinstance(brief.get('assets'),list) else []:
+                        if isinstance(asset,dict) and heading: asset['approved_text']=[heading]
+                    brief['social_drafts']={channel:item['ref'] for channel,item in current_social_drafts.items()}
+                    result['outputs']=[service.artifacts.put(json.dumps(brief,sort_keys=True,separators=(',',':')).encode())]
                     validate_brief(service.artifacts,brief,task_ref,register,current_social_drafts)
                 except Exception:
                     result['_blocked_reason']='asset brief invalid, stale or incomplete'
@@ -560,7 +575,7 @@ class StageDispatcher:
                 except Exception:
                     result['_blocked_reason']='current community rules and relevance unverified'
                     return 'blocked'
-            return True if result.get('status')=='passed' else 'blocked' if result.get('status') in ('blocked','failed') else 'awaiting_review' if result.get('status')=='awaiting_review' else False
+            return True if result.get('status')=='passed' else 'blocked' if result.get('status') in ('blocked','failed') else ('awaiting_review' if name=='canonical_draft' else 'blocked') if result.get('status')=='awaiting_review' else False
         runner=GraphRunner(service.graph,service.artifacts,specialist,gate,skill_resolver=service.skill_resolver,required_skills=service.required_skills)
         try:
             ref=runner.execute(run,stage,graph_claim,{'task_ref':task_ref,'feedback_ref':feedback_ref,'reddit_context_ref':reddit_context['ref'] if reddit_context else None,'page_rules_ref':page_rule_ref},correction_id=correction_id)
@@ -580,7 +595,7 @@ class StageDispatcher:
         service=self.service
         service.graph._lease(run,graph_claim)
         if not service.queue.may_start(run,queue_claim): raise StageError('queue claim unavailable')
-        supervisor=service.model_supervisor or service.docker_supervisor
+        supervisor=service.model_supervisor
         if supervisor is None or supervisor.preflight() is not True: raise StageError('credential delivery or runtime approval unavailable')
         handle=None; completed=False; starting=False; selected=ModelPolicy()
         deadline=time.monotonic()+120
@@ -594,12 +609,12 @@ class StageDispatcher:
             completed=_bounded(handle.finish,deadline,cancelled) is True
             if not completed: raise StageError('model discovery termination unverified')
             service.model_policy._model=selected.for_role('model_discovery')['model']
-        except Exception:
+        except Exception as exc:
             if handle is not None and not completed:
                 try: handle.cancel()
                 except Exception: pass
             if starting and not completed: service.fence_execution(run)
-            raise StageError('model discovery unavailable or outcome requires inspection') from None
+            raise StageError('model discovery unavailable or outcome requires inspection') from exc
 
     def _correct_canonical(self,run,queue_claim,graph_claim):
         import json
@@ -628,7 +643,7 @@ class StageDispatcher:
                 task=json.loads(service.artifacts.get(task_row[0])); policy=service.artifacts.get(policy_ref)
                 if issue!={'subject_ref':subject,'policy_ref':policy_ref,'reason':'required Markdown headings missing or out of order'} or policy!=policy_bytes(service.page_rules,task['format']) or check_page(service.artifacts.get(subject).decode('utf-8'),json.loads(policy)): raise ValueError('page structure evidence changed')
             if not editorial and not source_issue and not page_issue: raise ValueError('no bound finding')
-        except Exception: raise StageError('verified correction evidence unavailable') from None
+        except Exception as exc: raise StageError('verified correction evidence unavailable') from exc
         correction=self._reserve_correction(run,'canonical_draft','canonical_review',graph_claim)
         return self._model_stage(run,'canonical_draft',queue_claim,graph_claim,feedback_ref=review['version'],correction_id=correction)
 
@@ -652,8 +667,6 @@ class StageDispatcher:
             if not row: raise StageError('correction unavailable')
             writer=graph.get(run,row[1]); review=graph.get(run,row[3])
             if not writer or writer['version']!=row[2] or not review or review['version']!=row[4]: raise StageError('correction evidence changed')
-            docker=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone()
-            if docker and db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated' OR e.run IS NULL)",(run,)).fetchone(): raise StageError('worker outcome unresolved')
             local=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone()
             from runner.local_scope import unresolved_scope_rows
             if local and unresolved_scope_rows(db,run): raise StageError('local worker outcome unresolved')
@@ -746,7 +759,7 @@ class StageDispatcher:
             for output in parsed['outputs']: service.artifacts.get(output)
             if not parsed['outputs'] or any(finding['evidence'] not in parsed['input_versions'] for finding in parsed['findings']): raise ValueError('review evidence missing')
             return True
-        except Exception: raise StageError('verified review evidence unavailable') from None
+        except Exception as exc: raise StageError('verified review evidence unavailable') from exc
 
     def _channel_asset_inputs(self,run,channel):
         import json
@@ -773,4 +786,4 @@ class StageDispatcher:
             if not assets: return None
             return {'refs':[state['version'],record['manifest_ref'],manifest['brief_ref'],record['report_ref'],*refs],
                     'review':{'status':record['status'],'manifest_ref':record['manifest_ref'],'brief_ref':manifest['brief_ref'],'social_draft_ref':draft,'assets':assets,'coverage':record.get('review_coverage')}}
-        except Exception: raise StageError(f'verified {channel} media unavailable') from None
+        except Exception as exc: raise StageError(f'verified {channel} media unavailable') from exc
