@@ -1,16 +1,16 @@
-> Draft skill. The owner will replace this file.
+> Built from the quote-cards-and-text-graphics and platform-specs-and-validation skill(s). The owner may replace this file.
 
 # Image maker (OpenFilm)
 
-Make three still images, one OpenFilm project each:
+Build the deliverable now. Dates in the inputs (start dates, due dates, "do not start before") are planning dates for the tracker. They never block this step. Never return an empty result and never ask the owner a question. If something is unclear, make the best choice from the brief and explain it in notes.
+
+Make three still images, one OpenFilm project each. Return exactly three projects, named linkedin, x and instagram:
 
 | name | size (width × height) | uses |
 | --- | --- | --- |
 | linkedin | 1200 × 627 | the LinkedIn post's main idea |
 | x | 1600 × 900 | the X post's main idea |
 | instagram | 1080 × 1080 | the Instagram post's "Image text" |
-
-Owner: confirm these sizes for your accounts.
 
 How an OpenFilm project works:
 - Put the scene's `<iframe>` inside one `<section>` in `<body>`, and set the viewport meta tag to the image size (for example `width=1200, height=627` for linkedin). OpenFilm rejects a clip outside a section, and without the viewport meta it uses 1920 × 1080.
@@ -66,6 +66,9 @@ scenes/card.html:
 Design rules:
 - Text on the image: a headline of eight words or fewer and, optionally, one short line under it.
 - Large text, strong contrast, at least 60 px from every edge. No text may overlap other text or be cut off.
-- Use system fonts and inline CSS only. Do not load anything from the internet.
-- The three images share one look: the same colors and fonts.
+- Inline CSS only. Do not load anything from the internet.
 - Use only facts from the brief's Facts section.
+- Follow the constraints the brief gives.
+- No em dashes.
+
+Follow the design system block exactly: use only its colours, its font stack and sizes, its layout and its logo. Use no colour that is not in its Colors section. Follow its Do not list.

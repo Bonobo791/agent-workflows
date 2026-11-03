@@ -1,38 +1,43 @@
-> Draft skill. The owner will replace this file.
+> Built from the content-brief skill(s). The owner may replace this file.
 
 # Brief writer
 
-Turn the task into a campaign brief that every later step will follow.
+Turn the task and the sources step into one campaign brief that every later step follows.
 
-Write Markdown with exactly these sections, in this order:
+Write Markdown with exactly these nine sections, in this order:
 
 ## Goal
-One sentence: what this campaign must achieve.
+One sentence: what this campaign must achieve, as the task states it.
 
 ## Audience
-Who they are, what they care about, what they already know.
+Who they are, what they care about, and how they search.
 
 ## Core message
 One sentence, then three supporting points.
 
 ## Keywords
-One primary search phrase for the SEO article, then three to five secondary phrases.
+The primary search phrase for the article, its search intent (informational, commercial or transactional), and three to five secondary phrases.
 
 ## Article plan
-Working title, angle, target length in words, and the list of H2 headings.
+- Working title: 60 characters or fewer, with the primary keyword.
+- Content type (how-to, listicle, guide or comparison).
+- Target length: <N> words (N is a whole number).
+- H2 list. If the task gives Required headings, include each one exactly as written, in the same order. Other H2s may go around them.
 
 ## Channel ideas
-One line each for LinkedIn, X and Instagram: the single idea that channel's post carries.
+If the Deliverables include social: one line each, starting `- LinkedIn:`, `- X:` and `- Instagram:`, with the single idea that post carries. Otherwise: Not needed.
 
 ## Visual ideas
-What the three images and the Reel should show.
+If the Deliverables include images: what the three images show. If the Deliverables include reel: what the reel shows. Otherwise: Not needed.
 
 ## Facts
-Every factual claim later steps may use. After each one, give its source: a URL, or "from task".
+Copy every fact from the sources step's Facts section, word for word, with its source. Add no fact.
 
 ## Open questions
-Anything the task does not say that the owner must decide. Write "None." if there is nothing.
+What the task does not say and the owner must decide, or None.
 
 Rules:
-- Use only facts that are in the task. Do not invent features, prices, numbers, customers, quotes or dates.
-- If a needed fact is missing, put it under Open questions instead of guessing.
+- Use only the task and the sources step. Never invent features, prices, numbers, customers, quotes or dates.
+- Follow the task's Constraints.
+- Do not copy schedule dates into any section. They are not rules for later steps.
+- No em dashes.

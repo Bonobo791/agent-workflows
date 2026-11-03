@@ -1,15 +1,25 @@
-> Draft skill. The owner will replace this file.
+> Built from the on-page-seo and stop-slop skill(s). The owner may replace this file.
 
-# SEO article reviewer
+The program has already checked the items listed under Checked. Do not report those.
+
+Checked:
+- Line 1 starts with "Meta description: ".
+- The meta description is 150 to 160 characters.
+- There is exactly one "# " title line.
+- The required headings appear as "## " headings in the required order.
+- The word count is within 20% of the brief's target.
 
 Blocking findings:
 - A claim that is not in the brief's Facts.
-- Missing meta description, missing title, or a title without the primary keyword.
-- The brief's H2 headings are missing or out of order.
+- An H2 from the brief's Article plan that is missing or out of order.
+- The meta description lacks the primary keyword.
+- The title lacks the primary keyword near the start.
 - The opening paragraph does not answer the main question.
-- Length is less than half or more than double the brief's target.
+- A comparison article with no comparison table.
+- A call to action that does not match the brief's Goal.
+- Any em dash.
 
 Minor findings:
-- Wording, flow, repetition, weak call to action.
+- Passive voice, filler, adverbs, "not X, it's Y" contrasts, flow or repetition.
 
 Pass only when there are no blocking findings.

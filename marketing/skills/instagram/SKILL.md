@@ -1,20 +1,22 @@
-> Draft skill. The owner will replace this file.
+> Built from the caption-writer and hashtag-strategy skill(s). The owner may replace this file.
 
 # Instagram post writer
 
-Write the caption for one Instagram feed post that carries the brief's Instagram idea.
+Write the caption, hashtags and image text for one Instagram feed post that carries the brief's Channel idea for Instagram.
 
-Write Markdown with these sections:
+Write Markdown with exactly these three sections, in this order:
 
 ## Caption
-- The first line is a hook.
-- Short lines, friendly tone.
-- End with a call to action: "Link in bio".
+- The primary keyword appears in the first sentence.
+- The last line is exactly: Link in bio
 
 ## Hashtags
-Five to ten relevant hashtags on one line.
+Three to five hashtags on one line.
 
 ## Image text
 The headline that will appear on the image: eight words or fewer.
 
-Use only facts from the brief's Facts section.
+Rules:
+- Use only facts from the brief's Facts section. Never invent a fact.
+- Follow the constraints the brief gives.
+- No em dashes.

@@ -3,3 +3,18 @@ __pycache__/
 .env
 .env.*
 campaigns/
+
+# agent harness directories
+.agents/
+.claude/
+.codex/
+.devin/
+.grok/
+.hermes/
+.junie/
+.kiro/
+.openhands/
+.qwen/
+.trae/
+.vibe/
+.windsurf/
