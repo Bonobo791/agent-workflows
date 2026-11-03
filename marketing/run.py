@@ -359,8 +359,8 @@ def check_sources(output, task, brief, searches=()):
 def target_words(brief):
     found = TARGET_RE.findall(sections(brief).get('Article plan', ''))
     if len(found) != 1:
-        raise WorkflowError('brief has no "- Target length: <N> words" line; rewrite the brief' if not found
-                            else 'brief has more than one "- Target length: <N> words" line')
+        raise WorkflowError('brief has no "- Target length: 2000 words" line; rewrite the brief' if not found
+                            else 'brief has more than one "- Target length: 2000 words" line')
     return int(found[0])
 
 
@@ -368,7 +368,7 @@ def check_brief(output, task, brief):
     errors = missing_sections(output, BRIEF_SECTIONS)
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts_of(output) if not has_source(fact)]
     if len(TARGET_RE.findall(sections(output).get('Article plan', ''))) != 1:
-        errors.append('Article plan needs exactly one line "- Target length: <N> words"')
+        errors.append('Article plan needs one line like "- Target length: 2000 words" with a whole number.')
     channel = sections(output).get('Channel ideas', '')
     if 'social' in parse_deliverables(task):
         for prefix in ('- LinkedIn:', '- X:', '- Instagram:'):

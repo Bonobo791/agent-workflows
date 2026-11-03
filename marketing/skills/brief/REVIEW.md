@@ -5,7 +5,7 @@ The program has already checked the items listed under Checked. Do not report th
 Checked:
 - The nine brief sections exist and are not empty.
 - Every fact under Facts has a URL or ends with "(from task)".
-- The Article plan has exactly one "- Target length: <N> words" line.
+- The Article plan has exactly one "- Target length: 2000 words" line, with a whole number.
 - Channel ideas has the three channel lines when Deliverables include social, or "Not needed." when they do not.
 
 Check the brief against the task and the sources step.

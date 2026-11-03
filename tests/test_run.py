@@ -532,8 +532,8 @@ class LibraryTest(unittest.TestCase):
 
 class LengthTest(unittest.TestCase):
     def test_brief_needs_one_target_length(self):
-        self.assertTrue(any('exactly one' in e for e in run.check_brief(full_brief('- Content type: guide.'), task_text(), None)))
-        self.assertTrue(any('exactly one' in e for e in run.check_brief(full_brief('- Target length: 800 words\n- Target length: 900 words'), task_text(), None)))
+        self.assertTrue(any('needs one line' in e for e in run.check_brief(full_brief('- Content type: guide.'), task_text(), None)))
+        self.assertTrue(any('needs one line' in e for e in run.check_brief(full_brief('- Target length: 800 words\n- Target length: 900 words'), task_text(), None)))
         self.assertEqual(run.check_brief(full_brief('- Target length: 800 words'), task_text(), None), [])
 
     def test_article_meta_description_length(self):

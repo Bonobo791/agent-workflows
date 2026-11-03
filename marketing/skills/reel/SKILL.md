@@ -32,7 +32,7 @@ How to build it:
 ```
 
 - Nothing else goes in `<body>` except `<section>` tracks.
-- `film.html` lists the scenes in order. Each `<iframe>` has `src="scenes/<file>.html#t=0,<length>"` and `at="<start second>"`. Each scene starts when the one before it ends. Every iframe is `left: 0px; top: 0px; width: 1080px; height: 1920px`.
+- `film.html` lists the scenes in order. Each `<iframe>` has `src="scenes/export.html#t=0,6"`, where `export.html` is the scene file and `6` is its length in seconds, and `at="3"`, where `3` is the second it starts. The first scene has `at="0"`. Each scene starts when the one before it ends. Every iframe is `left: 0px; top: 0px; width: 1080px; height: 1920px`.
 - Each scene sets `window.film = { frame(t) {...}, duration, width: 1080, height: 1920 }`.
 - Every scene must move: text slides or fades in. A video that never changes is not allowed.
 - On-screen text must be large and readable without sound. Keep it at least 120 px from the top and bottom edges and 60 px from the sides.
