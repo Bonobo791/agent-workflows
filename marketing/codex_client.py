@@ -44,13 +44,19 @@ class CodexClient:
 
     def _stop(self):
         self.proc.terminate()
-        self.proc.wait(timeout=10)
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
 
     def close(self):
-        if self.proc is not None:
-            self._stop()
-        if hasattr(self.stderr, 'close'):
-            self.stderr.close()
+        try:
+            if self.proc is not None:
+                self._stop()
+        finally:
+            if hasattr(self.stderr, 'close'):
+                self.stderr.close()
 
     def __enter__(self):
         return self

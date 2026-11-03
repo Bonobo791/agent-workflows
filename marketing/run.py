@@ -554,7 +554,10 @@ def run_tool(args, cwd):
     if shutil.which(args[0]) is None:
         raise WorkflowError(f'{args[0]} is not on PATH')
     env = {**os.environ, 'OPENFILM_NO_BROWSER': '1', 'OPENFILM_NO_UPDATE_CHECK': '1'}
-    proc = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True, timeout=900)
+    try:
+        proc = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        raise WorkflowError(f"{' '.join(args)} did not finish within 900 s in {cwd}") from None
     if proc.returncode != 0:
         raise WorkflowError(f"{' '.join(args)} failed in {cwd} (exit {proc.returncode}):\n"
                             f"stdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}")

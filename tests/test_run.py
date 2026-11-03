@@ -1,9 +1,11 @@
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'marketing'))
 import run  # noqa: E402
@@ -370,7 +372,45 @@ class DesignSystemTest(unittest.TestCase):
         self.assertLess(prompt.index('--- BEGIN design-system ---'), prompt.index('--- BEGIN 02-brief#Core message ---'))
 
 
+class StopTest(unittest.TestCase):
+    def test_stop_kills_a_server_that_ignores_terminate(self):
+        import codex_client
+
+        class FakeProc:
+            def __init__(self):
+                self.waits, self.killed = 0, False
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                self.waits += 1
+                if self.waits == 1:
+                    raise subprocess.TimeoutExpired('codex', timeout)
+
+            def kill(self):
+                self.killed = True
+
+        class FakeStream:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        client = codex_client.CodexClient.__new__(codex_client.CodexClient)  # no real server
+        client.proc, client.stderr = FakeProc(), FakeStream()
+        client.close()
+        self.assertTrue(client.proc.killed)
+        self.assertTrue(client.stderr.closed)
+
+
 class OpenFilmTest(unittest.TestCase):
+    def test_run_tool_timeout_is_a_workflow_error(self):
+        with mock.patch.object(run.subprocess, 'run', side_effect=subprocess.TimeoutExpired('ffmpeg', 900)):
+            with self.assertRaises(run.WorkflowError) as caught:
+                run.run_tool([sys.executable, '-c', 'pass'], Path(tempfile.mkdtemp()))
+        self.assertIn('did not finish within 900 s', str(caught.exception))
+
     def test_write_project_marks_it_opened(self):
         project = Path(tempfile.mkdtemp()) / 'p'
         run.write_project(project, [{'path': 'film.html', 'content': '<html></html>'}])
