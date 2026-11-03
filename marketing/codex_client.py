@@ -1,6 +1,12 @@
 """Drive the real `codex app-server` over stdio for one-shot marketing stages."""
 import json
+import re
 import subprocess
+
+# Features that only add tools. A lean client turns them off for its own process.
+LEAN_DISABLED_FEATURES = ['apps', 'plugins', 'browser_use', 'browser_use_external', 'computer_use',
+                          'image_generation', 'in_app_browser', 'tool_suggest', 'skill_search', 'shell_tool']
+PLAIN_NAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')  # the only MCP server names `-c` can turn off
 
 
 class CodexError(RuntimeError):
@@ -8,21 +14,37 @@ class CodexError(RuntimeError):
 
 
 class CodexClient:
-    def __init__(self, codex='codex', stderr_path=None):
+    def __init__(self, codex='codex', stderr_path=None, lean=False):
         # stdout carries only JSON-RPC; stderr (MCP and tool logs) goes to a file, never the terminal.
+        self.codex = codex
         self.stderr = open(stderr_path, 'w') if stderr_path else subprocess.DEVNULL
-        self.proc = subprocess.Popen([codex, 'app-server', '--listen', 'stdio://'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True, bufsize=1)
+        self.proc = None
         self.next_id = 0
+        self.loaded = set()  # thread ids this process has started or resumed
         try:
-            self._request('initialize', {'clientInfo': {'name': 'agent_workflows', 'title': 'Agent Workflows', 'version': '0.1.0'}})
-            self._send({'method': 'initialized'})
+            self._start([])
+            if lean:
+                extra_args = self._lean_args()
+                self._stop()
+                self._start(extra_args)
         except BaseException:
             self.close()  # the context manager is never entered when the constructor raises
             raise
 
-    def close(self):
+    def _start(self, extra_args):
+        self.proc = subprocess.Popen([self.codex, 'app-server', '--listen', 'stdio://', *extra_args],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True, bufsize=1)
+        self.next_id = 0
+        self._request('initialize', {'clientInfo': {'name': 'agent_workflows', 'title': 'Agent Workflows', 'version': '0.1.0'}})
+        self._send({'method': 'initialized'})
+
+    def _stop(self):
         self.proc.terminate()
         self.proc.wait(timeout=10)
+
+    def close(self):
+        if self.proc is not None:
+            self._stop()
         if hasattr(self.stderr, 'close'):
             self.stderr.close()
 
@@ -60,6 +82,21 @@ class CodexClient:
                     raise CodexError(f"{method} failed: {message['error']}")
                 return message['result']
 
+    def enabled_mcp_servers(self):
+        config = self._request('config/read', {})['config']
+        return [name for name, settings in (config.get('mcp_servers') or {}).items() if settings.get('enabled') is not False]
+
+    def _lean_args(self):
+        args = []
+        for name in self.enabled_mcp_servers():
+            if not PLAIN_NAME_RE.match(name):
+                raise CodexError(f'MCP server {name!r} cannot be turned off for one run; rename it in ~/.codex/config.toml '
+                                 'to use only letters, digits, "-" and "_"')
+            args += ['-c', f'mcp_servers.{name}.enabled=false']
+        for feature in LEAN_DISABLED_FEATURES:
+            args += ['--disable', feature]
+        return args
+
     def models(self):
         """Map each model name to the reasoning efforts it supports."""
         models, cursor = {}, None
@@ -71,11 +108,16 @@ class CodexClient:
             if cursor is None:
                 return models
 
-    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=(), web_search='disabled'):
-        thread = self._request('thread/start', {'model': model, 'cwd': cwd, 'ephemeral': True, 'sandbox': 'read-only', 'approvalPolicy': 'never',
-                                                'config': {'web_search': web_search}})
-        thread_id = thread['thread']['id']
-        content = [{'type': 'text', 'text': prompt}] + [{'type': 'image', 'url': url} for url in images]
+    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=(), web_search='disabled', thread_id=None, persist=False):
+        config = {'web_search': web_search}
+        if thread_id is None:
+            thread = self._request('thread/start', {'model': model, 'cwd': cwd, 'ephemeral': not persist, 'sandbox': 'read-only', 'approvalPolicy': 'never', 'config': config})
+            thread_id = thread['thread']['id']
+            self.loaded.add(thread_id)
+        elif thread_id not in self.loaded:
+            self._request('thread/resume', {'threadId': thread_id, 'cwd': cwd, 'sandbox': 'read-only', 'approvalPolicy': 'never', 'config': config, 'excludeTurns': True})
+            self.loaded.add(thread_id)
+        content = [{'type': 'text', 'text': prompt}] + [{'type': 'localImage', 'path': str(path)} for path in images]
         params = {'threadId': thread_id, 'input': content, 'model': model, 'effort': effort, 'cwd': cwd, 'approvalPolicy': 'never'}
         if output_schema is not None:
             params['outputSchema'] = output_schema

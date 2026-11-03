@@ -13,9 +13,12 @@ ROLES = {
     'creator': {'model': 'r', 'effort': 'high'},
 }
 TEXT_STEPS = [
-    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None, 'inputs': ['00-task']},
-    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None, 'inputs': ['00-task', '01-brief']},
-    {'id': '03-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'x', 'inputs': ['01-brief', '02-article']},
+    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None,
+     'inputs': ['00-task'], 'review_inputs': ['00-task']},
+    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None,
+     'inputs': ['00-task', '01-brief'], 'review_inputs': ['00-task', '01-brief']},
+    {'id': '03-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'x',
+     'inputs': ['01-brief', '02-article'], 'review_inputs': ['01-brief', '02-article']},
 ]
 USAGE = {'inputTokens': 100, 'cachedInputTokens': 40, 'outputTokens': 10, 'reasoningOutputTokens': 5, 'totalTokens': 110}
 MODELS = {'w': ['max'], 'r': ['medium', 'high']}
@@ -47,15 +50,17 @@ class FakeClient:
         self.prompts = []
         self.calls = []
         self.web_searches = []
+        self.thread_params = []  # the thread_id each call was sent with (None means a new thread)
 
     def models(self):
         return self.models_available
 
-    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=(), web_search='disabled'):
+    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=(), web_search='disabled', thread_id=None, persist=False):
         self.prompts.append(prompt)
         self.calls.append((model, effort))
         self.web_searches.append(web_search)
-        thread_id = f'thread-{len(self.prompts)}'
+        self.thread_params.append(thread_id)
+        thread_id = thread_id or f'thread-{len(self.prompts)}'
         if output_schema is run.REVIEW_SCHEMA:
             verdict = self.verdicts.pop(0)
             findings = [] if verdict == 'pass' else [{'severity': 'blocking', 'issue': 'too short', 'fix': 'make it longer'}]
@@ -125,13 +130,45 @@ class RunTest(unittest.TestCase):
         self.go(client, answers('r', 'add the price', 'a', 'a'))
         self.assertIn('add the price', client.prompts[2])
 
+    def test_reviewer_revise_continues_the_writer_thread(self):
+        client = FakeClient(['revise', 'pass', 'pass'])
+        self.go(client, answers('a', 'a'))
+        self.assertEqual(client.thread_params[2], 'thread-1')  # the rewrite continues the first writer thread
+        self.assertIsNone(client.thread_params[1])  # reviewers always start a new thread
+        self.assertIn('too short', client.prompts[2])
+        self.assertNotIn('Ledgerly', client.prompts[2])  # the revision does not resend the task
+
+    def test_owner_notes_reach_the_writer_thread(self):
+        client = FakeClient(['pass', 'pass', 'pass'])
+        self.go(client, answers('r', 'add the price', 'a', 'a'))
+        self.assertIn('add the price', client.prompts[2])
+        self.assertEqual(client.thread_params[2], 'thread-1')
+
+    def test_reject_after_resume_uses_the_saved_thread(self):
+        with self.assertRaises(SystemExit):
+            self.go(FakeClient(['pass']), answers('q'))
+        client = FakeClient(['pass', 'pass'])
+        self.go(client, answers('r', 'shorter', 'a', 'a'))
+        self.assertEqual(client.thread_params[0], 'thread-1')
+        self.assertIn('shorter', client.prompts[0])
+
+    def test_prompts_put_inputs_before_the_skill(self):
+        client = FakeClient(['pass', 'pass'])
+        self.go(client, answers('a', 'a'))
+        prompt = client.prompts[0]
+        self.assertLess(prompt.index('--- BEGIN 00-task ---'), prompt.index('write brief'))
+
+    def test_usage_counts_each_thread_once(self):
+        self.go(FakeClient(['revise', 'pass', 'pass']), answers('a', 'a'))
+        self.assertEqual(run.usage_totals(self.campaign / '01-brief')['inputTokens'], 300)
+
     def test_quit_then_resume_goes_straight_to_decision(self):
         with self.assertRaises(SystemExit):
             self.go(FakeClient(['pass']), answers('q'))
         client = FakeClient(['pass'])
         self.go(client, answers('a', 'a'))
         self.assertEqual(len(client.prompts), 2)
-        self.assertTrue(client.prompts[0].startswith('write seo-article'))
+        self.assertIn('write seo-article', client.prompts[0])
 
     def test_missing_skill_stops_before_any_codex_call(self):
         (self.skills / 'seo-article' / 'REVIEW.md').unlink()
@@ -255,6 +292,16 @@ class ImportTest(unittest.TestCase):
         with self.assertRaises(run.WorkflowError):
             run.import_issue(client, self.campaign, 'MC-32', skills_dir=self.tmp / 'skills', roles=ROLES)
         self.assertFalse((self.campaign / '00-task.md').exists())
+
+
+class ReadInputTest(unittest.TestCase):
+    def test_outline_drops_the_body(self):
+        campaign = Path(tempfile.mkdtemp()) / 'campaign'
+        step_dir = campaign / '03-article'
+        step_dir.mkdir(parents=True)
+        (step_dir / 'APPROVED').write_text('done\n')
+        (step_dir / 'output.md').write_text('Meta description: A guide.\n\n# Title\n\n## One\nBody text.\n\n## Two\nMore body.\n')
+        self.assertEqual(run.read_input(campaign, '03-article#outline'), 'Meta description: A guide.\n# Title\n## One\n## Two')
 
 
 class SkillFilesTest(unittest.TestCase):
