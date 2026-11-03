@@ -1,14 +1,16 @@
-> Draft skill. The owner will replace this file.
+> Built from the linkedin-post-writer and hook-writer skill(s). The owner may replace this file.
 
-# LinkedIn post reviewer
+Section names and counts are checked by the program before you see this.
 
 Blocking findings:
-- A claim that is not in the brief's Facts.
-- No hook in the first line, or no call to action.
-- The post does not carry the brief's LinkedIn idea.
-- More than three hashtags.
+- A claim that is not in the brief's Facts, or a claim that contradicts the brief.
+- A hook that does not open a real gap, or that promises more than the post delivers.
+- The post does not carry the brief's Channel idea for LinkedIn.
+- A closing question the reader cannot answer from their own work, or no question.
+- Engagement bait, one-line-per-paragraph drama, or an invented personal story.
+- Any em dash.
 
 Minor findings:
-- Tone, length, wording.
+- Paragraph length, whitespace, wording.
 
 Pass only when there are no blocking findings.

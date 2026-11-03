@@ -1,16 +1,19 @@
-> Draft skill. The owner will replace this file.
+> Built from the content-brief skill (searchfit-seo). The owner may replace this file.
 
-# Brief reviewer
+Section names and counts are checked by the program before you see this.
 
-Check the brief against the task.
+Check the brief against the task and the sources step.
 
 Blocking findings:
-- A section from the brief format is missing or empty.
-- A fact under Facts is not in the task and has no URL source.
-- The brief contradicts the task.
-- The goal or core message is unclear or is more than one sentence.
+- Facts that differ from the sources step's Facts, or that are missing or added.
+- A fact the sources step did not confirm.
+- A working title over 60 characters, or without the primary keyword.
+- Required headings from the task that are missing, reworded or out of order.
+- Channel ideas or Visual ideas filled in when the Deliverables leave them out, or "Not needed." where they are needed.
+- A Goal, Audience or Core message that contradicts the task.
+- Any em dash.
 
 Minor findings:
-- Wording, order or keyword choices that could be better.
+- Keyword choice, wording or order that could be better.
 
 Pass only when there are no blocking findings.

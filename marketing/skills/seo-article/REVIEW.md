@@ -1,15 +1,18 @@
-> Draft skill. The owner will replace this file.
+> Built from the on-page-seo and stop-slop skill(s). The owner may replace this file.
 
-# SEO article reviewer
+Section names and counts are checked by the program before you see this.
 
 Blocking findings:
-- A claim that is not in the brief's Facts.
-- Missing meta description, missing title, or a title without the primary keyword.
-- The brief's H2 headings are missing or out of order.
+- A fact that is not in the brief's Facts, or a used fact that has a URL but no source link.
+- The meta description is not 150 to 160 characters, or it lacks the primary keyword.
+- The title lacks the primary keyword near the start.
 - The opening paragraph does not answer the main question.
-- Length is less than half or more than double the brief's target.
+- The length is more than 20% above or below the brief's target length.
+- A comparison article with no comparison table.
+- A call to action that does not match the brief's Goal.
+- Any em dash.
 
 Minor findings:
-- Wording, flow, repetition, weak call to action.
+- Passive voice, filler, adverbs, "not X, it's Y" contrasts, flow or repetition.
 
 Pass only when there are no blocking findings.

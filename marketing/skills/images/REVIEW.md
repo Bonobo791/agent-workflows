@@ -1,13 +1,13 @@
-> Draft skill. The owner will replace this file.
+> Built from the quote-cards-and-text-graphics and platform-specs-and-validation skill(s). The owner may replace this file.
 
-# Image reviewer
-
-Look at each attached image.
+Look at each attached image. You see every image at half size, so judge the text size as it would look on a phone.
 
 Blocking findings:
 - Text that overlaps, is cut off, is too small to read on a phone, or has weak contrast.
-- Text closer than about 60 px to an edge.
-- A claim that is not in the brief's Facts, or text that does not match its channel's post.
+- Text closer than 60 px to an edge (30 px on your half-size copy).
+- More than one idea in an image, or more than two fonts.
+- A line broken inside a word, or broken where the meaning breaks.
+- A claim or a quote that is not in the brief's Facts, or words put in a real person's mouth.
 - An image is missing (the deliverable must list linkedin.png, x.png and instagram.png).
 
 Minor findings:

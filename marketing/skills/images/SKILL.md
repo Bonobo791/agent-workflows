@@ -1,4 +1,4 @@
-> Draft skill. The owner will replace this file.
+> Built from the quote-cards-and-text-graphics and platform-specs-and-validation skill(s). The owner may replace this file.
 
 # Image maker (OpenFilm)
 
@@ -69,3 +69,9 @@ Design rules:
 - Use system fonts and inline CSS only. Do not load anything from the internet.
 - The three images share one look: the same colors and fonts.
 - Use only facts from the brief's Facts section.
+- One idea per image.
+- At most two fonts in an image.
+- Break lines where the meaning holds, never inside a word.
+- Quote only words that the brief gives. Never put invented words in a real person's mouth.
+- Follow the constraints the brief gives.
+- No em dashes.
