@@ -119,11 +119,34 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(client.prompts), 6)
         self.assertIn('too short', client.prompts[2])
 
-    def test_second_revise_goes_to_owner(self):
-        client = FakeClient(['revise', 'revise', 'pass'])
+    def test_third_revise_goes_to_owner(self):
+        client = FakeClient(['revise', 'revise', 'revise', 'pass'])
         self.go(client, answers('a', 'a'))
-        self.assertEqual(len(client.prompts), 6)
+        self.assertEqual(len(client.prompts), 8)
         self.assertTrue((self.campaign / '01-brief' / 'APPROVED').is_file())
+
+    def test_two_revises_then_pass(self):
+        client = FakeClient(['revise', 'revise', 'pass', 'pass'])
+        self.go(client, answers('a', 'a'))
+        self.assertEqual(len(client.prompts), 8)
+        self.assertIsNone(client.thread_params[0])  # call 1 starts a new writer thread
+        self.assertEqual(client.thread_params[2], 'thread-1')  # call 3 continues it
+        self.assertEqual(client.thread_params[4], 'thread-1')  # call 5 continues it too
+
+    def test_owner_reject_resets_the_loop(self):
+        client = FakeClient(['pass', 'revise', 'revise', 'revise', 'pass'])
+        self.go(client, answers('r', 'shorter', 'a', 'a'))
+        self.assertEqual(len(client.prompts), 10)
+
+    def test_failed_checks_count_as_a_round(self):
+        (self.campaign / '00-task.md').write_text(task_text('article, social'))
+        texts = ['brief', 'article', 'a' * 300, 'a' * 300, 'a' * 300]
+        client = FakeClient(['pass', 'pass'], writer_outputs=[json.dumps({'output': text, 'notes': ''}) for text in texts])
+        self.go(client, answers('a', 'a', 'a'))
+        self.assertEqual(len(client.prompts), 7)  # three X writer calls; the reviewer is never called for X
+        self.assertIn('write x', client.prompts[4])
+        self.assertIn('the limit is 280', client.prompts[5])
+        self.assertIn('the limit is 280', client.prompts[6])
 
     def test_owner_notes_reach_the_writer(self):
         client = FakeClient(['pass', 'pass', 'pass'])

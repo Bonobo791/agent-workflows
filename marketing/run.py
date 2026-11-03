@@ -30,7 +30,7 @@ ROLES = {
     'reviewer': {'model': 'gpt-6-sol', 'effort': 'medium'},
     'creator': {'model': 'gpt-6-sol', 'effort': 'high'},
 }
-MAX_AUTO_REVISIONS = 1
+MAX_AUTO_REVISIONS = 2
 MAX_REVIEW_FRAMES = 10
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
@@ -655,7 +655,7 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
             archive(step_dir)
             if review['verdict'] == 'revise' and auto_left > 0:
                 auto_left -= 1
-                log.info('[%s] reviewer said revise: one automatic rewrite follows', step['id'])
+                log.info('[%s] reviewer said revise; automatic rewrite %d of %d', step['id'], MAX_AUTO_REVISIONS - auto_left, MAX_AUTO_REVISIONS)
                 revision = (review, '')
                 review = None
                 continue
