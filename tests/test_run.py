@@ -13,9 +13,9 @@ ROLES = {
     'creator': {'model': 'r', 'effort': 'high'},
 }
 TEXT_STEPS = [
-    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'inputs': ['00-task']},
-    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'inputs': ['00-task', '01-brief']},
-    {'id': '03-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'inputs': ['01-brief', '02-article']},
+    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None, 'inputs': ['00-task']},
+    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None, 'inputs': ['00-task', '01-brief']},
+    {'id': '03-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'x', 'inputs': ['01-brief', '02-article']},
 ]
 USAGE = {'inputTokens': 100, 'cachedInputTokens': 40, 'outputTokens': 10, 'reasoningOutputTokens': 5, 'totalTokens': 110}
 MODELS = {'w': ['max'], 'r': ['medium', 'high']}
@@ -39,9 +39,10 @@ def task_text(deliverables='article', without=None):
 class FakeClient:
     """Stands in for CodexClient. `verdicts` is the reviewer's answers, in order."""
 
-    def __init__(self, verdicts, writer_text=None, models=MODELS):
+    def __init__(self, verdicts, writer_text=None, models=MODELS, writer_outputs=()):
         self.verdicts = list(verdicts)
         self.writer_text = writer_text
+        self.writer_outputs = list(writer_outputs)  # JSON texts for the writer's calls, in order
         self.models_available = models
         self.prompts = []
         self.calls = []
@@ -59,6 +60,8 @@ class FakeClient:
             verdict = self.verdicts.pop(0)
             findings = [] if verdict == 'pass' else [{'severity': 'blocking', 'issue': 'too short', 'fix': 'make it longer'}]
             text = json.dumps({'verdict': verdict, 'summary': 'Checked.', 'findings': findings})
+        elif self.writer_outputs:
+            text = self.writer_outputs.pop(0)
         elif self.writer_text is not None:
             text = self.writer_text
         else:
@@ -165,6 +168,14 @@ class RunTest(unittest.TestCase):
             self.go(client, answers())
         self.assertEqual(client.calls, [])
 
+    def test_failed_checks_skip_the_reviewer(self):
+        (self.campaign / '00-task.md').write_text(task_text('article, social'))
+        texts = ['brief', 'article', 'a' * 300, 'Export invoices in one click. [ARTICLE LINK]']
+        client = FakeClient(['pass', 'pass', 'pass'], writer_outputs=[json.dumps({'output': text, 'notes': ''}) for text in texts])
+        self.go(client, answers('a', 'a', 'a'))
+        self.assertEqual(len(client.prompts), 7)  # the X draft that fails the checks gets no reviewer call
+        self.assertIn('the limit is 280', client.prompts[5])
+
     def test_safe_write_refuses_paths_outside_project(self):
         with self.assertRaises(run.WorkflowError):
             run.safe_write(self.tmp / 'p', '../escape.html', 'x')
@@ -188,6 +199,41 @@ class TaskFormatTest(unittest.TestCase):
     def test_select_steps_keeps_order(self):
         ids = [step['id'] for step in run.select_steps(task_text('social, article'), run.STEPS)]
         self.assertEqual(ids, ['01-sources', '02-brief', '03-article', '04-linkedin', '05-x', '06-instagram'])
+
+
+class ChecksTest(unittest.TestCase):
+    def test_x_counts_the_link_as_23_characters(self):
+        self.assertTrue(run.check_x('a' * 260 + ' ' + run.LINK, ''))
+        self.assertEqual(run.check_x('a' * 250 + ' ' + run.LINK, ''), [])
+
+    def test_x_thread_needs_the_link_in_the_last_post(self):
+        self.assertTrue(run.check_x('1/ First post ' + run.LINK + '\n2/ Second post', ''))
+        self.assertEqual(run.check_x('1/ First post\n2/ Second post ' + run.LINK, ''), [])
+
+    def test_instagram_image_text_word_limit(self):
+        def instagram(words):
+            return f'## Caption\nHook. Link in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\n{words}\n'
+        self.assertEqual(run.check_instagram(instagram('one two three four five six seven eight'), ''), [])
+        self.assertTrue(run.check_instagram(instagram('one two three four five six seven eight nine'), ''))
+
+    def test_linkedin_link_goes_in_first_comment(self):
+        bad = '## Post\nHook line.\n\nBody with a link ' + run.LINK + ' #a #b #c\n\n## First comment\n' + run.LINK + '\n'
+        good = '## Post\nHook line.\n\nBody text. #a #b #c\n\n## First comment\nRead the guide: ' + run.LINK + '\n'
+        self.assertTrue(run.check_linkedin(bad, ''))
+        self.assertEqual(run.check_linkedin(good, ''), [])
+
+    def test_article_required_headings_in_order(self):
+        task = task_text().replace('## Required headings\nNone.', '## Required headings\n- Pricing\n- Setup')
+        good = 'Meta description: A guide.\n\n# Export guide\n\n## Pricing\nText.\n\n## Setup\nText.\n'
+        bad = 'Meta description: A guide.\n\n# Export guide\n\n## Setup\nText.\n\n## Pricing\nText.\n'
+        self.assertEqual(run.check_article(good, task), [])
+        self.assertTrue(run.check_article(bad, task))
+
+    def test_sources_facts_need_a_source(self):
+        bad = '## Facts\n- Ledgerly exports CSV files\n\n## Not found\nNone.\n'
+        good = '## Facts\n- Ledgerly exports CSV files https://example.com/export (checked 2026-11-03)\n- Plans start in December (from task)\n\n## Not found\nNone.\n'
+        self.assertTrue(run.check_sources(bad, ''))
+        self.assertEqual(run.check_sources(good, ''), [])
 
 
 class ImportTest(unittest.TestCase):

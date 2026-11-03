@@ -30,19 +30,25 @@ MAX_AUTO_REVISIONS = 1
 MAX_REVIEW_FRAMES = 10
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
+URL_RE = re.compile(r'https?://\S+')
+HASHTAG_RE = re.compile(r'(?<!\w)#\w+')
+X_POST_START_RE = re.compile(r'^\d+/', re.MULTILINE)
+LINK = '[ARTICLE LINK]'
+X_LINK_LENGTH = 23
+BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Open questions']
 USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 DELIVERABLES = ['article', 'social', 'images', 'reel']
 TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints']
 
 STEPS = [
-    {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'inputs': ['00-task']},
-    {'id': '02-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'inputs': ['00-task', '01-sources']},
-    {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'inputs': ['00-task', '02-brief']},
-    {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'inputs': ['02-brief', '03-article']},
-    {'id': '05-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'inputs': ['02-brief', '03-article']},
-    {'id': '06-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'inputs': ['02-brief', '03-article']},
-    {'id': '07-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'deliverable': 'images', 'web': False, 'inputs': ['02-brief', '04-linkedin', '05-x', '06-instagram']},
-    {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'inputs': ['02-brief', '03-article', '06-instagram']},
+    {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources', 'inputs': ['00-task']},
+    {'id': '02-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'brief', 'inputs': ['00-task', '01-sources']},
+    {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'article', 'inputs': ['00-task', '02-brief']},
+    {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'linkedin', 'inputs': ['02-brief', '03-article']},
+    {'id': '05-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'x', 'inputs': ['02-brief', '03-article']},
+    {'id': '06-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'instagram', 'inputs': ['02-brief', '03-article']},
+    {'id': '07-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'deliverable': 'images', 'web': False, 'check': None, 'inputs': ['02-brief', '04-linkedin', '05-x', '06-instagram']},
+    {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'check': None, 'inputs': ['02-brief', '03-article', '06-instagram']},
 ]
 
 
@@ -213,6 +219,102 @@ def campaign_steps(campaign, steps=STEPS):
     if errors:
         raise WorkflowError('; '.join(errors))
     return select_steps(task, steps)
+
+
+def has_source(fact):
+    return bool(URL_RE.search(fact)) or fact.endswith('(from task)')
+
+
+def facts_of(md):
+    return bullets(sections(md).get('Facts', ''))
+
+
+def x_posts(output):
+    starts = [match.start() for match in X_POST_START_RE.finditer(output)]
+    if not starts:
+        return [output.strip()]
+    ends = starts[1:] + [len(output)]
+    return [output[start:end].strip() for start, end in zip(starts, ends)]
+
+
+def check_sources(output, task):
+    errors = missing_sections(output, ['Facts', 'Not found'])
+    facts = facts_of(output)
+    if not facts:
+        errors.append('the Facts section needs at least one "- " line')
+    errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts if not has_source(fact)]
+    return errors
+
+
+def check_brief(output, task):
+    errors = missing_sections(output, BRIEF_SECTIONS)
+    errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts_of(output) if not has_source(fact)]
+    return errors
+
+
+def check_article(output, task):
+    errors = []
+    lines = output.splitlines()
+    if not (lines and lines[0].startswith('Meta description: ')):
+        errors.append('the first line must start with "Meta description: "')
+    titles = [line for line in lines if line.startswith('# ')]
+    if len(titles) != 1:
+        errors.append(f'the article must have exactly one "# " title line; it has {len(titles)}')
+    required = required_headings(task)
+    h2s = [line[3:].strip() for line in lines if line.startswith('## ')]
+    if [heading for heading in h2s if heading in required] != required:
+        errors.append(f'the required headings must appear as "## " headings in this order: {", ".join(required)}')
+    return errors
+
+
+def check_linkedin(output, task):
+    errors = missing_sections(output, ['Post', 'First comment'])
+    found = sections(output)
+    post, comment = found.get('Post', ''), found.get('First comment', '')
+    if LINK in post or URL_RE.search(post):
+        errors.append(f'the Post must not contain a link; put {LINK} in the First comment')
+    if LINK not in comment:
+        errors.append(f'the First comment must contain {LINK}')
+    hashtags = len(HASHTAG_RE.findall(post))
+    if not 3 <= hashtags <= 5:
+        errors.append(f'the Post has {hashtags} hashtags; the limit is 3 to 5')
+    return errors
+
+
+def check_x(output, task):
+    errors = []
+    posts = x_posts(output)
+    if len(posts) > 5:
+        errors.append(f'the thread has {len(posts)} posts; the limit is 5')
+    for number, post in enumerate(posts, 1):
+        length = len(post.replace(LINK, 'x' * X_LINK_LENGTH))
+        if length > 280:
+            errors.append(f'post {number} is {length} characters (the link counts as {X_LINK_LENGTH}); the limit is 280')
+    links = output.count(LINK)
+    if links != 1 or LINK not in posts[-1]:
+        errors.append(f'{LINK} must appear exactly once, in the last post (it appears {links} times)')
+    hashtags = len(HASHTAG_RE.findall(output))
+    if hashtags > 2:
+        errors.append(f'the thread has {hashtags} hashtags; the limit is 2')
+    return errors
+
+
+def check_instagram(output, task):
+    errors = missing_sections(output, ['Caption', 'Hashtags', 'Image text'])
+    found = sections(output)
+    if 'Link in bio' not in found.get('Caption', ''):
+        errors.append('the Caption must end with "Link in bio"')
+    hashtags = len(HASHTAG_RE.findall(found.get('Hashtags', '')))
+    if not 3 <= hashtags <= 5:
+        errors.append(f'the Hashtags section has {hashtags} hashtags; the limit is 3 to 5')
+    words = len(found.get('Image text', '').split())
+    if words > 8:
+        errors.append(f'the Image text has {words} words; the limit is 8')
+    return errors
+
+
+CHECKS = {'sources': check_sources, 'brief': check_brief, 'article': check_article,
+          'linkedin': check_linkedin, 'x': check_x, 'instagram': check_instagram}
 
 
 def read_input(campaign, input_id):
@@ -396,11 +498,19 @@ def write(client, roles, skills_dir, campaign, step, step_dir, previous, review,
 
 
 def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
-    print(f"[{step['id']}] reviewer working...")
-    prompt = review_prompt(skills_dir, campaign, step, step_dir)
-    review = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images, web=step['web'])
-    if any(finding['severity'] == 'blocking' for finding in review['findings']):
-        review['verdict'] = 'revise'
+    errors = []
+    if step['check'] is not None:
+        errors = CHECKS[step['check']]((step_dir / 'output.md').read_text(), (campaign / '00-task.md').read_text())
+    if errors:
+        print(f"[{step['id']}] automatic checks failed; skipping the reviewer")
+        review = {'verdict': 'revise', 'summary': 'Automatic checks failed, so the reviewer was not called.',
+                  'findings': [{'severity': 'blocking', 'issue': error, 'fix': 'Fix exactly this.'} for error in errors]}
+    else:
+        print(f"[{step['id']}] reviewer working...")
+        prompt = review_prompt(skills_dir, campaign, step, step_dir)
+        review = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images, web=step['web'])
+        if any(finding['severity'] == 'blocking' for finding in review['findings']):
+            review['verdict'] = 'revise'
     (step_dir / 'review.json').write_text(json.dumps(review, indent=2, ensure_ascii=False))
     (step_dir / 'review.md').write_text(review_markdown(review))
     return review
