@@ -1,4 +1,4 @@
-> Condensed from accessibility-review (~/.claude/plugins/synced/096c9c2b-7353-4f23-b177-fe5c0250d92d_5e3a594a-b229-492e-acbe-9806d864f76a/afe29730-8d0c-470c-801a-a52a510c0510/skills/accessibility-review/SKILL.md, copied 2026-11-03). The owner may replace this file.
+> Condensed from design:accessibility-review, copied 2026-11-03. The owner may replace this file.
 
 # Accessibility craft for images and video
 

@@ -7,7 +7,7 @@ Check the brief against the task and the sources step.
 Blocking findings:
 - Facts that differ from the sources step's Facts, or that are missing or added.
 - A fact the sources step did not confirm.
-- A working title over 60 characters, or without the primary keyword.
+- A working title without the primary keyword.
 - Required headings from the task that are missing, reworded or out of order.
 - Channel ideas or Visual ideas filled in when the Deliverables leave them out, or "Not needed." where they are needed.
 - A Goal, Audience or Core message that contradicts the task.

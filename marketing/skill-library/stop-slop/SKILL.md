@@ -1,4 +1,4 @@
-> Condensed from stop-slop (~/.claude/skills/synced/096c9c2b-7353-4f23-b177-fe5c0250d92d_5e3a594a-b229-492e-acbe-9806d864f76a/stop-slop/SKILL.md, copied 2026-11-03). The owner may replace this file.
+> Condensed from anthropic-skills:stop-slop, copied 2026-11-03. The owner may replace this file.
 
 # Stop slop: write plain prose
 

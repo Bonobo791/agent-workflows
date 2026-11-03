@@ -1,4 +1,4 @@
-> Condensed from instagram-seo (~/.claude/plugins/synced/096c9c2b-7353-4f23-b177-fe5c0250d92d_5e3a594a-b229-492e-acbe-9806d864f76a/eda94773-d1e0-45d9-a7c9-874c3180538e/skills/instagram-seo/SKILL.md, copied 2026-11-03). The owner may replace this file.
+> Condensed from social-media-skills:instagram-seo, copied 2026-11-03. The owner may replace this file.
 
 # Instagram search craft: keywords, not hashtags
 

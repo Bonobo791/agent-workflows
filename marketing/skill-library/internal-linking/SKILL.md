@@ -1,4 +1,4 @@
-> Condensed from internal-linking (~/.claude/plugins/synced/096c9c2b-7353-4f23-b177-fe5c0250d92d_5e3a594a-b229-492e-acbe-9806d864f76a/searchfit-seo/skills/internal-linking/SKILL.md, copied 2026-11-03). The owner may replace this file.
+> Condensed from searchfit-seo:internal-linking, copied 2026-11-03. The owner may replace this file.
 
 # Internal linking craft
 

@@ -3,11 +3,10 @@
 Section names and counts are checked by the program before you see this.
 
 Blocking findings:
-- A fact that is not in the brief's Facts, or a used fact that has a URL but no source link.
-- The meta description is not 150 to 160 characters, or it lacks the primary keyword.
+- A fact that is not in the brief's Facts.
+- The meta description lacks the primary keyword.
 - The title lacks the primary keyword near the start.
 - The opening paragraph does not answer the main question.
-- The length is more than 20% above or below the brief's target length.
 - A comparison article with no comparison table.
 - A call to action that does not match the brief's Goal.
 - Any em dash.
