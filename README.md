@@ -89,6 +89,7 @@ Before any step runs, the program checks that each model and effort is in your C
 ```
 campaigns/<name>/00-task.md
 campaigns/<name>/import.json, codex-stderr.log       (only with --issue)
+campaigns/<name>/run.log                             every step, Codex call and decision (also printed in the terminal)
 campaigns/<name>/01-sources/output.md, review.md, APPROVED, usage.jsonl, writer-thread.txt, history/
 campaigns/<name>/02-brief/...
 ...
@@ -96,6 +97,8 @@ campaigns/<name>/final/index.md
 ```
 
 Each step folder has `usage.jsonl` (the tokens of each Codex call) and `writer-thread.txt` (the writer's Codex thread, which a revision continues). `status` adds the tokens up.
+
+To follow a run from another terminal, run `tail -f campaigns/<name>/run.log`.
 
 Campaigns made before the sources step was added use the old folder numbers and cannot be resumed. Start them again.
 

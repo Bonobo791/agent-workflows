@@ -5,16 +5,21 @@ Every step: a Codex writer, Python checks, then a fresh Codex reviewer, then the
 """
 import argparse
 import json
+import logging
 import re
 import shutil
 import subprocess
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from codex_client import CodexClient, CodexError  # noqa: E402
+
+log = logging.getLogger('marketing')
 
 REPO = HERE.parent
 SKILLS_DIR = HERE / 'skills'
@@ -105,6 +110,27 @@ def now():
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
+@contextmanager
+def campaign_log(campaign, console=True):
+    """Log lines go to campaign/run.log, and to the terminal too when console is true. A stop is logged, then re-raised."""
+    handlers = [logging.FileHandler(campaign / 'run.log', encoding='utf-8')]
+    if console:
+        handlers.append(logging.StreamHandler())
+    for handler in handlers:
+        handler.setFormatter(logging.Formatter('%(asctime)s %(message)s', '%H:%M:%S'))
+        log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    try:
+        yield
+    except BaseException as error:
+        log.error('stopped: %s', error)
+        raise
+    finally:
+        for handler in handlers:
+            log.removeHandler(handler)
+            handler.close()
+
+
 def record_usage(folder, what, role, result):
     for key in USAGE_KEYS:
         if key not in result['usage']:
@@ -156,6 +182,7 @@ def check_models(client, roles, steps):
             raise WorkflowError(f"{name} model {model} is not in the Codex model list; available: {', '.join(sorted(available))}")
         if effort not in available[model]:
             raise WorkflowError(f"{name} effort {effort} is not supported by {model}; supported: {', '.join(available[model])}")
+    log.info('models checked: %s', ', '.join(f"{name} {roles[name]['model']} {roles[name]['effort']}" for name in sorted({step['role'] for step in steps})))
 
 
 def sections(md):
@@ -404,13 +431,19 @@ def parse_json(text, path, what):
 
 
 def call_codex(client, role, prompt, cwd, schema, save_path, what, images=(), web=False, thread_id=None, persist=False):
+    log.info('%s: asking %s (effort %s, web search %s, %s, prompt %d characters, %d images)', what, role['model'], role['effort'],
+             'on' if web else 'off', f'continuing thread {thread_id}' if thread_id else 'new thread', len(prompt), len(images))
+    started = time.monotonic()
     try:
         result = client.run_turn(prompt, role['model'], role['effort'], str(cwd), output_schema=schema,
                                  images=images, web_search='live' if web else 'disabled',
                                  thread_id=thread_id, persist=persist)
     except CodexError as error:
+        log.error('%s: failed: %s', what, error)
         raise WorkflowError(f'{what} failed: {error}') from None
     record_usage(cwd, what, role, result)
+    log.info('%s: answered in %.0f s on thread %s; thread total so far: %s', what, time.monotonic() - started,
+             result['thread_id'], usage_line(result['usage']))
     return parse_json(result['text'], save_path, what), result['thread_id']
 
 
@@ -537,9 +570,11 @@ def write(client, roles, skills_dir, campaign, step, step_dir, revision):
         (step_dir / stale).unlink(missing_ok=True)
     print(f"[{step['id']}] writer working...")
     if revision is None:
+        log.info('[%s] first draft', step['id'])
         prompt, thread_id = writer_prompt(skills_dir, campaign, step), None
     else:
         review, notes = revision
+        log.info('[%s] revising: %s', step['id'], 'owner notes' if notes else 'automatic rewrite of the review findings')
         prompt, thread_id = revision_prompt(step, review, notes), read_writer_thread(step_dir)
     written, thread_id = call_codex(client, roles[step['role']], prompt, step_dir, WRITER_SCHEMAS[step['kind']], step_dir / 'writer.json',
                                     'writer', web=step['web'], thread_id=thread_id, persist=True)
@@ -553,14 +588,19 @@ def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
         errors = CHECKS[step['check']]((step_dir / 'output.md').read_text(), (campaign / '00-task.md').read_text())
     if errors:
         print(f"[{step['id']}] automatic checks failed; skipping the reviewer")
+        log.info('[%s] automatic checks failed (%d): %s', step['id'], len(errors), '; '.join(errors))
         review = {'verdict': 'revise', 'summary': 'Automatic checks failed, so the reviewer was not called.',
                   'findings': [{'severity': 'blocking', 'issue': error, 'fix': 'Fix exactly this.'} for error in errors]}
     else:
+        if step['check'] is not None:
+            log.info('[%s] automatic checks passed', step['id'])
         print(f"[{step['id']}] reviewer working...")
         prompt = review_prompt(skills_dir, campaign, step, step_dir)
         review, _ = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images, web=step['web'])
         if any(finding['severity'] == 'blocking' for finding in review['findings']):
             review['verdict'] = 'revise'
+    blocking = sum(finding['severity'] == 'blocking' for finding in review['findings'])
+    log.info('[%s] review verdict %s: %d blocking, %d minor findings', step['id'], review['verdict'], blocking, len(review['findings']) - blocking)
     (step_dir / 'review.json').write_text(json.dumps(review, indent=2, ensure_ascii=False))
     (step_dir / 'review.md').write_text(review_markdown(review))
     return review
@@ -593,6 +633,7 @@ def decide(step, step_dir, review, ask):
                 return notes
             print('Notes cannot be empty.')
         elif answer == 'q':
+            log.info('[%s] owner quit at the decision prompt', step['id'])
             raise SystemExit(f"Stopped. Run the same command again to continue at {step['id']}.")
         else:
             print('Type a, r or q.')
@@ -604,6 +645,7 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
     review = None
     if (step_dir / 'review.json').is_file():  # the owner quit at the decision prompt last time
         review = json.loads((step_dir / 'review.json').read_text())
+        log.info('[%s] resuming at the decision prompt', step['id'])
     revision = None
     auto_left = MAX_AUTO_REVISIONS
     while True:
@@ -613,13 +655,17 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
             archive(step_dir)
             if review['verdict'] == 'revise' and auto_left > 0:
                 auto_left -= 1
+                log.info('[%s] reviewer said revise: one automatic rewrite follows', step['id'])
                 revision = (review, '')
                 review = None
                 continue
+        log.info('[%s] ready for the owner\'s decision', step['id'])
         notes = decide(step, step_dir, review, ask)
         if not notes:
+            log.info('[%s] approved by the owner', step['id'])
             (step_dir / 'APPROVED').write_text(now() + '\n')
             return
+        log.info('[%s] owner rejected; notes: %s', step['id'], notes)
         revision = (review, notes)
         review = None
         auto_left = MAX_AUTO_REVISIONS
@@ -646,12 +692,16 @@ def build_final(campaign, steps):
 
 def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES):
     steps = campaign_steps(campaign, steps)
+    log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
     check_skills(skills_dir, steps)
     check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
     for step in steps:
-        if not (campaign / step['id'] / 'APPROVED').is_file():
+        if (campaign / step['id'] / 'APPROVED').is_file():
+            log.info('[%s] already approved; skipping', step['id'])
+        else:
             run_step(client, roles, skills_dir, campaign, step, ask)
     final = build_final(campaign, steps)
+    log.info('final package written: %s', final / 'index.md')
     print(f"\nAll steps approved. Final package: {final / 'index.md'}")
     return final
 
@@ -661,6 +711,8 @@ def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
     prompt = '\n\n'.join([load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)])
     written, _ = call_codex(client, roles['writer'], prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer')
     errors = check_task(written['output'])
+    log.info('import: task text %d characters; task check %s', len(written['output']), 'passed' if not errors else 'failed: ' + '; '.join(errors))
+    log.info('import notes: %s', written['notes'] or 'none')
     if errors:
         raise WorkflowError(f"the imported task is not valid ({'; '.join(errors)}); see {campaign / 'import.json'}")
     (campaign / '00-task.md').write_text(written['output'].rstrip() + '\n')
@@ -689,11 +741,13 @@ def cmd_new(name, task_file, issue):
     if not ISSUE_RE.match(issue):
         raise WorkflowError(f'issue must look like MC-32, not {issue!r}')
     campaign.mkdir(parents=True)
-    try:
-        with CodexClient(stderr_path=campaign / 'codex-stderr.log') as client:  # not lean: the import needs the It's a Plan connection
-            task = import_issue(client, campaign, issue)
-    except (CodexError, WorkflowError) as error:
-        raise WorkflowError(f'{error} Delete {campaign} before trying again.') from None
+    with campaign_log(campaign):
+        log.info('importing %s', issue)
+        try:
+            with CodexClient(stderr_path=campaign / 'codex-stderr.log') as client:  # not lean: the import needs the It's a Plan connection
+                task = import_issue(client, campaign, issue)
+        except (CodexError, WorkflowError) as error:
+            raise WorkflowError(f'{error} Delete {campaign} before trying again.') from None
     print(task)
     print(f"Check and edit {campaign / '00-task.md'}, then: python3 marketing/run.py run {name}")
 
@@ -730,11 +784,13 @@ def cmd_run(name):
     campaign = CAMPAIGNS_DIR / name
     if not campaign.is_dir():
         raise WorkflowError(f'no campaign at {campaign}')
-    try:
-        with CodexClient(stderr_path=campaign / 'codex-stderr.log', lean=True) as client:
-            run_campaign(campaign, client)
-    except CodexError as error:
-        raise WorkflowError(f'codex: {error}') from None
+    with campaign_log(campaign):
+        log.info('run %s started', name)
+        try:
+            with CodexClient(stderr_path=campaign / 'codex-stderr.log', lean=True) as client:
+                run_campaign(campaign, client)
+        except CodexError as error:
+            raise WorkflowError(f'codex: {error}') from None
 
 
 def main():

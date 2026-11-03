@@ -213,6 +213,17 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(client.prompts), 7)  # the X draft that fails the checks gets no reviewer call
         self.assertIn('the limit is 280', client.prompts[5])
 
+    def test_run_log_records_each_call_and_decision(self):
+        with run.campaign_log(self.campaign, console=False):
+            self.go(FakeClient(['pass', 'pass']), answers('a', 'a'))
+        text = (self.campaign / 'run.log').read_text()
+        self.assertIn('writer: asking w (effort max', text)
+        self.assertIn('reviewer: asking r (effort medium', text)
+        self.assertIn('[01-brief] review verdict pass', text)
+        self.assertIn('[01-brief] approved by the owner', text)
+        self.assertIn('final package written', text)
+        self.assertNotIn('Ledgerly', text)  # task text is never logged
+
     def test_safe_write_refuses_paths_outside_project(self):
         with self.assertRaises(run.WorkflowError):
             run.safe_write(self.tmp / 'p', '../escape.html', 'x')
