@@ -60,11 +60,12 @@ Run these commands from the repository root:
 
 ```sh
 git status                      # must say "nothing to commit, working tree clean"
-git checkout main
-git pull origin main
-git tag legacy-2026-11
-git checkout -b marketing-simple
+git fetch origin main claude/marketing-workflow-simple-doogs3
+git tag legacy-2026-11 origin/main
+git checkout -b marketing-simple origin/claude/marketing-workflow-simple-doogs3
 ```
+
+The tag points at the current `main`. The new branch starts from the branch that contains this file. It is `main` plus this file only.
 
 If `git status` is not clean, stop and ask the owner. Do not stash or discard anything.
 
