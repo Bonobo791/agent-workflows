@@ -85,8 +85,8 @@ class CodexClient:
                 item = message['params'].get('item', {})
                 if item.get('type') == 'agentMessage' and item.get('text'):
                     messages.append(item['text'])
-            elif method == 'thread/tokenUsage/updated':
-                usage = message['params']
+            elif method == 'thread/tokenUsage/updated' and message['params']['threadId'] == thread_id:
+                usage = message['params']['tokenUsage']['total']
             elif method == 'turn/completed':
                 turn = message['params']['turn']
                 status = turn.get('status')
@@ -94,4 +94,6 @@ class CodexClient:
                 break
         if status != 'completed':
             raise CodexError(f'turn ended with status {status!r}: {error}')
+        if usage is None:
+            raise CodexError('turn completed without a thread/tokenUsage/updated notification')
         return {'thread_id': thread_id, 'text': messages[-1] if messages else '', 'usage': usage}

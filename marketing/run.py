@@ -24,6 +24,7 @@ DEFAULT_MODEL = 'gpt-6.1-terra'
 MAX_AUTO_REVISIONS = 1
 MAX_REVIEW_FRAMES = 10
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
+USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 
 STEPS = [
     {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'inputs': ['00-task']},
@@ -72,6 +73,36 @@ REVIEW_RULES = 'Review the deliverable against the inputs. Return JSON with "ver
 
 def now():
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def record_usage(folder, what, role, result):
+    for key in USAGE_KEYS:
+        if key not in result['usage']:
+            raise WorkflowError(f'token usage has no {key}')
+    record = {'time': now(), 'call': what, 'model': role['model'], 'effort': role['effort'],
+              'thread': result['thread_id'], 'total': {key: result['usage'][key] for key in USAGE_KEYS}}
+    with (folder / 'usage.jsonl').open('a') as handle:
+        handle.write(json.dumps(record) + '\n')
+
+
+def usage_totals(step_dir):
+    totals = {key: 0 for key in USAGE_KEYS}
+    path = step_dir / 'usage.jsonl'
+    if not path.is_file():
+        return totals
+    last = {}  # a thread's running total only grows, so its last record is its total
+    for line in path.read_text().splitlines():
+        record = json.loads(line)
+        last[record['thread']] = record['total']
+    for total in last.values():
+        for key in USAGE_KEYS:
+            totals[key] += total[key]
+    return totals
+
+
+def usage_line(totals):
+    total_in, cached, out = totals['inputTokens'], totals['cachedInputTokens'], totals['outputTokens']
+    return f"input {total_in} (non-cached {total_in - cached}, cached {cached}), output {out} (reasoning {totals['reasoningOutputTokens']})"
 
 
 def load_skill(skills_dir, skill, filename):
@@ -152,6 +183,7 @@ def call_codex(client, model, prompt, cwd, schema, save_path, what, images=()):
         result = client.run_turn(prompt, model, str(cwd), output_schema=schema, images=[data_url(p) for p in images])
     except CodexError as error:
         raise WorkflowError(f'{what} failed: {error}') from None
+    record_usage(cwd, what, {'model': model, 'effort': ''}, result)
     return parse_json(result['text'], save_path, what)
 
 
@@ -384,6 +416,7 @@ def cmd_status(name):
     campaign = CAMPAIGNS_DIR / name
     if not campaign.is_dir():
         raise WorkflowError(f'no campaign at {campaign}')
+    total = {key: 0 for key in USAGE_KEYS}
     for step in STEPS:
         step_dir = campaign / step['id']
         if (step_dir / 'APPROVED').is_file():
@@ -394,7 +427,11 @@ def cmd_status(name):
             state = 'started'
         else:
             state = 'not started'
-        print(f"{step['id']:<14} {state}")
+        totals = usage_totals(step_dir)
+        for key in USAGE_KEYS:
+            total[key] += totals[key]
+        print(f"{step['id']:<14} {state:<26} {usage_line(totals)}")
+    print(f"{'total':<14} {'':<26} {usage_line(total)}")
     if (campaign / 'final' / 'index.md').is_file():
         print(f"final package: {campaign / 'final' / 'index.md'}")
 

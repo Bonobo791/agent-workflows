@@ -13,6 +13,9 @@ TEXT_STEPS = [
 ]
 
 
+USAGE = {'inputTokens': 100, 'cachedInputTokens': 40, 'outputTokens': 10, 'reasoningOutputTokens': 5, 'totalTokens': 110}
+
+
 class FakeClient:
     """Stands in for CodexClient. `verdicts` is the reviewer's answers, in order."""
 
@@ -23,13 +26,16 @@ class FakeClient:
 
     def run_turn(self, prompt, model, cwd, output_schema=None, images=()):
         self.prompts.append(prompt)
+        thread_id = f'thread-{len(self.prompts)}'
         if output_schema is run.REVIEW_SCHEMA:
             verdict = self.verdicts.pop(0)
             findings = [] if verdict == 'pass' else [{'severity': 'blocking', 'issue': 'too short', 'fix': 'make it longer'}]
-            return {'text': json.dumps({'verdict': verdict, 'summary': 'Checked.', 'findings': findings})}
-        if self.writer_text is not None:
-            return {'text': self.writer_text}
-        return {'text': json.dumps({'output': f'draft {len(self.prompts)}', 'notes': ''})}
+            text = json.dumps({'verdict': verdict, 'summary': 'Checked.', 'findings': findings})
+        elif self.writer_text is not None:
+            text = self.writer_text
+        else:
+            text = json.dumps({'output': f'draft {len(self.prompts)}', 'notes': ''})
+        return {'thread_id': thread_id, 'text': text, 'usage': USAGE}
 
 
 def answers(*values):
@@ -95,6 +101,12 @@ class RunTest(unittest.TestCase):
     def test_invalid_json_from_writer_stops(self):
         with self.assertRaises(run.WorkflowError):
             self.go(FakeClient([], writer_text='not json'), answers())
+
+    def test_usage_is_recorded_per_call(self):
+        self.go(FakeClient(['pass', 'pass']), answers('a', 'a'))
+        totals = run.usage_totals(self.campaign / '01-brief')
+        self.assertEqual(totals['inputTokens'], 200)
+        self.assertEqual(totals['cachedInputTokens'], 80)
 
     def test_safe_write_refuses_paths_outside_project(self):
         with self.assertRaises(run.WorkflowError):
