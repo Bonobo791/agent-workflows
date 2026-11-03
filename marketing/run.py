@@ -1,7 +1,7 @@
 """Marketing workflow.
 
-brief -> SEO article -> social copy -> images -> reel -> final package.
-Every step: a Codex writer, then a fresh Codex reviewer, then the owner approves or rejects.
+sources -> brief -> SEO article -> social copy, images and reel (as the Deliverables ask) -> final package.
+Every step: a Codex writer, Python checks, then a fresh Codex reviewer, then the owner approves or rejects.
 """
 import argparse
 import json
