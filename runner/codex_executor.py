@@ -4,6 +4,7 @@ import json
 import secrets
 import time
 import threading
+import traceback
 from runner.codex_session import run_codex
 from runner.output_ingest import collect_outputs
 from runner.process_transport import ProcessTransport
@@ -46,8 +47,16 @@ def _bounded(call,deadline,cancelled,late_cleanup=None):
                 if result: break
                 state['abandoned']=True
             raise UncertainExecutorError('supervisor operation timed out or cancelled; outcome uncertain')
-    if not result or not result[0][0]: raise ExecutorError('supervisor operation failed')
-    return result[0][1]
+    if not result: raise ExecutorError('supervisor operation failed')
+    ok,value=result[0]
+    if not ok:
+        # Innermost frame first: callers truncate the message, and the location is what identifies the failing call.
+        # Full worker traceback to stderr: the reason string is truncated and only names the innermost frame.
+        traceback.print_exception(type(value),value,value.__traceback__)
+        frame=traceback.extract_tb(value.__traceback__)[-1] if value.__traceback__ else None
+        where=f' at {frame.filename}:{frame.lineno} in {frame.name}' if frame else ''
+        raise ExecutorError(f'supervisor operation failed{where} ({type(value).__name__}: {str(value)[:300]})') from value
+    return value
 
 class CodexExecutor:
     def __init__(self, supervisor, provenance, artifacts, fence,model_policy=None):

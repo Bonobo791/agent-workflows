@@ -179,4 +179,4 @@ def produce(service, run, queue_claim, graph_claim, backend):
             except Exception: pass
         try: service.fence_execution(run)
         except Exception: pass
-        raise OpenFilmStageError('render outcome requires inspection') from exc
+        raise OpenFilmStageError(f'render outcome requires inspection ({type(exc).__name__}: {str(exc)[:300]})') from exc
