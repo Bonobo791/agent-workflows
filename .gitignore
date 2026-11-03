@@ -1,20 +1,5 @@
 __pycache__/
 *.py[cod]
-*.db
-*.db-*
 .env
 .env.*
-!.env.example
-.codex/
-.agents/
-/data/
-# Explicit workflow-generated run outputs; /data/ also keeps all local state private.
-/data/*/artifacts/
-/data/*/local-outputs/
-/data/*/local-workspaces/
-/secrets/
-/control-secret
-credentials.json
-*.sqlite
-*.sqlite-*
-tools/codex_harness/runs/
+campaigns/
