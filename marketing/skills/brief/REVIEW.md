@@ -1,4 +1,4 @@
-> Built from the content-brief skill (searchfit-seo). The owner may replace this file.
+> Built from the content-brief skill(s). The owner may replace this file.
 
 Section names and counts are checked by the program before you see this.
 
