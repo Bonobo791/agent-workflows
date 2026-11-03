@@ -26,6 +26,18 @@ MODELS = {'w': ['max'], 'r': ['medium', 'high']}
 SAMPLE_TASK = Path(__file__).resolve().parents[1] / 'marketing' / 'examples' / 'sample-task.md'
 
 
+META_LINE = 'Meta description: ' + 'x' * 155  # a valid meta description length
+
+
+def full_brief(plan):
+    body = ''.join(f'## {name}\nText.\n\n' for name in run.BRIEF_SECTIONS if name not in ('Article plan', 'Facts'))
+    return f'## Article plan\n{plan}\n\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n\n' + body
+
+
+def article_text(meta_chars=155, words=6):
+    return 'Meta description: ' + 'x' * meta_chars + '\n# Title\n' + ' '.join(['word'] * (words - 1))
+
+
 def task_text(deliverables='article', without=None, design_system='None.'):
     parts = [
         ('Deliverables', deliverables),
@@ -276,37 +288,38 @@ class TaskFormatTest(unittest.TestCase):
 
 class ChecksTest(unittest.TestCase):
     def test_x_counts_the_link_as_23_characters(self):
-        self.assertTrue(run.check_x('a' * 260 + ' ' + run.LINK, ''))
-        self.assertEqual(run.check_x('a' * 250 + ' ' + run.LINK, ''), [])
+        self.assertTrue(run.check_x('a' * 260 + ' ' + run.LINK, '', None))
+        self.assertEqual(run.check_x('a' * 250 + ' ' + run.LINK, '', None), [])
 
     def test_x_thread_needs_the_link_in_the_last_post(self):
-        self.assertTrue(run.check_x('1/ First post ' + run.LINK + '\n2/ Second post', ''))
-        self.assertEqual(run.check_x('1/ First post\n2/ Second post ' + run.LINK, ''), [])
+        self.assertTrue(run.check_x('1/ First post ' + run.LINK + '\n2/ Second post', '', None))
+        self.assertEqual(run.check_x('1/ First post\n2/ Second post ' + run.LINK, '', None), [])
 
     def test_instagram_image_text_word_limit(self):
         def instagram(words):
             return f'## Caption\nHook. Link in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\n{words}\n'
-        self.assertEqual(run.check_instagram(instagram('one two three four five six seven eight'), ''), [])
-        self.assertTrue(run.check_instagram(instagram('one two three four five six seven eight nine'), ''))
+        self.assertEqual(run.check_instagram(instagram('one two three four five six seven eight'), '', None), [])
+        self.assertTrue(run.check_instagram(instagram('one two three four five six seven eight nine'), '', None))
 
     def test_linkedin_link_goes_in_first_comment(self):
         bad = '## Post\nHook line.\n\nBody with a link ' + run.LINK + ' #a #b #c\n\n## First comment\n' + run.LINK + '\n'
         good = '## Post\nHook line.\n\nBody text. #a #b #c\n\n## First comment\nRead the guide: ' + run.LINK + '\n'
-        self.assertTrue(run.check_linkedin(bad, ''))
-        self.assertEqual(run.check_linkedin(good, ''), [])
+        self.assertTrue(run.check_linkedin(bad, '', None))
+        self.assertEqual(run.check_linkedin(good, '', None), [])
 
     def test_article_required_headings_in_order(self):
         task = task_text().replace('## Required headings\nNone.', '## Required headings\n- Pricing\n- Setup')
-        good = 'Meta description: A guide.\n\n# Export guide\n\n## Pricing\nText.\n\n## Setup\nText.\n'
-        bad = 'Meta description: A guide.\n\n# Export guide\n\n## Setup\nText.\n\n## Pricing\nText.\n'
-        self.assertEqual(run.check_article(good, task), [])
-        self.assertTrue(run.check_article(bad, task))
+        brief = full_brief('- Target length: 6 words')
+        good = META_LINE + '\n\n# Export guide\n\n## Pricing\nText.\n\n## Setup\nText.\n'
+        bad = META_LINE + '\n\n# Export guide\n\n## Setup\nText.\n\n## Pricing\nText.\n'
+        self.assertEqual(run.check_article(good, task, brief), [])
+        self.assertTrue(run.check_article(bad, task, brief))
 
     def test_sources_facts_need_a_source(self):
         bad = '## Facts\n- Ledgerly exports CSV files\n\n## Not found\nNone.\n'
         good = '## Facts\n- Ledgerly exports CSV files https://example.com/export (checked 2026-11-03)\n- Plans start in December (from task)\n\n## Not found\nNone.\n'
-        self.assertTrue(run.check_sources(bad, ''))
-        self.assertEqual(run.check_sources(good, ''), [])
+        self.assertTrue(run.check_sources(bad, '', None))
+        self.assertEqual(run.check_sources(good, '', None), [])
 
 
 class ImagesTest(unittest.TestCase):
@@ -405,6 +418,39 @@ class LibraryTest(unittest.TestCase):
         social = [step for step in run.STEPS if step['id'] in ('04-linkedin', '05-x', '06-instagram')]
         prompts = [run.writer_prompt(run.SKILLS_DIR, self.campaign, step) for step in social]
         self.assertIn('--- END skill: hook-writer ---', os.path.commonprefix(prompts))
+
+
+class LengthTest(unittest.TestCase):
+    def test_brief_needs_one_target_length(self):
+        self.assertTrue(any('exactly one' in e for e in run.check_brief(full_brief('- Content type: guide.'), '', None)))
+        self.assertTrue(any('exactly one' in e for e in run.check_brief(full_brief('- Target length: 800 words\n- Target length: 900 words'), '', None)))
+        self.assertEqual(run.check_brief(full_brief('- Target length: 800 words'), '', None), [])
+
+    def test_article_meta_description_length(self):
+        brief = full_brief('- Target length: 6 words')
+
+        def meta_errors(meta_chars):
+            return [e for e in run.check_article(article_text(meta_chars, 6), task_text(), brief) if 'meta description' in e]
+
+        self.assertTrue(meta_errors(149))
+        self.assertEqual(meta_errors(150), [])
+        self.assertEqual(meta_errors(160), [])
+        self.assertTrue(meta_errors(161))
+
+    def test_article_length_within_20_percent(self):
+        brief = full_brief('- Target length: 1000 words')
+
+        def length_errors(count):
+            return [e for e in run.check_article(article_text(155, count), task_text(), brief) if 'article is' in e]
+
+        self.assertTrue(length_errors(799))
+        self.assertEqual(length_errors(800), [])
+        self.assertEqual(length_errors(1200), [])
+        self.assertTrue(length_errors(1201))
+
+    def test_article_check_without_target_length_raises(self):
+        with self.assertRaises(ValueError):
+            run.check_article(article_text(155, 6), task_text(), full_brief('- Content type: guide.'))
 
 
 class ImportTest(unittest.TestCase):

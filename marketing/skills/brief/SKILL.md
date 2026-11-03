@@ -20,7 +20,8 @@ The primary search phrase for the article, its search intent (informational, com
 
 ## Article plan
 - Working title: 60 characters or fewer, with the primary keyword.
-- Content type (how-to, listicle, guide or comparison) and target length in words.
+- Content type (how-to, listicle, guide or comparison).
+- Target length: <N> words (N is a whole number).
 - H2 list. If the task gives Required headings, include each one exactly as written, in the same order. Other H2s may go around them.
 
 ## Channel ideas

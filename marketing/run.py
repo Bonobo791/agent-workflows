@@ -43,6 +43,10 @@ X_POST_START_RE = re.compile(r'^\d+/', re.MULTILINE)
 LINK = '[ARTICLE LINK]'
 X_LINK_LENGTH = 23
 BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Open questions']
+TARGET_RE = re.compile(r'^- Target length: (\d+) words$', re.MULTILINE)
+META_MIN = 150
+META_MAX = 160
+LENGTH_TOLERANCE = 0.2
 USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 DELIVERABLES = ['article', 'social', 'images', 'reel']
 TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints', 'Design system']
@@ -324,7 +328,7 @@ def x_posts(output):
     return [output[start:end].strip() for start, end in zip(starts, ends)]
 
 
-def check_sources(output, task):
+def check_sources(output, task, brief):
     errors = missing_sections(output, ['Facts', 'Not found'])
     facts = facts_of(output)
     if not facts:
@@ -333,17 +337,31 @@ def check_sources(output, task):
     return errors
 
 
-def check_brief(output, task):
+def target_words(brief):
+    found = TARGET_RE.findall(sections(brief).get('Article plan', ''))
+    if len(found) != 1:
+        raise ValueError('brief has no target length' if not found else 'brief has more than one target length')
+    return int(found[0])
+
+
+def check_brief(output, task, brief):
     errors = missing_sections(output, BRIEF_SECTIONS)
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts_of(output) if not has_source(fact)]
+    if len(TARGET_RE.findall(sections(output).get('Article plan', ''))) != 1:
+        errors.append('Article plan needs exactly one line "- Target length: <N> words"')
     return errors
 
 
-def check_article(output, task):
+def check_article(output, task, brief):
+    target = target_words(brief)  # raises ValueError when the brief has no target length
     errors = []
     lines = output.splitlines()
     if not (lines and lines[0].startswith('Meta description: ')):
         errors.append('the first line must start with "Meta description: "')
+    else:
+        meta = len(lines[0][len('Meta description:'):].strip())
+        if not META_MIN <= meta <= META_MAX:
+            errors.append(f'meta description is {meta} characters; it must be {META_MIN} to {META_MAX}')
     titles = [line for line in lines if line.startswith('# ')]
     if len(titles) != 1:
         errors.append(f'the article must have exactly one "# " title line; it has {len(titles)}')
@@ -351,10 +369,14 @@ def check_article(output, task):
     h2s = [line[3:].strip() for line in lines if line.startswith('## ')]
     if [heading for heading in h2s if heading in required] != required:
         errors.append(f'the required headings must appear as "## " headings in this order: {", ".join(required)}')
+    words = len(re.findall(r"\b[\w'-]+\b", '\n'.join(lines[1:])))
+    if words * 5 < target * 4 or words * 5 > target * 6:  # the same as 0.8 and 1.2 times the target, in whole numbers
+        low, high = round(target * (1 - LENGTH_TOLERANCE)), round(target * (1 + LENGTH_TOLERANCE))
+        errors.append(f"article is {words} words; the brief's target is {target}, so it must be {low} to {high}")
     return errors
 
 
-def check_linkedin(output, task):
+def check_linkedin(output, task, brief):
     errors = missing_sections(output, ['Post', 'First comment'])
     found = sections(output)
     post, comment = found.get('Post', ''), found.get('First comment', '')
@@ -368,7 +390,7 @@ def check_linkedin(output, task):
     return errors
 
 
-def check_x(output, task):
+def check_x(output, task, brief):
     errors = []
     posts = x_posts(output)
     if len(posts) > 5:
@@ -386,7 +408,7 @@ def check_x(output, task):
     return errors
 
 
-def check_instagram(output, task):
+def check_instagram(output, task, brief):
     errors = missing_sections(output, ['Caption', 'Hashtags', 'Image text'])
     found = sections(output)
     if 'Link in bio' not in found.get('Caption', ''):
@@ -653,7 +675,8 @@ def write(client, roles, skills_dir, campaign, step, step_dir, revision):
 def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
     errors = []
     if step['check'] is not None:
-        errors = CHECKS[step['check']]((step_dir / 'output.md').read_text(), (campaign / '00-task.md').read_text())
+        brief = (campaign / '02-brief' / 'output.md').read_text() if step['id'] in ('03-article', '04-linkedin', '05-x', '06-instagram') else None
+        errors = CHECKS[step['check']]((step_dir / 'output.md').read_text(), (campaign / '00-task.md').read_text(), brief)
     if errors:
         print(f"[{step['id']}] automatic checks failed; skipping the reviewer")
         log.info('[%s] automatic checks failed (%d): %s', step['id'], len(errors), '; '.join(errors))
