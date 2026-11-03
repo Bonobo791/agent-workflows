@@ -16,9 +16,9 @@ Font stack (system fonts only, nothing loaded from the internet), headline weigh
 
 ## Layout
 Margins, alignment, where the headline sits, where the logo sits.
-- margins: 60 px from every edge
+- margins: 60 px from every edge on stills; on the reel, 120 px from the top and bottom and 60 px from the sides
 - alignment: headline left-aligned, vertically centred, accent bar under it
-- logo: bottom right
+- logo: None.
 
 ## Logo
 Inline SVG markup to paste into scenes, or "None."

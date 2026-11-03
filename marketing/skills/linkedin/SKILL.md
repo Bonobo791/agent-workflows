@@ -9,8 +9,8 @@ Write Markdown with exactly these two sections, in this order:
 ## Post
 - The first line is the hook: 140 characters or fewer.
 - Then 3 to 6 short paragraphs in all, the hook included, with a blank line between them.
-- Close with one genuine question.
 - A line that says: Link in the first comment.
+- Then one genuine question the reader can answer from their own work.
 - The last line: 3 to 5 hashtags.
 - No link and no URL in the Post.
 

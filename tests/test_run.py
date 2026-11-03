@@ -306,7 +306,7 @@ class ChecksTest(unittest.TestCase):
 
     def test_linkedin_link_goes_in_first_comment(self):
         bad = '## Post\nHook line.\n\nBody with a link ' + run.LINK + ' #a #b #c\n\n## First comment\n' + run.LINK + '\n'
-        good = '## Post\nHook line.\n\nBody text. #a #b #c\n\n## First comment\nRead the guide: ' + run.LINK + '\n'
+        good = '## Post\nHook line.\n\nBody text. #a #b #c\n\nLink in the first comment.\n\n## First comment\nRead the guide: ' + run.LINK + '\n'
         self.assertTrue(run.check_linkedin(bad, '', None))
         self.assertEqual(run.check_linkedin(good, '', None), [])
 
@@ -535,6 +535,41 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(len(frames), 10)
         self.assertEqual(seconds, [0, 2, 5, 7, 10, 12, 15, 17, 20, 22])
         self.assertIn('0, 2, 5', run.frame_note([str(second) for second in seconds]))
+
+
+class CubicFixesTest(unittest.TestCase):
+    def test_linkedin_post_needs_the_link_line(self):
+        body = '## Post\nHook line.\n\nBody text. #a #b #c\n\nLink in the first comment.\n\n## First comment\nRead: ' + run.LINK + '\n'
+        without = body.replace('Link in the first comment.\n\n', '')
+        self.assertEqual(run.check_linkedin(body, '', None), [])
+        self.assertTrue(any('Link in the first comment.' in e for e in run.check_linkedin(without, '', None)))
+
+    def test_x_numbers_must_run_in_order(self):
+        errors = run.check_x('1/ First post\n3/ Second post ' + run.LINK, '', None)
+        self.assertTrue(any('post numbers must run 1/ to 2/ in order; found 1/, 3/' in e for e in errors))
+        self.assertEqual(run.check_x('1/ First post\n2/ Second post ' + run.LINK, '', None), [])
+
+    def test_models_stops_when_next_cursor_is_missing(self):
+        import codex_client
+        client = codex_client.CodexClient.__new__(codex_client.CodexClient)  # no real server
+        client._request = lambda method, params: {'data': [{'model': 'm', 'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}]}
+        self.assertEqual(client.models(), {'m': ['low']})
+
+    def test_sources_step_searches_the_web(self):
+        campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        campaign.mkdir(parents=True)
+        (campaign / '00-task.md').write_text(task_text())
+        sources = json.dumps({'output': '## Facts\n- A fact https://example.com (checked 2026-11-03)\n\n## Not found\nNone.\n', 'notes': ''})
+        client = FakeClient(['pass'], writer_outputs=[sources])
+        run.run_campaign(campaign, client, ask=answers('a'), steps=[run.STEPS[0]], skills_dir=run.SKILLS_DIR, roles=ROLES)
+        self.assertEqual(client.web_searches, ['live', 'live'])  # writer and reviewer
+        other = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        other.mkdir(parents=True)
+        (other / '00-task.md').write_text(task_text())
+        plain = FakeClient(['pass'])
+        run.run_campaign(other, plain, ask=answers('a'), steps=[dict(TEXT_STEPS[0])], skills_dir=run.SKILLS_DIR, roles=ROLES)
+        self.assertTrue(plain.web_searches)
+        self.assertTrue(all(value == 'disabled' for value in plain.web_searches))
 
 
 class ImportTest(unittest.TestCase):

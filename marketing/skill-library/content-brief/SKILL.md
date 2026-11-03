@@ -10,7 +10,7 @@ A brief is the plan that every later writer follows. It makes one article's job 
 4. Read the pages that already rank for the keyword, if the material supplies them. Note the topics they cover, the heading order they use, the questions they answer and the format they use. Plan to cover the same ground and add one thing they miss.
 5. Write a working title that contains the primary keyword near its start, and keep it short enough to read in a search result.
 6. Plan the outline as an ordered list of subheadings. Each subheading answers one question the reader has. Put the questions the reader asks, in their own words, into the outline, and answer each one.
-7. Plan internal links: name the pages this article should link to, and the anchor text for each. Use descriptive anchor text, never "click here".
+7. Plan internal links only to pages the task or the sources name. If they name none, plan none. Use descriptive anchor text, never "click here".
 8. Plan a meta description in one sentence that contains the keyword and says what the reader gets.
 9. Give the goal of the piece in one sentence: what the reader should know, do or feel after reading.
 

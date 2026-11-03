@@ -116,7 +116,7 @@ class CodexClient:
             result = self._request('model/list', {'cursor': cursor})
             for item in result['data']:
                 models[item['model']] = [option['reasoningEffort'] for option in item['supportedReasoningEfforts']]
-            cursor = result['nextCursor']
+            cursor = result.get('nextCursor')  # no cursor means no more pages
             if cursor is None:
                 return models
 

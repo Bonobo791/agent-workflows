@@ -10,9 +10,10 @@ Checked:
 
 Blocking findings:
 - A claim that is not in the brief's Facts, or a claim that contradicts the brief.
+- The first line is not the hook.
 - A hook that does not open a real gap, or that promises more than the post delivers.
 - The post does not carry the brief's Channel idea for LinkedIn.
-- A closing question the reader cannot answer from their own work, or no question.
+- The line before the hashtags is not a genuine question the reader can answer from their own work.
 - Engagement bait, one-line-per-paragraph drama, or an invented personal story.
 - Any em dash.
 

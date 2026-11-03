@@ -93,7 +93,8 @@ Before any step runs, the program checks that each model and effort is in your C
 
 ```
 campaigns/<name>/00-task.md
-campaigns/<name>/import.json, codex-stderr.log       (only with --issue)
+campaigns/<name>/import.json                         (only with --issue)
+campaigns/<name>/codex-stderr.log                    Codex's stderr for every run and import
 campaigns/<name>/run.log                             every step, Codex call and decision (also printed in the terminal)
 campaigns/<name>/01-sources/output.md, review.md, APPROVED, usage.jsonl, writer-thread.txt, history/
 campaigns/<name>/02-brief/...

@@ -69,7 +69,7 @@ STEPS = [
     {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'article',
      'inputs': ['00-task', '02-brief'], 'review_inputs': ['00-task', '02-brief'],
      'writer_skills': ['stop-slop', 'on-page-seo', 'internal-linking', 'educational-content-and-how-to'],
-     'review_skills': ['stop-slop', 'on-page-seo', 'content-research-and-sourcing']},
+     'review_skills': ['stop-slop', 'on-page-seo']},
     {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'linkedin',
      'inputs': SOCIAL_INPUTS, 'review_inputs': SOCIAL_REVIEW_INPUTS,
      'writer_skills': ['stop-slop', 'hook-writer', 'linkedin-post-writer'], 'review_skills': ['stop-slop', 'platform-specs-and-validation']},
@@ -392,6 +392,8 @@ def check_linkedin(output, task, brief):
         errors.append(f'the Post must not contain a link; put {LINK} in the First comment')
     if LINK not in comment:
         errors.append(f'the First comment must contain {LINK}')
+    if 'Link in the first comment.' not in [line.strip() for line in post.splitlines()]:
+        errors.append('the Post must contain the line "Link in the first comment."')
     hashtags = len(HASHTAG_RE.findall(post))
     if not 3 <= hashtags <= 5:
         errors.append(f'the Post has {hashtags} hashtags; the limit is 3 to 5')
@@ -401,6 +403,10 @@ def check_linkedin(output, task, brief):
 def check_x(output, task, brief):
     errors = []
     posts = x_posts(output)
+    numbers = [int(number) for number in re.findall(r'^(\d+)/', output, re.MULTILINE)]
+    if numbers and numbers != list(range(1, len(numbers) + 1)):
+        found = ', '.join(f'{number}/' for number in numbers)
+        errors.append(f'post numbers must run 1/ to {len(numbers)}/ in order; found {found}')
     if len(posts) > 5:
         errors.append(f'the thread has {len(posts)} posts; the limit is 5')
     for number, post in enumerate(posts, 1):

@@ -10,7 +10,7 @@ Checked:
 - The word count is within 20% of the brief's target.
 
 Blocking findings:
-- A fact that is not in the brief's Facts.
+- A claim that is not in the brief's Facts.
 - An H2 from the brief's Article plan that is missing or out of order.
 - The meta description lacks the primary keyword.
 - The title lacks the primary keyword near the start.
