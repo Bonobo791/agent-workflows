@@ -111,7 +111,8 @@ class CodexOpenFilmProjectBuilder:
             model=self.service.model_policy.for_role('asset_production')['model']
             inputs=[brief_ref,brief['content_ref'],attempt_id]
             media=[sorted(files) for files in _media(self.artifacts,brief)]
-            social={channel:item['text'] for channel,item in social_draft_inputs(self.service,run).items()}
+            from types import SimpleNamespace
+            social={channel:item['text'] for channel,item in social_draft_inputs(SimpleNamespace(graph=graph,artifacts=self.artifacts),run).items()}  # this thread's own graph connection
             prompt=PROMPT+'\n'+json.dumps({'input_versions':inputs,'brief':brief,'canonical':canonical,'social_drafts':social,'media_paths':media,'skills':contents},ensure_ascii=False)
             result=executor.execute(run=run,role='asset_production',claim=graph_claim,skills=skills,prompt=prompt,model=model,input_versions=inputs,output_paths=['project.zip'],timeout=self.timeout_seconds,cancelled=lambda:not self._active(run,attempt_id,graph_claim,queue_claim),**({'instruction_length':len(PROMPT)} if self.local else {}))
             parsed=parse_marketing_result(result['output'],'asset_production')
