@@ -1,0 +1,105 @@
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'marketing'))
+import run  # noqa: E402
+
+TEXT_STEPS = [
+    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'inputs': ['00-task']},
+    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'inputs': ['00-task', '01-brief']},
+]
+
+
+class FakeClient:
+    """Stands in for CodexClient. `verdicts` is the reviewer's answers, in order."""
+
+    def __init__(self, verdicts, writer_text=None):
+        self.verdicts = list(verdicts)
+        self.writer_text = writer_text
+        self.prompts = []
+
+    def run_turn(self, prompt, model, cwd, output_schema=None, images=()):
+        self.prompts.append(prompt)
+        if output_schema is run.REVIEW_SCHEMA:
+            verdict = self.verdicts.pop(0)
+            findings = [] if verdict == 'pass' else [{'severity': 'blocking', 'issue': 'too short', 'fix': 'make it longer'}]
+            return {'text': json.dumps({'verdict': verdict, 'summary': 'Checked.', 'findings': findings})}
+        if self.writer_text is not None:
+            return {'text': self.writer_text}
+        return {'text': json.dumps({'output': f'draft {len(self.prompts)}', 'notes': ''})}
+
+
+def answers(*values):
+    queue = list(values)
+    return lambda _prompt: queue.pop(0)
+
+
+class RunTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.skills = self.tmp / 'skills'
+        for skill in ('brief', 'seo-article'):
+            (self.skills / skill).mkdir(parents=True)
+            (self.skills / skill / 'SKILL.md').write_text(f'write {skill}')
+            (self.skills / skill / 'REVIEW.md').write_text(f'review {skill}')
+        self.campaign = self.tmp / 'campaigns' / 'demo'
+        self.campaign.mkdir(parents=True)
+        (self.campaign / '00-task.md').write_text('Launch post for the widget')
+
+    def go(self, client, ask):
+        return run.run_campaign(self.campaign, client, 'm', ask=ask, steps=TEXT_STEPS, skills_dir=self.skills)
+
+    def test_approving_every_step_builds_final_package(self):
+        client = FakeClient(['pass', 'pass'])
+        final = self.go(client, answers('a', 'a'))
+        self.assertTrue((self.campaign / '01-brief' / 'APPROVED').is_file())
+        self.assertTrue((self.campaign / '02-article' / 'APPROVED').is_file())
+        self.assertIn('02-article.md', (final / 'index.md').read_text())
+        self.assertEqual(len(client.prompts), 4)
+
+    def test_reviewer_revise_triggers_one_automatic_rewrite(self):
+        client = FakeClient(['revise', 'pass', 'pass'])
+        self.go(client, answers('a', 'a'))
+        self.assertEqual(len(client.prompts), 6)
+        self.assertIn('too short', client.prompts[2])
+
+    def test_second_revise_goes_to_owner(self):
+        client = FakeClient(['revise', 'revise', 'pass'])
+        self.go(client, answers('a', 'a'))
+        self.assertEqual(len(client.prompts), 6)
+        self.assertTrue((self.campaign / '01-brief' / 'APPROVED').is_file())
+
+    def test_owner_notes_reach_the_writer(self):
+        client = FakeClient(['pass', 'pass', 'pass'])
+        self.go(client, answers('r', 'add the price', 'a', 'a'))
+        self.assertIn('add the price', client.prompts[2])
+
+    def test_quit_then_resume_goes_straight_to_decision(self):
+        with self.assertRaises(SystemExit):
+            self.go(FakeClient(['pass']), answers('q'))
+        client = FakeClient(['pass'])
+        self.go(client, answers('a', 'a'))
+        self.assertEqual(len(client.prompts), 2)
+        self.assertTrue(client.prompts[0].startswith('write seo-article'))
+
+    def test_missing_skill_stops_before_any_codex_call(self):
+        (self.skills / 'seo-article' / 'REVIEW.md').unlink()
+        client = FakeClient([])
+        with self.assertRaises(run.WorkflowError):
+            self.go(client, answers())
+        self.assertEqual(client.prompts, [])
+
+    def test_invalid_json_from_writer_stops(self):
+        with self.assertRaises(run.WorkflowError):
+            self.go(FakeClient([], writer_text='not json'), answers())
+
+    def test_safe_write_refuses_paths_outside_project(self):
+        with self.assertRaises(run.WorkflowError):
+            run.safe_write(self.tmp / 'p', '../escape.html', 'x')
+
+
+if __name__ == '__main__':
+    unittest.main()
