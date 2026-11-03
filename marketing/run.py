@@ -30,15 +30,17 @@ MAX_AUTO_REVISIONS = 1
 MAX_REVIEW_FRAMES = 10
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
+DELIVERABLES = ['article', 'social', 'images', 'reel']
+TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints']
 
 STEPS = [
-    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'inputs': ['00-task']},
-    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'inputs': ['00-task', '01-brief']},
-    {'id': '03-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'inputs': ['01-brief', '02-article']},
-    {'id': '04-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'inputs': ['01-brief', '02-article']},
-    {'id': '05-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'inputs': ['01-brief', '02-article']},
-    {'id': '06-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'inputs': ['01-brief', '03-linkedin', '04-x', '05-instagram']},
-    {'id': '07-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'inputs': ['01-brief', '02-article', '05-instagram']},
+    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'inputs': ['00-task']},
+    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'inputs': ['00-task', '01-brief']},
+    {'id': '03-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'inputs': ['01-brief', '02-article']},
+    {'id': '04-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'inputs': ['01-brief', '02-article']},
+    {'id': '05-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'inputs': ['01-brief', '02-article']},
+    {'id': '06-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'deliverable': 'images', 'inputs': ['01-brief', '03-linkedin', '04-x', '05-instagram']},
+    {'id': '07-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'inputs': ['01-brief', '02-article', '05-instagram']},
 ]
 
 
@@ -131,6 +133,84 @@ def check_models(client, roles, steps):
             raise WorkflowError(f"{name} model {model} is not in the Codex model list; available: {', '.join(sorted(available))}")
         if effort not in available[model]:
             raise WorkflowError(f"{name} effort {effort} is not supported by {model}; supported: {', '.join(available[model])}")
+
+
+def sections(md):
+    """Map each '## ' heading to the text under it, up to the next '## ' heading."""
+    found, current, lines = {}, None, []
+    for line in md.splitlines():
+        if line.startswith('## '):
+            if current is not None:
+                found[current] = '\n'.join(lines).strip()
+            current, lines = line[3:].strip(), []
+        elif current is not None:
+            lines.append(line)
+    if current is not None:
+        found[current] = '\n'.join(lines).strip()
+    return found
+
+
+def section(md, heading, what):
+    found = sections(md)
+    if heading not in found:
+        raise WorkflowError(f'{what} has no "## {heading}" section')
+    return found[heading]
+
+
+def bullets(text):
+    return [line[2:].strip() for line in text.splitlines() if line.startswith('- ')]
+
+
+def missing_sections(md, headings):
+    found = sections(md)
+    return [f'missing or empty section "## {heading}"' for heading in headings if not found.get(heading)]
+
+
+def parse_deliverables(task):
+    words = [word.strip().lower() for word in section(task, 'Deliverables', 'task').split(',')]
+    words = [word for word in words if word]
+    for word in words:
+        if word not in DELIVERABLES:
+            raise WorkflowError(f'unknown deliverable "{word}"; use any of: {", ".join(DELIVERABLES)}')
+    if 'article' not in words:
+        raise WorkflowError('Deliverables must include article')
+    if ('images' in words or 'reel' in words) and 'social' not in words:
+        raise WorkflowError('images and reel need social in Deliverables')
+    return set(words)
+
+
+def check_task(task):
+    errors = []
+    if not (task.splitlines() or [''])[0].startswith('# Task: '):
+        errors.append('the first line must start with "# Task: "')
+    errors += missing_sections(task, TASK_SECTIONS)
+    if 'Deliverables' in sections(task):
+        try:
+            parse_deliverables(task)
+        except WorkflowError as error:
+            errors.append(str(error))
+    return errors
+
+
+def required_headings(task):
+    text = section(task, 'Required headings', 'task')
+    return [] if text == 'None.' else bullets(text)
+
+
+def select_steps(task, steps):
+    wanted = parse_deliverables(task)
+    return [step for step in steps if step['deliverable'] in wanted]
+
+
+def campaign_steps(campaign, steps=STEPS):
+    task_path = campaign / '00-task.md'
+    if not task_path.is_file():
+        raise WorkflowError(f'no campaign at {campaign}')
+    task = task_path.read_text()
+    errors = check_task(task)
+    if errors:
+        raise WorkflowError('; '.join(errors))
+    return select_steps(task, steps)
 
 
 def read_input(campaign, input_id):
@@ -402,8 +482,7 @@ def build_final(campaign, steps):
 
 
 def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES):
-    if not (campaign / '00-task.md').is_file():
-        raise WorkflowError(f'no campaign at {campaign}')
+    steps = campaign_steps(campaign, steps)
     check_skills(skills_dir, steps)
     check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
     for step in steps:
@@ -423,6 +502,9 @@ def cmd_new(name, task_file):
     task = Path(task_file)
     if not task.is_file():
         raise WorkflowError(f'task file not found: {task}')
+    errors = check_task(task.read_text())
+    if errors:
+        raise WorkflowError('; '.join(errors))
     campaign.mkdir(parents=True)
     shutil.copyfile(task, campaign / '00-task.md')
     print(f'Created {campaign}. Next: python3 marketing/run.py run {name}')
@@ -432,8 +514,9 @@ def cmd_status(name):
     campaign = CAMPAIGNS_DIR / name
     if not campaign.is_dir():
         raise WorkflowError(f'no campaign at {campaign}')
+    steps = campaign_steps(campaign)
     total = {key: 0 for key in USAGE_KEYS}
-    for step in STEPS:
+    for step in steps:
         step_dir = campaign / step['id']
         if (step_dir / 'APPROVED').is_file():
             state = 'approved'

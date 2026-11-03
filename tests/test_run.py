@@ -13,11 +13,27 @@ ROLES = {
     'creator': {'model': 'r', 'effort': 'high'},
 }
 TEXT_STEPS = [
-    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'inputs': ['00-task']},
-    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'inputs': ['00-task', '01-brief']},
+    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'inputs': ['00-task']},
+    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'inputs': ['00-task', '01-brief']},
+    {'id': '03-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'inputs': ['01-brief', '02-article']},
 ]
 USAGE = {'inputTokens': 100, 'cachedInputTokens': 40, 'outputTokens': 10, 'reasoningOutputTokens': 5, 'totalTokens': 110}
 MODELS = {'w': ['max'], 'r': ['medium', 'high']}
+SAMPLE_TASK = Path(__file__).resolve().parents[1] / 'marketing' / 'examples' / 'sample-task.md'
+
+
+def task_text(deliverables='article', without=None):
+    parts = [
+        ('Deliverables', deliverables),
+        ('Goal', 'Get existing users to try the export before the tax season.'),
+        ('Audience', 'Freelancers who do their own taxes.'),
+        ('Details', 'Product: Ledgerly, a bookkeeping app for freelancers.'),
+        ('Sources', 'None.'),
+        ('Required headings', 'None.'),
+        ('Constraints', 'None.'),
+    ]
+    body = ''.join(f'## {name}\n{text}\n\n' for name, text in parts if name != without)
+    return '# Task: announce the new export feature\n\n' + body
 
 
 class FakeClient:
@@ -57,13 +73,13 @@ class RunTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.skills = self.tmp / 'skills'
-        for skill in ('brief', 'seo-article'):
+        for skill in ('brief', 'seo-article', 'x'):
             (self.skills / skill).mkdir(parents=True)
             (self.skills / skill / 'SKILL.md').write_text(f'write {skill}')
             (self.skills / skill / 'REVIEW.md').write_text(f'review {skill}')
         self.campaign = self.tmp / 'campaigns' / 'demo'
         self.campaign.mkdir(parents=True)
-        (self.campaign / '00-task.md').write_text('Launch post for the widget')
+        (self.campaign / '00-task.md').write_text(task_text())
 
     def go(self, client, ask):
         return run.run_campaign(self.campaign, client, ask=ask, steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES)
@@ -75,6 +91,17 @@ class RunTest(unittest.TestCase):
         self.assertTrue((self.campaign / '02-article' / 'APPROVED').is_file())
         self.assertIn('02-article.md', (final / 'index.md').read_text())
         self.assertEqual(len(client.prompts), 4)
+
+    def test_deliverables_pick_the_steps(self):
+        self.go(FakeClient(['pass', 'pass']), answers('a', 'a'))
+        self.assertFalse((self.campaign / '03-x').exists())
+
+    def test_invalid_task_stops_before_any_codex_call(self):
+        (self.campaign / '00-task.md').write_text(task_text(without='Goal'))
+        client = FakeClient([])
+        with self.assertRaises(run.WorkflowError):
+            self.go(client, answers())
+        self.assertEqual(client.prompts, [])
 
     def test_reviewer_revise_triggers_one_automatic_rewrite(self):
         client = FakeClient(['revise', 'pass', 'pass'])
@@ -139,6 +166,22 @@ class RunTest(unittest.TestCase):
     def test_safe_write_refuses_paths_outside_project(self):
         with self.assertRaises(run.WorkflowError):
             run.safe_write(self.tmp / 'p', '../escape.html', 'x')
+
+
+class TaskFormatTest(unittest.TestCase):
+    def test_valid_task_has_no_errors(self):
+        self.assertEqual(run.check_task(task_text()), [])
+
+    def test_unknown_deliverable_is_an_error(self):
+        errors = run.check_task(task_text('article, podcast'))
+        self.assertTrue(any('podcast' in error for error in errors))
+
+    def test_reel_without_social_is_an_error(self):
+        errors = run.check_task(task_text('article, reel'))
+        self.assertTrue(any('social' in error for error in errors))
+
+    def test_sample_task_is_valid(self):
+        self.assertEqual(run.check_task(SAMPLE_TASK.read_text()), [])
 
 
 if __name__ == '__main__':
