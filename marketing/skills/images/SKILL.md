@@ -68,10 +68,6 @@ Design rules:
 - Large text, strong contrast, at least 60 px from every edge. No text may overlap other text or be cut off.
 - Inline CSS only. Do not load anything from the internet.
 - Use only facts from the brief's Facts section.
-- One idea per image.
-- At most two fonts in an image.
-- Break lines where the meaning holds, never inside a word.
-- Quote only words that the brief gives. Never put invented words in a real person's mouth.
 - Follow the constraints the brief gives.
 - No em dashes.
 

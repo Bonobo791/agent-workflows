@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -14,11 +15,11 @@ ROLES = {
 }
 TEXT_STEPS = [
     {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None,
-     'inputs': ['00-task'], 'review_inputs': ['00-task']},
+     'inputs': ['00-task'], 'review_inputs': ['00-task'], 'writer_skills': [], 'review_skills': []},
     {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None,
-     'inputs': ['00-task', '01-brief'], 'review_inputs': ['00-task', '01-brief']},
+     'inputs': ['00-task', '01-brief'], 'review_inputs': ['00-task', '01-brief'], 'writer_skills': [], 'review_skills': []},
     {'id': '03-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'x',
-     'inputs': ['01-brief', '02-article'], 'review_inputs': ['01-brief', '02-article']},
+     'inputs': ['01-brief', '02-article'], 'review_inputs': ['01-brief', '02-article'], 'writer_skills': [], 'review_skills': []},
 ]
 USAGE = {'inputTokens': 100, 'cachedInputTokens': 40, 'outputTokens': 10, 'reasoningOutputTokens': 5, 'totalTokens': 110}
 MODELS = {'w': ['max'], 'r': ['medium', 'high']}
@@ -368,6 +369,42 @@ class OpenFilmTest(unittest.TestCase):
             run.run_tool(command, Path(tempfile.mkdtemp()))
         self.assertIn('OUT', str(caught.exception))
         self.assertIn('ERR', str(caught.exception))
+
+
+class LibraryTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.skills = self.tmp / 'skills'
+        (self.skills / 'brief').mkdir(parents=True)
+        (self.skills / 'brief' / 'SKILL.md').write_text('write brief')
+        (self.skills / 'brief' / 'REVIEW.md').write_text('review brief')
+        self.campaign = self.tmp / 'campaigns' / 'demo'
+        self.campaign.mkdir(parents=True)
+        (self.campaign / '00-task.md').write_text(task_text())
+
+    def test_library_skills_go_between_inputs_and_contract(self):
+        prompt = run.writer_prompt(run.SKILLS_DIR, self.campaign, run.STEPS[0])  # 01-sources
+        self.assertLess(prompt.index('--- BEGIN 00-task ---'), prompt.index('--- BEGIN skill: content-research-and-sourcing ---'))
+        self.assertLess(prompt.index('--- BEGIN skill: content-research-and-sourcing ---'), prompt.index(run.CONTRACT_RULE))
+        self.assertLess(prompt.index(run.CONTRACT_RULE), prompt.index('# Sources researcher'))
+
+    def test_missing_library_skill_stops_before_any_codex_call(self):
+        step = dict(TEXT_STEPS[0], writer_skills=['no-such-skill'])
+        client = FakeClient([])
+        with self.assertRaises(run.WorkflowError):
+            run.run_campaign(self.campaign, client, ask=answers(), steps=[step], skills_dir=self.skills, roles=ROLES)
+        self.assertEqual(client.prompts, [])
+
+    def test_social_steps_share_the_longest_prefix(self):
+        for step_id, text in (('02-brief', '## Facts\n- A fact https://example.com (checked 2026-11-03)\n## Channel ideas\nIdea.\n'),
+                              ('03-article', '# Title\n## One\nBody.\n')):
+            folder = self.campaign / step_id
+            folder.mkdir()
+            (folder / 'output.md').write_text(text)
+            (folder / 'APPROVED').write_text('done\n')
+        social = [step for step in run.STEPS if step['id'] in ('04-linkedin', '05-x', '06-instagram')]
+        prompts = [run.writer_prompt(run.SKILLS_DIR, self.campaign, step) for step in social]
+        self.assertIn('--- END skill: hook-writer ---', os.path.commonprefix(prompts))
 
 
 class ImportTest(unittest.TestCase):

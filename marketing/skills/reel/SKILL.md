@@ -39,9 +39,7 @@ How to build it:
 - No audio.
 - Inline CSS only. Do not load anything from the internet.
 - Use only facts from the brief's Facts section.
-- The hook is on screen from the first frame. No intro, no logo, no "hey guys". The hook is true to the scenes that follow.
 - Change what is on screen every 2 to 4 seconds.
-- The reel works with the sound off: the on-screen text tells the story.
 - Follow the constraints the brief gives.
 - No em dashes.
 

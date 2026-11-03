@@ -9,7 +9,6 @@ Write the X post that carries the brief's Channel idea for X and points to the a
 - Each post is 280 characters or fewer. Count `[ARTICLE LINK]` as 23 characters.
 - Write `[ARTICLE LINK]` once, in the last post.
 - At most two hashtags in total.
-- Post 1 hooks the reader and promises the payoff. Each later post moves the one idea forward by one step.
 - Use only facts from the brief's Facts section. Never invent a fact.
 - Follow the constraints the brief gives.
 - No em dashes.
