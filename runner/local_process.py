@@ -6,7 +6,7 @@ import subprocess
 import time
 from runner.adapter import managed_app_server_spec, verify_managed_workspace
 from runner.local_scope import LocalScopes, reserve_for_execution
-from runner.local_launch import reap_after_failure, start_guarded
+from runner.local_launch import reap_after_failure, start_scope
 from runner.process_transport import ProcessTransport
 
 class LocalProcessError(RuntimeError): pass
@@ -65,24 +65,29 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
         git_dir=str(path/'.git') if allow_git else None
         args,child_env=managed_app_server_spec(executable,environment,disabled_integrations=disabled_integrations,output_dir=str(output_dir),git_dir=git_dir)
     except (OSError,ValueError): raise LocalProcessError('private output allocation unavailable')
-    command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']
-    command.extend(k+'='+v for k,v in child_env.items())
-    launch=None
+    command=['/usr/bin/env','-i']+[k+'='+v for k,v in child_env.items()]
+    process=None
     try:
-        deadline=time.monotonic()+10
-        launch=start_guarded(command,args,cwd=str(path),env=manager_env,deadline=deadline)
-        launch.receive(deadline,lambda:fence() is not True)
+        process=start_scope(unit,command+args,cwd=str(path),env=manager_env,backend=backend,deadline=time.monotonic()+10)
         scopes=LocalScopes(db,backend)
-        try:
-            scopes.bind_confirmed(run,unit,launch)
-            scopes.release_confirmed(run,unit,launch,fence,deadline=deadline)
+        try: scopes.bind(run,unit)
         finally: scopes.close()
-        return LocalProcessHandle(db,run,unit,str(path),str(output_dir),args[0],launch.process,backend,fence,git_dir)
+        if fence() is not True: raise LocalProcessError('local process or run fence unavailable')
+        return LocalProcessHandle(db,run,unit,str(path),str(output_dir),args[0],process,backend,fence,git_dir)
     except Exception as error:
-        if launch is not None:
-            launch.close()
-            for stream in (launch.process.stdin,launch.process.stdout):
+        # Before a process exists the start outcome is ambiguous, so the row stays unresolved.
+        if process is not None:
+            _stop_after_failure(db,run,unit,backend)
+            for stream in (process.stdin,process.stdout):
                 if stream is not None:stream.close()
-            reap_after_failure(launch.process)
+            reap_after_failure(process)
         # The cause class is kept in the message; the detail stays out of it.
         raise LocalProcessError(f'scope launch outcome unresolved ({type(error).__name__})') from error
+
+def _stop_after_failure(db,run,unit,backend):
+    # A failed stop leaves the row unresolved, which keeps the run fenced.
+    try:
+        scopes=LocalScopes(db,backend)
+        try: scopes.stop(run,unit)
+        finally: scopes.close()
+    except Exception: pass

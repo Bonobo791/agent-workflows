@@ -26,7 +26,7 @@ def snapshot(db, now=None):
             GROUP BY r.workflow,w.stage""",(now,now)).fetchall()
         attempts=db.execute('SELECT r.workflow,a.stage,a.status,COUNT(*),SUM(CASE WHEN a.count>1 THEN 1 ELSE 0 END) FROM graph_attempts a JOIN graph_runs r ON r.id=a.run GROUP BY r.workflow,a.stage,a.status').fetchall()
         cache=db.execute("SELECT r.workflow,a.stage,COUNT(*) FROM cache_audit a JOIN graph_runs r ON r.id=a.run WHERE a.status='reused' GROUP BY r.workflow,a.stage").fetchall()
-        launches=db.execute('SELECT r.workflow,a.role,a.status,COUNT(*) FROM execution_launch_audit a JOIN (SELECT MAX(id) id FROM execution_launch_audit GROUP BY run,execution) latest ON latest.id=a.id JOIN graph_runs r ON r.id=a.run GROUP BY r.workflow,a.role,a.status').fetchall()
+        launches=db.execute('SELECT r.workflow,a.role,a.launch_status,COUNT(*) FROM execution_launches a JOIN graph_runs r ON r.id=a.run GROUP BY r.workflow,a.role,a.launch_status').fetchall()
         tools=db.execute('SELECT r.workflow,a.role,a.tool_kind,a.status,COUNT(*) FROM tool_audit a JOIN graph_runs r ON r.id=a.run GROUP BY r.workflow,a.role,a.tool_kind,a.status').fetchall()
         approvals=db.execute('SELECT status,COUNT(*) FROM external_actions GROUP BY status').fetchall()
         pauses=db.execute('SELECT r.workflow,COUNT(*) FROM quota_pauses p JOIN graph_runs r ON r.id=p.run GROUP BY r.workflow').fetchall()

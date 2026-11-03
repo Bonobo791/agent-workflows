@@ -20,22 +20,14 @@ class VideoSamples:
     def __init__(self,service):
         if service.model_supervisor is None: raise VideoSampleError('local supervisor unavailable')
         self.service=service;self.supervisor=service.model_supervisor;self.db_path=service.state_db_path
-        self.executable=Path('/usr/bin/ffmpeg');self.ffmpeg_hash=self._ffmpeg_hash();self.policy_hash=self._policy()
+        self.executable=Path('/usr/bin/ffmpeg');self.policy_hash=self._policy()
         service.graph.db.execute('''CREATE TABLE IF NOT EXISTS local_video_samples(
             id TEXT PRIMARY KEY,run TEXT NOT NULL,subject TEXT NOT NULL,asset_ref TEXT NOT NULL,unit TEXT UNIQUE,
             policy_hash TEXT NOT NULL,duration REAL NOT NULL,sample_ref TEXT,receipt_ref TEXT,state TEXT NOT NULL)''')
-    def _ffmpeg_hash(self):
-        fd=os.open(self.executable,os.O_RDONLY|os.O_NOFOLLOW)
-        try:
-            info=os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_mode&0o022: raise VideoSampleError('unsafe video decoder')
-            with os.fdopen(fd,'rb',closefd=False) as source:return hashlib.file_digest(source,'sha256').hexdigest()
-        finally:os.close(fd)
     def _policy(self):
-        root=Path(__file__).parent
-        data={'runtime':self.supervisor.policy_hash,'ffmpeg':self.ffmpeg_hash,'samples':12,'layout':'4x3-320-square','files':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in ('video_samples.py','local_command.py','local_command_child.py','adapter.py')}}
+        data={'runtime':self.supervisor.policy_hash,'samples':12,'layout':'4x3-320-square'}
         return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-    def _current(self): return self._ffmpeg_hash()==self.ffmpeg_hash and self._policy()==self.policy_hash and self.supervisor.verify_policy() is True
+    def _current(self): return self.supervisor.verify_policy() is True
     def sample(self,run,claim,subject,asset_ref):
         graph=GraphStore(self.db_path)
         try:

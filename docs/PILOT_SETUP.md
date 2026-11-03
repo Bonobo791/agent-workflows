@@ -192,16 +192,14 @@ must not contain private skills, credentials, user data or session histories.
   `WORKFLOW_TEST_REAL_PLATFORM=1`, `WORKFLOW_TEST_SYSTEMD=1` and
   `CODEX_TEST_EXECUTABLE` to run it. This profile-photo check does not establish
   support for a LinkedIn feed post or an Instagram asset.
-- Experimental `WORKFLOW_AUDIO_CONFIG_FILE`: owner-only JSON with exactly
-  `runtime_root`, `python_root`, `model_root`, `fingerprint`, and `languages`.
-  The first three are separate canonical owner-controlled directories; the
-  runtime contains `faster-whisper` and `bin/python-sandbox`, a symlink directly
-  into the Python directory. The model directory contains a local compatible
-  model. Compute `fingerprint` with `python -m runner.audio_runtime` followed by
-  the three paths in that order. Map each supported channel to its explicit
-  two-letter speech language; automatic language detection is not used. Inspect
-  and approve the exact `audio_policy` from the private control socket. Changing
-  runtime files invalidates the policy. This experimental path runs offline and
+- Experimental `WORKFLOW_AUDIO_CONFIG_FILE`: owner-only JSON with
+  `runtime_root`, `python_root`, `model_root`, and `languages` (a legacy
+  `fingerprint` key is accepted and ignored). The first three are separate
+  canonical owner-controlled directories; the runtime contains `faster-whisper`
+  and `bin/python-sandbox`, a symlink directly into the Python directory. The
+  model directory contains a local compatible model. Map each supported channel
+  to its explicit two-letter speech language; automatic language detection is
+  not used. This experimental path runs offline and
   supports only one audio stream. It supplies a transcript and signal levels,
   not an audible quality or rights assessment; human listening is required.
 - Marketing page structure uses an owner-only `WORKFLOW_PAGE_RULE_CONFIG_FILE`

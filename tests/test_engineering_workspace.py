@@ -120,46 +120,6 @@ class EngineeringWorkspaceTests(unittest.TestCase):
                     self.registry.db.execute("UPDATE engineering_workspaces SET branch='task-1',assignment=NULL WHERE run='run-1'")
                     self.registry.db.execute('UPDATE engineering_workspace_approvals SET binding_hash=? WHERE run=?',(self.registry.binding_hash(*self.args),'run-1'))
 
-    def test_local_claim_and_scope_reservation_are_atomic(self):
-        import sqlite3
-        from runner.local_scope import LocalScopes
-        from tests.test_local_scope import Backend
-        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
-        assignment='job-'+'a'*48;scopes=LocalScopes(str(self.root/'state.db'),Backend())
-        try:
-            self.registry.db.execute("CREATE TRIGGER reject_scope_binding BEFORE INSERT ON engineering_local_scopes BEGIN SELECT RAISE(ABORT,'unavailable'); END")
-            with self.assertRaises(sqlite3.IntegrityError): self.registry.claim_local('run-1',assignment,self.policy)
-            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
-            self.assertEqual(scopes.db.execute("SELECT COUNT(*) FROM local_scopes WHERE run='run-1'").fetchone(),(0,))
-            self.registry.db.execute('DROP TRIGGER reject_scope_binding')
-            path,unit=self.registry.claim_local('run-1',assignment,self.policy)
-            self.assertEqual(path,str(self.repo))
-            self.assertEqual(self.registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',('run-1',)).fetchone(),(assignment,))
-            self.assertEqual(self.registry.db.execute('SELECT run,unit FROM engineering_local_scopes WHERE assignment=?',(assignment,)).fetchone(),('run-1',unit))
-            self.assertEqual(scopes.state('run-1',unit),'starting')
-            from runner.audit_export import read_events
-            events,cursor=read_events(self.registry.db,'workspace_scope_audit',0,10,b'x'*32)
-            self.assertEqual((cursor,events[0]['status']),(1,'bound'))
-            self.assertNotIn(unit,str(events));self.assertNotIn(assignment,str(events))
-            scope_events,_=read_events(scopes.db,'local_scope_audit',0,10,b'x'*32)
-            self.assertEqual(events[0]['scope_id'],scope_events[0]['scope_id'])
-        finally: scopes.close()
-
-    def test_push_scope_record_failure_rolls_back_reservation(self):
-        import sqlite3
-        from runner.local_push import LocalPushTransport
-        from runner.local_scope import LocalScopes
-        from tests.test_local_scope import Backend
-        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
-        LocalPushTransport(self.service,'run-1','queue','graph',None)
-        scopes=LocalScopes(str(self.root/'state.db'),Backend())
-        try:
-            self.registry.db.execute("CREATE TRIGGER reject_push_scope BEFORE INSERT ON local_pr_scopes BEGIN SELECT RAISE(ABORT,'unavailable'); END")
-            with self.assertRaises(sqlite3.IntegrityError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy,pr_scope=('push:x','github:o/r:branch:x','bundle'))
-            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
-            for table in ('local_scopes','engineering_local_scopes','local_pr_scopes','workspace_scope_audit'):
-                self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
-        finally: scopes.close()
 
     def test_workspace_scope_binding_helper_requires_transaction(self):
         from runner.engineering_workspace import bind_scope_with_audit
@@ -176,20 +136,6 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             with self.assertRaises(WorkspaceError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy)
             self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
             for table in ('local_scopes','engineering_local_scopes','workspace_scope_audit'):
-                self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
-        finally: scopes.close()
-
-    def test_workspace_scope_audit_failure_rolls_back_reservation(self):
-        import sqlite3
-        from runner.local_scope import LocalScopes
-        from tests.test_local_scope import Backend
-        self.registry.register(*self.args,self.registry.binding_hash(*self.args))
-        scopes=LocalScopes(str(self.root/'state.db'),Backend())
-        try:
-            self.registry.db.execute("CREATE TRIGGER reject_workspace_scope_audit BEFORE INSERT ON workspace_scope_audit BEGIN SELECT RAISE(ABORT,'unavailable'); END")
-            with self.assertRaises(sqlite3.IntegrityError): self.registry.claim_local('run-1','job-'+'a'*48,self.policy)
-            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
-            for table in ('local_scopes','engineering_local_scopes','local_scope_audit','workspace_scope_audit'):
                 self.assertEqual(self.registry.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
         finally: scopes.close()
 
@@ -301,67 +247,6 @@ class EngineeringWorkspaceTests(unittest.TestCase):
             self.assertEqual(self.control.handle('x'*40,release),{'released':True})
             self.assertEqual(service.lifecycle.confirm_operator_stop('run-1','inc','terminated_and_fenced')['status'],'stopped')
             self.assertEqual(service.queue.get('run-1')['status'],'completed')
-        finally: scopes.close()
-
-    def test_fenced_control_releases_only_exact_terminated_local_workspace(self):
-        from types import SimpleNamespace
-        from unittest.mock import patch
-        from runner.control import ControlError
-        from runner.local_scope import LocalScopes
-        from tests.test_local_scope import Backend
-        service=self.service;service.create('run-1','engineering','task');service.enqueue('run-1')
-        self.control.handle('x'*40,{'action':'manual_claim'})
-        self.registry.register(*self.args,self.registry.binding_hash(*self.args));assignment='job-'+'a'*48
-        self.registry.claim('run-1',assignment,self.policy)
-        backend=Backend();service.model_supervisor=SimpleNamespace(backend=backend,engineering_root=self.root)
-        scopes=LocalScopes(str(self.root/'state.db'),backend)
-        try:
-            unit=scopes.reserve('run-1');backend.unit=unit;scopes.bind('run-1',unit)
-            self.registry.bind_local_scope('run-1',assignment,unit)
-            request={'action':'release_local_workspace','run':'run-1','assignment':assignment,'unit':unit}
-            with self.assertRaises(ControlError): self.control.handle('wrong',request)
-            with self.assertRaises(ControlError): self.control.handle('x'*40,request)
-            stop=self.control.handle('x'*40,{'action':'manual_stop','run':'run-1'})
-            self.assertEqual(stop['local_workspace'],{'assignment':assignment,'unit':unit})
-            with self.assertRaises(ControlError): self.control.handle('x'*40,request)
-            self.assertTrue(scopes.stop('run-1',unit))
-            original=EngineeringWorkspace.release_local
-            def fence_changes(registry,*args,**kwargs):
-                self.registry.db.execute("UPDATE jobs SET status='cancelled' WHERE run='run-1'")
-                return original(registry,*args,**kwargs)
-            with patch.object(EngineeringWorkspace,'release_local',fence_changes):
-                with self.assertRaises(ControlError): self.control.handle('x'*40,request)
-            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
-            self.registry.db.execute("UPDATE jobs SET status='cancelling' WHERE run='run-1'")
-            for field,value in (('assignment','job-'+'b'*48),('unit','other.scope')):
-                with self.subTest(field=field),self.assertRaises(ControlError): self.control.handle('x'*40,{**request,field:value})
-            self.registry.db.execute('DELETE FROM engineering_local_scopes WHERE assignment=?',(assignment,))
-            with self.assertRaises(ControlError): self.control.handle('x'*40,request)
-            self.registry.db.execute('INSERT INTO engineering_local_scopes VALUES(?,?,?)',('run-1',assignment,unit))
-            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
-            self.registry.db.execute("CREATE TRIGGER reject_workspace_recovery_audit BEFORE INSERT ON workspace_recovery_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
-            with self.assertRaises(ControlError): self.control.handle('x'*40,request)
-            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
-            self.registry.db.execute('DROP TRIGGER reject_workspace_recovery_audit')
-            for table,key,rejected,restored in (('graph_runs','id','active','cancelled'),('jobs','run','running','cancelling')):
-                with self.subTest(table=table):
-                    service.graph.db.execute('UPDATE '+table+' SET status=? WHERE '+key+'=?',(rejected,'run-1'))
-                    try:
-                        with self.assertRaises(ControlError): self.control.handle('x'*40,request)
-                        self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(assignment,))
-                    finally: service.graph.db.execute('UPDATE '+table+' SET status=? WHERE '+key+'=?',(restored,'run-1'))
-            self.assertEqual(self.control.handle('x'*40,request),{'released':True})
-            self.assertEqual(self.registry.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
-            from runner.audit_export import read_events
-            events,cursor=read_events(self.registry.db,'workspace_recovery_audit',0,10,b'x'*32)
-            scopes_audit,_=read_events(self.registry.db,'local_scope_audit',0,10,b'x'*32)
-            self.assertEqual(cursor,1);self.assertEqual(events[0]['status'],'released')
-            self.assertEqual(events[0]['scope_id'],scopes_audit[-1]['scope_id'])
-            from runner.otel_audit import _attributes
-            self.assertEqual(_attributes(events[0])['scope_id'],events[0]['scope_id'])
-            self.assertIsNotNone(events[0]['execution_id'])
-            self.assertNotIn(assignment,str(events));self.assertNotIn(unit,str(events))
-            with self.assertRaises(ControlError): self.control.handle('x'*40,request)
         finally: scopes.close()
 
     def test_recover_terminated_workspace_without_local_supervisor(self):

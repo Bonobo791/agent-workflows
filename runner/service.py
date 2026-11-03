@@ -111,7 +111,6 @@ class Service:
             raise ServiceError('recovery evidence unavailable') from exc
     def recover_invalid_draft(self,run,execution):
         from runner.checkpoint import _checkpoint_runtime,ensure_quiescent
-        from runner.local_scope import valid_terminated_scope
         from runner.structured import parse_marketing_result
         if self.task_intake is None or self.task_intake.revalidate(run) is not True: raise ServiceError('fresh local task required')
         db,lifecycle=_checkpoint_runtime(self);target=lifecycle.target['manual_target'];inc=lifecycle.incarnation
@@ -123,13 +122,9 @@ class Service:
             if row!=('marketing',marketing_definition().fingerprint(),'cancelled') or not assignment or assignment[0]!=target or assignment[1]==inc or assignment[2:]!=('stopped','terminated_and_fenced') or db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()!=(inc,'available') or db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()!=('cancelled',None,None): raise ServiceError('confirmed stopped replacement required')
             attempts=db.execute("SELECT stage,version FROM graph_attempts WHERE run=? AND status='uncertain'",(run,)).fetchall()
             if len(attempts)!=1 or attempts[0][0]!='canonical_draft' or db.execute("SELECT 1 FROM graph_stages WHERE run=? AND stage NOT IN ('intake','brief')",(run,)).fetchone() or db.execute("SELECT status FROM graph_stages WHERE run=? AND stage='brief'",(run,)).fetchone()!=('passed',): raise ServiceError('draft attempt unavailable')
-            launch=db.execute('SELECT role,status FROM execution_launch_audit WHERE run=? AND execution=? ORDER BY id DESC LIMIT 1',(run,execution)).fetchone()
-            binding=db.execute("SELECT session,unit,binding FROM local_execution_scopes WHERE run=? AND role='canonical_draft' AND execution=?",(run,execution)).fetchone()
-            if launch!=('canonical_draft','completed') or not binding or not valid_terminated_scope(db,run,binding[1]): raise ServiceError('completed draft scope required')
-            turns=db.execute("SELECT turn FROM execution_link_audit WHERE run=? AND role='canonical_draft' AND execution=? AND session=? AND status='completed'",(run,execution,binding[0])).fetchall()
-            if len(turns)!=1: raise ServiceError('completed draft turn unavailable')
-            turn=turns[0][0]
-            if db.execute("SELECT unit,binding FROM local_turn_scopes WHERE run=? AND role='canonical_draft' AND session=? AND turn=?",(run,binding[0],turn)).fetchone()!=binding[1:]: raise ServiceError('draft scope binding mismatch')
+            launch=db.execute("SELECT role,launch_status,session,turn FROM execution_launches WHERE run=? AND execution=?",(run,execution)).fetchone()
+            if not launch or launch[:2]!=('canonical_draft','completed') or not launch[2] or not launch[3]: raise ServiceError('completed draft launch required')
+            binding=launch[2:3]; turn=launch[3]
             record=db.execute("SELECT input_versions,output_refs,response_ref FROM execution_turn_audit WHERE run=? AND role='canonical_draft' AND session=? AND turn=? AND status='completed'",(run,binding[0],turn)).fetchone()
             completed=db.execute("SELECT input_versions,output_refs FROM completed_turn_outputs WHERE run=? AND role='canonical_draft' AND session=? AND turn=?",(run,binding[0],turn)).fetchone()
             if not record or completed!=record[:2] or db.execute("SELECT output_hash FROM execution_completions WHERE run=? AND role='canonical_draft' AND session=?",(run,binding[0])).fetchone()!=(record[2],): raise ServiceError('draft completion evidence mismatch')
@@ -160,13 +155,13 @@ class Service:
             if row!=('marketing',marketing_definition().fingerprint(),'cancelled') or not assignment or assignment[0]!=target or assignment[1]==inc or assignment[2:]!=('stopped','terminated_and_fenced') or db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()!=(inc,'available') or db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()!=('cancelled',None,None): raise ServiceError('confirmed stopped replacement required')
             attempt=db.execute("SELECT version,count FROM graph_attempts WHERE run=? AND stage='canonical_draft' AND status='uncertain'",(run,)).fetchone()
             prior=db.execute('SELECT execution,attempt_version,created FROM invalid_draft_recovery_audit WHERE run=? ORDER BY id DESC LIMIT 1',(run,)).fetchone()
-            latest=db.execute('SELECT role,status,created FROM execution_launch_audit WHERE run=? AND execution=? ORDER BY id DESC LIMIT 1',(run,execution)).fetchone()
+            latest=db.execute('SELECT role,launch_status,created FROM execution_launches WHERE run=? AND execution=?',(run,execution)).fetchone()
             if not attempt or attempt[1]<1 or not prior or prior[1]!=attempt[0] or latest is None or latest[:2]!=('canonical_draft','uncertain') or latest[2]<prior[2] or execution==prior[0]: raise ServiceError('uncertain retry evidence unavailable')
-            uncertain=db.execute("SELECT execution FROM execution_launch_audit WHERE run=? AND id IN (SELECT MAX(id) FROM execution_launch_audit WHERE run=? GROUP BY execution) AND status='uncertain'",(run,run)).fetchall()
+            uncertain=db.execute("SELECT execution FROM execution_launches WHERE run=? AND launch_status='uncertain'",(run,)).fetchall()
             if uncertain!=[(execution,)]: raise ServiceError('other launches remain uncertain')
-            if db.execute('SELECT 1 FROM local_execution_scopes WHERE run=? AND execution=?',(run,execution)).fetchone() or db.execute('SELECT 1 FROM execution_link_audit WHERE run=? AND execution=?',(run,execution)).fetchone(): raise ServiceError('draft launch has bound evidence')
-            binding=db.execute("SELECT session,unit,binding FROM local_execution_scopes WHERE run=? AND role='canonical_draft' AND execution=?",(run,prior[0])).fetchone()
-            if not binding or db.execute("SELECT session,binding,state FROM local_sessions WHERE run=? AND role='canonical_draft'",(run,)).fetchone()!=(binding[0],binding[2],'idle') or db.execute("SELECT 1 FROM graph_sessions WHERE run=? AND role='canonical_draft'",(run,)).fetchone(): raise ServiceError('draft session unavailable')
+            if db.execute('SELECT 1 FROM execution_launches WHERE run=? AND execution=? AND turn IS NOT NULL',(run,execution)).fetchone(): raise ServiceError('draft launch has bound evidence')
+            binding=db.execute("SELECT session FROM execution_launches WHERE run=? AND role='canonical_draft' AND execution=?",(run,prior[0])).fetchone()
+            if not binding or db.execute("SELECT session,state FROM local_sessions WHERE run=? AND role='canonical_draft'",(run,)).fetchone()!=(binding[0],'idle') or db.execute("SELECT 1 FROM graph_sessions WHERE run=? AND role='canonical_draft'",(run,)).fetchone(): raise ServiceError('draft session unavailable')
             if db.execute('SELECT 1 FROM graph_claims WHERE run=?',(run,)).fetchone() or db.execute("SELECT 1 FROM jobs WHERE run<>? AND status IN ('running','cancelling','uncertain')",(run,)).fetchone() or db.execute("SELECT 1 FROM graph_stages WHERE run=? AND stage NOT IN ('intake','brief')",(run,)).fetchone() or db.execute('SELECT 1 FROM external_actions WHERE run=?',(run,)).fetchone(): raise ServiceError('run not safe to replay')
             ensure_quiescent(db,run,('canonical_draft',attempt[0]))
             db.execute("INSERT INTO unbound_draft_retry_audit(run,execution,attempt_version,original_status,created) VALUES(?,?,?,'uncertain',?)",(run,execution,attempt[0],time.time()))
@@ -180,7 +175,6 @@ class Service:
             raise ServiceError('draft retry evidence unavailable') from exc
     def retry_uncertain_source_review(self,run,new_run,execution):
         from runner.checkpoint import _checkpoint_runtime,ensure_quiescent
-        from runner.local_scope import valid_terminated_scope
         if not isinstance(new_run,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',new_run) or new_run==run: raise ServiceError('invalid replacement run')
         if self.task_intake is None or self.task_intake.revalidate(run) is not True: raise ServiceError('fresh local task required')
         db,lifecycle=_checkpoint_runtime(self);target=lifecycle.target['manual_target'];inc=lifecycle.incarnation
@@ -192,9 +186,9 @@ class Service:
             if not row or row[0:2]!=('marketing',marketing_definition().fingerprint()) or row[3]!='cancelled' or not assignment or assignment[0]!=target or assignment[1]==inc or assignment[2:]!=('stopped','terminated_and_fenced') or db.execute('SELECT incarnation,state FROM manual_workers WHERE target=?',(target,)).fetchone()!=(inc,'available') or db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()!=('cancelled',None,None): raise ServiceError('confirmed stopped replacement required')
             attempts=db.execute("SELECT stage,version,status FROM graph_attempts WHERE run=? AND status NOT IN ('completed','failed','not_executed')",(run,)).fetchall()
             if len(attempts)!=1 or attempts[0][0]!='brief' or attempts[0][2]!='uncertain': raise ServiceError('uncertain brief required')
-            launches=db.execute("SELECT role,execution,status FROM execution_launch_audit WHERE run=? AND id IN (SELECT MAX(id) FROM execution_launch_audit WHERE run=? GROUP BY execution) AND status='uncertain'",(run,run)).fetchall()
-            binding=db.execute("SELECT session,unit FROM local_execution_scopes WHERE run=? AND role='source_review' AND execution=?",(run,execution)).fetchone()
-            if launches!=[('source_review',execution,'uncertain')] or not binding or not valid_terminated_scope(db,run,binding[1]) or db.execute('SELECT 1 FROM execution_link_audit WHERE run=? AND execution=?',(run,execution)).fetchone(): raise ServiceError('source review evidence unavailable')
+            launches=db.execute("SELECT role,execution FROM execution_launches WHERE run=? AND launch_status='uncertain'",(run,)).fetchall()
+            binding=db.execute("SELECT session,turn FROM execution_launches WHERE run=? AND role='source_review' AND execution=?",(run,execution)).fetchone()
+            if launches!=[('source_review',execution)] or not binding or not binding[0] or binding[1] is not None: raise ServiceError('source review evidence unavailable')
             tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             for table in ('tool_audit','execution_completions'):
                 if table in tables and db.execute(f'SELECT 1 FROM {table} WHERE run=? AND session=?',(run,binding[0])).fetchone(): raise ServiceError('source review outcome observed')
@@ -270,17 +264,7 @@ class Service:
         if self.lifecycle.status(run)['incarnation']!=self.lifecycle.incarnation: raise ServiceError('scope incarnation unavailable')
         scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
         try:
-            result=scopes.inspect(run,unit); result['execution']=None
-            db=self.graph.db
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_execution_scopes'").fetchone():
-                row=db.execute('SELECT execution,role,session FROM local_execution_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
-                if row:
-                    turns=db.execute("SELECT DISTINCT turn FROM execution_link_audit WHERE run=? AND role=? AND execution=? AND session=? AND status='observed' LIMIT 2",(run,row[1],row[0],row[2])).fetchall()
-                    if len(turns)>1: raise ServiceError('scope turn identity ambiguous')
-                    turn=turns[0][0] if turns else None
-                    completed=bool(turn and db.execute("SELECT 1 FROM execution_link_audit WHERE run=? AND role=? AND execution=? AND session=? AND turn=? AND status='completed'",(run,row[1],row[0],row[2],turn)).fetchone())
-                    result['execution']={'execution':row[0],'role':row[1],'session':row[2],'turn':turn,'completed':completed}
-            return result
+            return scopes.inspect(run,unit)
         finally: scopes.close()
     def _require_fenced_local(self,run):
         from runner.manual_lifecycle import ManualLifecycle
@@ -317,9 +301,7 @@ class Service:
         if self.model_supervisor is None: raise ServiceError('local manual supervisor unavailable')
         scopes=LocalScopes(self.graph.db.execute('PRAGMA database_list').fetchone()[2],self.model_supervisor.backend)
         try:
-            fenced=(self.lifecycle.target['manual_target'],self.lifecycle.incarnation)
-            if scopes.state(run,unit)=='stopping':scopes.reconcile_witnessed_stop(run,unit,fenced)
-            else:scopes.reconcile_confirmed(run,unit,fenced)
+            scopes.reconcile(run,unit)
             return {'unit':unit,'state':'terminated'}
         finally:scopes.close()
     def _cancel(self,run,token=None,require_job=False,completed=False):
@@ -489,11 +471,6 @@ class Service:
     def approve(self,run,action,version,actor):
         if action=='enable_lifecycle':
             if run!='controller' or self.lifecycle is None or version!=self.lifecycle.policy_hash: raise ServiceError('controller policy mismatch')
-        elif action=='command_policy':
-            if run!='controller' or self.command_supervisor is None or not self.command_supervisor.policy_hash or version!=self.command_supervisor.policy_hash: raise ServiceError('command policy mismatch')
-        elif action=='audio_policy':
-            transcriber=self.audio_transcriber
-            if run!='controller' or transcriber is None or version!=transcriber.policy_hash or transcriber._current() is not True: raise ServiceError('audio policy mismatch')
         elif action=='freeze':
             review=self.graph.get(run,'canonical_review')
             if not review or review['status']!='passed' or review['version']!=version: raise ServiceError('review version unavailable or stale')

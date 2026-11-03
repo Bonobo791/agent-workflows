@@ -9,14 +9,18 @@ from runner.codex_session import run_codex
 from runner.output_ingest import collect_outputs
 from runner.process_transport import ProcessTransport
 from runner.structured import parse_marketing_result
+from runner.trace import trace
 
 
-def _pipeline_inputs(output,input_versions):
-    # The model's echo of input_versions is not trusted; the pipeline sets the expected references.
+def _pipeline_fields(output,input_versions,outputs=None):
+    # The model's echo of input_versions and its hashes of output files are not trusted; the pipeline sets both.
     try: value=json.loads(output)
-    except (TypeError,ValueError): return output
+    except (TypeError,ValueError):
+        trace('exec.fields_skipped', reason='output is not JSON', head=str(output)[:300])
+        return output
     if not isinstance(value,dict): return output
     value['input_versions']=list(input_versions)
+    if outputs is not None: value['outputs']=list(outputs)
     return json.dumps(value,ensure_ascii=False)
 
 class ExecutorError(RuntimeError): pass
@@ -95,10 +99,11 @@ class CodexExecutor:
             if not callable(capability) or _bounded(lambda:capability(run,role,session_id,skills,model) if contextual else capability(run,role,session_id),deadline,cancelled) is not True: raise ExecutorError('persistent session unavailable')
         if _bounded(self.supervisor.preflight,deadline,cancelled) is not True: raise ExecutorError('isolated runtime preflight failed')
         execution=secrets.token_hex(32); db=self.provenance.graph.db
+        trace('exec.begin', run=run, role=role, model=model, inputs=input_versions, output_paths=output_paths, session=session_id, review_subject=review_subject)
         db.execute('BEGIN IMMEDIATE')
         try:
             self.provenance.graph._lease(run,claim)
-            db.execute('INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,?,?,?,?,?,?)',(run,role,execution,'requested',model,time.time()))
+            db.execute("INSERT INTO execution_launches(execution,run,role,launch_status,model,created) VALUES(?,?,?,'requested',?,?)",(execution,run,role,model,time.time()))
             db.execute('COMMIT')
         except Exception: db.execute('ROLLBACK'); raise
         handle=None; finished=False; starting=False; termination_unverified=False
@@ -107,6 +112,7 @@ class CodexExecutor:
             starter=getattr(self.supervisor,'start_execution',None)
             launch=(lambda:starter(run,role,session_id,skills,model)) if callable(starter) else (lambda:self.supervisor.start(run,role))
             handle=_bounded(launch,deadline,cancelled,late_cleanup=lambda late:late.cancel())
+            trace('exec.launched', run=run, role=role, execution=execution, handle=type(handle).__name__)
             if callable(getattr(handle,'open_transport',None)):
                 transport=_bounded(lambda:handle.open_transport(deadline,cancelled),deadline,cancelled,late_cleanup=lambda _:handle.cancel())
             else:
@@ -116,29 +122,20 @@ class CodexExecutor:
                 if callable(getattr(handle,'assert_active',None)): handle.assert_active()
             def on_thread(session):
                 from runner.local_supervisor import LocalSessionHandle
-                if isinstance(handle,LocalSessionHandle):
-                    from pathlib import Path
-                    from runner.local_scope import valid_scope_identity
-                    if Path(db.execute('PRAGMA database_list').fetchone()[2]).resolve()!=Path(handle.supervisor.db).resolve(): raise ExecutorError('local scope database mismatch')
-                    unit=handle.handle.unit
-                    db.execute('BEGIN IMMEDIATE')
-                    try:
-                        self.provenance.graph._lease(run,claim)
-                        identity=db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='running'",(run,unit)).fetchone()
-                        if cancelled() or (handle.run,handle.role)!=(run,role) or not identity or not valid_scope_identity(unit,*identity) or not self.provenance.verify(run,role,session,skills): raise ExecutorError('local execution scope unavailable')
-                        last=db.execute('SELECT COALESCE(MAX(id),0) FROM local_execution_scope_audit').fetchone()[0]
-                        db.execute('INSERT INTO local_execution_scopes VALUES(?,?,?,?,?,?)',(run,role,execution,session,unit,handle.binding))
-                        if not db.execute("SELECT 1 FROM local_execution_scope_audit WHERE id>? AND schema_version=1 AND run=? AND role=? AND execution=? AND session=? AND unit=? AND status='bound'",(last,run,role,execution,session,unit)).fetchone():raise ExecutorError('local execution scope audit unavailable')
-                        db.execute('COMMIT')
-                    except Exception: db.execute('ROLLBACK'); raise
+                db.execute('BEGIN IMMEDIATE')
+                try:
+                    self.provenance.graph._lease(run,claim)
+                    if isinstance(handle,LocalSessionHandle) and (cancelled() or (handle.run,handle.role)!=(run,role) or not self.provenance.verify(run,role,session,skills)): raise ExecutorError('local execution unavailable')
+                    if db.execute("UPDATE execution_launches SET session=? WHERE execution=? AND run=? AND role=? AND launch_status='requested' AND session IS NULL",(session,execution,run,role)).rowcount!=1: raise ExecutorError('session observation unavailable')
+                    db.execute('COMMIT')
+                except Exception: db.execute('ROLLBACK'); raise
                 if callable(getattr(handle,'bind_session',None)): handle.bind_session(session)
             def on_turn(session,turn):
                 db.execute('BEGIN IMMEDIATE')
                 try:
                     self.provenance.graph._lease(run,claim)
                     if cancelled() or not self.provenance.verify(run,role,session,skills): raise ExecutorError('turn binding unavailable')
-                    recorded=db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,?,?,?,?,?,'observed',?)",(run,role,execution,session,turn,time.time()))
-                    if recorded.rowcount!=1 or not db.execute("SELECT 1 FROM execution_link_audit WHERE id=? AND schema_version=1 AND run=? AND role=? AND execution=? AND session=? AND turn=? AND status='observed'",(recorded.lastrowid,run,role,execution,session,turn)).fetchone():raise ExecutorError('turn observation unavailable')
+                    if db.execute("UPDATE execution_launches SET turn=? WHERE execution=? AND run=? AND role=? AND session=? AND launch_status='requested' AND turn IS NULL",(turn,execution,run,role,session)).rowcount!=1: raise ExecutorError('turn observation unavailable')
                     db.execute('COMMIT')
                 except Exception: db.execute('ROLLBACK'); raise
             def on_tool(session,turn,item):
@@ -149,20 +146,22 @@ class CodexExecutor:
                     self.provenance.graph._lease(run,claim)
                     if cancelled() or not self.provenance.verify(run,role,session,skills): raise ExecutorError('tool evidence binding unavailable')
                     db.execute('INSERT INTO tool_audit(schema_version,run,role,session,turn,tool_kind,status,input_present,output_present,evidence_ref,created) VALUES(1,?,?,?,?,?,?,?,?,?,?)',(run,role,session,turn,item['type'],state,int('arguments' in item or 'query' in item or 'command' in item),int('result' in item or 'aggregatedOutput' in item),evidence,time.time()))
-                    db.execute("INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) SELECT 1,?,?,?,?,?,'observed',? WHERE NOT EXISTS (SELECT 1 FROM execution_link_audit WHERE run=? AND execution=? AND session=? AND turn=? AND status='observed')",(run,role,execution,session,turn,time.time(),run,execution,session,turn))
                     db.execute('COMMIT')
                 except Exception: db.execute('ROLLBACK'); raise
             local_output=getattr(handle,'output_path_prefix',None)
             if local_output is not None:
                 prompt=_local_prompt(prompt,local_output,output_paths,instruction_length)
             result=run_codex(transport,self.provenance,run,role,claim,skills,prompt,model,session_id=session_id,review_subject=review_subject,record_completion=False,before_turn=before_turn,on_tool=on_tool,before_thread=getattr(handle,'verify_config',None),images=image_paths or None,on_thread=on_thread,on_turn=on_turn)
-            expected=list(dict.fromkeys(list(input_versions)+([review_subject] if review_subject else [])))
-            result['output']=_pipeline_inputs(result['output'],expected)
+            trace('exec.codex_done', run=run, role=role, session=result.get('session_id'), turn=result.get('turn_id'), output_chars=len(result.get('output') or ''), tool_events=len(result.get('tool_events') or []))
+            # Keep the caller's list exactly (stage binding compares against it); add the review subject only if absent.
+            expected=list(input_versions)+([review_subject] if review_subject and review_subject not in input_versions else [])
             if cancelled(): raise ExecutorError('execution cancelled')
             # The supervisor, not exit of a single process, must confirm the output tree is quiescent.
             if _bounded(handle.finish,deadline,cancelled) is not True: raise ExecutorError('worker termination uncertain')
             finished=True
             refs=collect_outputs(handle.output_dir,output_paths,self.artifacts)
+            trace('exec.collected', run=run, role=role, output_paths=output_paths, refs=refs)
+            result['output']=_pipeline_fields(result['output'],expected,refs)
             if image_refs is not None:
                 for ref in image_refs: self.artifacts.get(ref)
             if cancelled(): raise ExecutorError('execution cancelled')
@@ -174,25 +173,22 @@ class CodexExecutor:
                 if not self.provenance.verify(run,role,result['session_id'],skills): raise ExecutorError('session provenance unavailable')
                 from runner.local_supervisor import LocalSessionHandle
                 if isinstance(handle,LocalSessionHandle):
-                    from runner.local_scope import valid_scope_identity
-                    unit=handle.handle.unit
-                    identity=db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,unit)).fetchone()
-                    if (handle.run,handle.role)!=(run,role) or not identity or not valid_scope_identity(unit,*identity):
+                    if not db.execute("SELECT 1 FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,handle.handle.unit)).fetchone():
                         termination_unverified=True
                         raise ExecutorError('local scope termination evidence unavailable')
-                    db.execute('INSERT INTO local_turn_scopes VALUES(?,?,?,?,?,?)',(run,role,result['session_id'],result['turn_id'],unit,handle.binding))
                 if image_refs is not None:
                     db.execute('INSERT INTO execution_image_inputs VALUES(?,?,?,?,?)',(run,role,result['session_id'],result['turn_id'],json.dumps(image_refs)))
                 db.execute('INSERT INTO completed_turn_outputs VALUES(?,?,?,?,?,?)',(run,role,result['session_id'],result['turn_id'],json.dumps(input_versions),json.dumps(refs)))
                 db.execute('INSERT INTO execution_turn_audit(schema_version,run,role,session,turn,status,model,input_versions,output_refs,response_ref,tool_evidence_ref,created) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)',(run,role,result['session_id'],result['turn_id'],'completed',model,json.dumps(input_versions),json.dumps(refs),response_ref,tool_evidence_ref,time.time()))
-                db.execute('INSERT INTO execution_link_audit(schema_version,run,role,execution,session,turn,status,created) VALUES(1,?,?,?,?,?,?,?)',(run,role,execution,result['session_id'],result['turn_id'],'completed',time.time()))
-                db.execute('INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,?,?,?,?,?,?)',(run,role,execution,'completed',model,time.time()))
+                if db.execute("UPDATE execution_launches SET launch_status='completed' WHERE execution=? AND run=? AND role=? AND launch_status='requested' AND session=? AND turn=?",(execution,run,role,result['session_id'],result['turn_id'])).rowcount!=1: raise ExecutorError('launch outcome unavailable')
                 output_hash=hashlib.sha256(result['output'].encode()).hexdigest()
                 db.execute('INSERT OR REPLACE INTO execution_completions VALUES(?,?,?,?)',(run,role,result['session_id'],output_hash))
                 db.execute('COMMIT')
             except Exception: db.execute('ROLLBACK'); raise
-            return {**result,'outputs':refs,'response_ref':response_ref,'tool_evidence_ref':tool_evidence_ref}
-        except Exception:
+            trace('exec.done', run=run, role=role, execution=execution, outputs=refs, response=response_ref)
+            return {**result,'execution':execution,'outputs':refs,'response_ref':response_ref,'tool_evidence_ref':tool_evidence_ref}
+        except Exception as failure:
+            trace('exec.failed', run=run, role=role, execution=execution, finished=finished, termination_unverified=termination_unverified, error=f'{type(failure).__name__}: {str(failure)[:400]}')
             try:
                 if handle is not None and not finished:
                     threading.Thread(target=handle.cancel,daemon=True).start()
@@ -202,7 +198,7 @@ class CodexExecutor:
                 elif handle is None and starting:
                     self.fence(run)
             finally:
-                try: db.execute('INSERT INTO execution_launch_audit(schema_version,run,role,execution,status,model,created) VALUES(1,?,?,?,?,?,?)',(run,role,execution,'failed' if finished and not termination_unverified else 'uncertain',model,time.time()))
+                try: db.execute("UPDATE execution_launches SET launch_status=? WHERE execution=?",('failed' if finished and not termination_unverified else 'uncertain',execution))
                 except Exception: pass
             raise
     def review(self,*,subject,**kwargs):

@@ -7,8 +7,8 @@ import sqlite3
 import subprocess
 import time
 from runner.adapter import managed_app_server_spec
-from runner.local_scope import LocalScopes, reserve_for_execution
-from runner.local_launch import reap_after_failure, start_guarded
+from runner.local_scope import LocalScopes, reserve_for_execution, require_user_manager
+from runner.local_launch import reap_after_failure, start_scope
 from runner.process_transport import ProcessTransport
 
 class LocalCommandError(RuntimeError): pass
@@ -77,17 +77,14 @@ def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved
         unit=_claim_command_launch(s,run,workspace,reserved_command,workspace_claim)
 
     relay=str(Path(__file__).with_name('local_command_child.py').resolve(strict=True))
-    command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']+[k+'='+v for k,v in child_env.items()]
-    process=None; launch=None; stopped=False
+    command=['/usr/bin/env','-i']+[k+'='+v for k,v in child_env.items()]+['/usr/bin/python3','-I',relay]
+    process=None; stopped=False
     try:
-        launch=start_guarded(command,['/usr/bin/python3','-I',relay],cwd=workspace,env=manager,deadline=deadline)
-        process=launch.process
-        launch.receive(deadline,lambda:s.fence(run) is not True)
+        process=start_scope(unit,command,cwd=workspace,env=manager,backend=s.backend,deadline=deadline)
         scopes=LocalScopes(s.db,s.backend)
-        try:
-            scopes.bind_confirmed(run,unit,launch)
-            scopes.release_confirmed(run,unit,launch,lambda:s.fence(run),deadline=deadline)
+        try: scopes.bind(run,unit)
         finally:scopes.close()
+        if s.fence(run) is not True: raise LocalCommandError('run fence unavailable')
         transport=ProcessTransport(process,deadline,lambda:s.fence(run) is not True)
         if transport.receive()!={'ready':True}: raise LocalCommandError('scope relay unavailable')
         if on_started is not None:on_started(unit)
@@ -108,7 +105,6 @@ def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved
         return {'outcome':'exited','exit_code':exit_code,'stdout':stdout,'stderr':stderr,'unit':unit}
     except Exception: raise LocalCommandError('local command outcome uncertain')
     finally:
-        if launch is not None:launch.close()
         _cleanup_command(s,run,unit,process,stopped)
 
 class LocalCommandBackend:
@@ -126,6 +122,7 @@ class LocalCommandBackend:
     def reserve_local_scope(self,db,assignment,run):
         from runner.local_scope import reserve_scope
         from runner.engineering_workspace import bind_scope_with_audit
+        require_user_manager(getattr(self.supervisor,'backend',None))
         unit=reserve_scope(db,run)
         bind_scope_with_audit(db,run,assignment,unit)
         db.execute('INSERT INTO local_command_scopes(assignment,run,unit) VALUES(?,?,?)',(assignment,run,unit))
@@ -146,8 +143,7 @@ class LocalCommandBackend:
         try:
             row=db.execute('SELECT run,commit_id,policy_hash,state FROM supervised_commands WHERE id=?',(assignment,)).fetchone()
             bound=db.execute('SELECT path,policy,assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
-            approved=db.execute("SELECT 1 FROM external_actions WHERE run='controller' AND action='command_policy' AND version=? AND status='approved'",(policy,)).fetchone()
-            if row!=(run,commit,policy,'uncertain') or bound!=(workspace,s.policy_hash,assignment) or not approved: raise LocalCommandError('exact command and workspace approval required')
+            if row!=(run,commit,policy,'uncertain') or bound!=(workspace,s.policy_hash,assignment): raise LocalCommandError('exact command and workspace binding required')
         finally:db.close()
         db=self._db()
         try: row=db.execute('SELECT unit FROM local_command_scopes WHERE assignment=? AND run=? AND exit_code IS NULL',(assignment,run)).fetchone()

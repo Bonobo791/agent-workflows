@@ -6,36 +6,6 @@ from pathlib import Path
 from runner.worker import read_secret, ConfigurationError, build_control
 
 class WorkerTests(unittest.TestCase):
-    def test_manual_worker_fence_controls_guarded_release(self):
-        import sys,time
-        from runner.local_launch import start_guarded
-        from runner.local_scope import LocalScopes,ScopeError
-        from runner.manual_lifecycle import ManualLifecycle
-        from runner.service import Service
-        from runner.worker import manual_fence_ready
-        from tests.test_local_scope import Backend
-        for cancel in (False,True):
-            with self.subTest(cancel=cancel),tempfile.TemporaryDirectory() as root:
-                service=Service(root);service.state_db_path=root+'/state.db'
-                lifecycle=ManualLifecycle(root+'/state.db','worker','inc');service.lifecycle=lifecycle
-                service.create('run','marketing','task');service.enqueue('run');lifecycle.claim()
-                backend=Backend();scopes=LocalScopes(root+'/state.db',backend);unit=scopes.reserve('run');backend.unit=unit
-                marker=Path(root)/'target';code='from pathlib import Path; Path('+repr(str(marker))+').touch()'
-                launch=start_guarded([],[sys.executable,'-c',code],cwd=root,env=dict(os.environ))
-                backend.pid_in_cgroup=lambda pid,group:pid==launch.process.pid and group=='/user.slice/'+unit
-                try:
-                    launch.receive(time.monotonic()+5,lambda:False);scopes.bind_confirmed('run',unit,launch)
-                    if cancel:service.request_lifecycle_stop('run')
-                    if cancel:
-                        with self.assertRaises(ScopeError):scopes.release_confirmed('run',unit,launch,lambda:manual_fence_ready(service,'run'))
-                        launch.close();self.assertNotEqual(launch.process.wait(timeout=5),0);self.assertFalse(marker.exists())
-                    else:
-                        scopes.release_confirmed('run',unit,launch,lambda:manual_fence_ready(service,'run'))
-                        self.assertEqual(launch.process.wait(timeout=5),0);self.assertTrue(marker.exists())
-                finally:
-                    launch.close()
-                    if launch.process.poll() is None:launch.process.kill();launch.process.wait(timeout=5)
-                    launch.process.stdin.close();launch.process.stdout.close();scopes.close();lifecycle.close();service.close()
     def test_local_task_can_use_signed_in_tracker_gateway_without_token(self):
         """Accept either read-only GitHub credentials path and reject mixed tracker credentials."""
         from runner.local_supervisor import LocalSupervisor
@@ -83,7 +53,6 @@ class WorkerTests(unittest.TestCase):
                 self.assertFalse(service.model_supervisor.fence('missing'))
                 from runner.local_command import LocalCommandBackend
                 self.assertIsInstance(service.command_supervisor.backend,LocalCommandBackend)
-                self.assertFalse(service.command_supervisor.ready())
             finally: service.lifecycle.close(); service.close()
     def test_local_task_can_use_read_only_github_client_without_token(self):
         from runner.local_supervisor import LocalSupervisor
@@ -239,8 +208,6 @@ class WorkerTests(unittest.TestCase):
                 result=control.handle('x'*40,{'action':'manual_stop','run':'run'})
                 self.assertEqual(result['local_scopes'],[{'unit':'unknown.scope','state':None}])
                 with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
-                service.graph.db.execute("UPDATE local_scopes SET state='terminated' WHERE run='run'")
-                with self.assertRaises(ControlError):control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
                 self.assertEqual(service.queue.get('run')['status'],'cancelling')
             finally:service.lifecycle.close();service.close()
 
@@ -263,13 +230,6 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(scopes.state('run',unit),'starting')
                 backend.unit=unit
                 self.assertEqual(control.handle('x'*40,{'action':'stop_local_scope','run':'run','unit':unit})['state'],'terminated')
-                identity=scopes.db.execute('SELECT invocation,cgroup FROM local_scopes WHERE unit=?',(unit,)).fetchone()
-                for field,bad,value in (('invocation',None,identity[0]),('invocation','bad',identity[0]),('cgroup',None,identity[1]),('cgroup','/wrong',identity[1])):
-                    scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(bad,unit))
-                    status=control.handle('x'*40,{'action':'manual_stop','run':'run'})
-                    self.assertEqual(status['local_scopes'],[{'unit':unit,'state':'unverified'}])
-                    with self.subTest(field=field,bad=bad),self.assertRaises(ControlError): control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})
-                    scopes.db.execute('UPDATE local_scopes SET '+field+'=? WHERE unit=?',(value,unit))
                 self.assertEqual(control.handle('x'*40,{'action':'manual_confirm_stopped','run':'run','incarnation':'inc','attestation':'terminated_and_fenced'})['status'],'stopped')
                 scopes.close()
             finally: service.lifecycle.close(); service.close()

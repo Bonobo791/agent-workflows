@@ -81,6 +81,8 @@ class ConfiguredTask:
                     records=service.graph.db.execute("SELECT result FROM pr_bridge_operations WHERE run=? AND kind='draft' AND state IN ('executed','desired_state_observed') AND result IS NOT NULL",(run,)).fetchall()
                     prior=[json.loads(service.artifacts.get(row[0])).get('result') for row in records]
                     if not any(isinstance(value,dict) and value.get('number')==item['number'] for value in prior): return False
+                    if remote_head is None:
+                        remote_head=self.github.request('GET',prefix+'/git/ref/heads/'+urllib.parse.quote(branch,safe='/')).get('object',{}).get('sha')
                     remote=self.github.request('GET',prefix+'/pulls/'+str(item['number']))
                     if remote.get('number')!=item['number'] or remote.get('state')!='open' or remote_head is None or remote.get('head',{}).get('sha')!=remote_head or remote.get('head',{}).get('ref')!=branch or remote.get('head',{}).get('repo',{}).get('full_name')!=current['repository'] or remote.get('base',{}).get('ref')!=c.get('github_base') or remote.get('base',{}).get('repo',{}).get('full_name')!=current['repository']: return False
                 else: return False

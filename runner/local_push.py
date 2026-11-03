@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import shlex
 from runner.git_push import push_argv
+from runner.trace import trace
 
 class LocalPushError(RuntimeError): pass
 
@@ -16,17 +17,27 @@ def local_push_command(bare,gh,repo,branch,head,expected_remote):
         return args
     except Exception:raise LocalPushError('invalid exact push target')
 
+# One attempt row per approved action and head: reserved -> done | failed | not_executed.
+# 'reserved' means the launch outcome is unknown; the observer treats it as not quiescent.
+def ensure_pr_attempts(db):
+    db.execute('CREATE TABLE IF NOT EXISTS local_pr_attempts(run TEXT NOT NULL,action TEXT NOT NULL,version TEXT NOT NULL,kind TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(run,action,version))')
+
+def reserve_pr_attempt(db,run,action,version,kind):
+    # Only an attempt that did not succeed may be reserved again, under a fresh approval.
+    return db.execute("INSERT INTO local_pr_attempts VALUES(?,?,?,?,'reserved') ON CONFLICT(run,action,version) DO UPDATE SET state='reserved',kind=excluded.kind WHERE local_pr_attempts.state IN ('failed','not_executed')",(run,action,version,kind)).rowcount==1
+
+def finish_pr_attempt(db,run,action,version,state):
+    if state not in ('done','failed','not_executed'): raise ValueError('attempt state')
+    return db.execute("UPDATE local_pr_attempts SET state=? WHERE run=? AND action=? AND version=? AND state='reserved'",(state,run,action,version)).rowcount==1
+
 class LocalPushTransport:
     """Push one exact approved commit from a verified bare snapshot."""
     def __init__(self,service,run,queue_claim,graph_claim,gh):
         self.service,self.run,self.queue_claim,self.graph_claim,self.gh=service,run,queue_claim,graph_claim,gh
-        db=service.graph.db
-        db.execute('CREATE TABLE IF NOT EXISTS local_push_attempts(assignment TEXT PRIMARY KEY,run TEXT NOT NULL,action TEXT NOT NULL,scope TEXT NOT NULL,head TEXT NOT NULL,state TEXT NOT NULL)')
-        db.execute('CREATE TABLE IF NOT EXISTS local_pr_scopes(unit TEXT PRIMARY KEY,assignment TEXT NOT NULL,run TEXT NOT NULL,action TEXT NOT NULL,scope TEXT NOT NULL,kind TEXT NOT NULL)')
+        ensure_pr_attempts(service.graph.db)
     def push_exact(self,branch,head):
         import hashlib,json,secrets,time
         from runner.engineering_dispatch import workspace_snapshot
-        from runner.engineering_workspace import EngineeringWorkspace
         from runner.local_git_snapshot import scoped_git_snapshot
         from runner.local_command import _run_scoped
         from runner.git_push import require_fast_forward
@@ -49,30 +60,51 @@ class LocalPushTransport:
             expected=selected[0]['args']['expected_remote']
             local_push_command('/placeholder/repo.git',str(self.gh.executable),repo,branch,head,expected)
             if target.get('repo')!=repo or target.get('branch')!=branch or target.get('head')!=head or target.get('diff')!=hashlib.sha256(workspace['diff'].encode()).hexdigest(): raise LocalPushError('approved push target changed')
-            db.execute("INSERT INTO local_push_attempts VALUES(?,?,?,?,?,'reserved')",(assignment,self.run,action,scope,head));db.execute('COMMIT')
+            if not reserve_pr_attempt(db,self.run,action,head,'push'): raise LocalPushError('push attempt already recorded')
+            db.execute('COMMIT')
         except Exception:db.execute('ROLLBACK');raise
-        def record(kind):
-            def save(unit): db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,self.run,action,scope,kind))
-            return save
+        launched=False; pushed=False
+        def before_push(unit):
+            nonlocal launched
+            service.graph._lease(self.run,self.graph_claim)
+            live=db.execute("SELECT 1 FROM external_actions a JOIN action_scopes z ON z.run=a.run AND z.action=a.action AND z.version=a.version WHERE a.run=? AND a.action=? AND a.version=? AND a.status='uncertain' AND z.scope=?",(self.run,action,head,scope)).fetchone()
+            if not live or self.gh._digest()!=self.gh.digest or workspace_snapshot(service,self.run,assignment=assignment)!=workspace or s.fence(self.run) is not True or not service.queue.may_start(self.run,self.queue_claim): raise LocalPushError('push authorization changed')
+            launched=True
         try:
-            with scoped_git_snapshot(s,self.run,workspace['path'],head,lambda _:None,workspace_claim=(s.engineering_root,assignment,s.policy_hash,(action,scope,'bundle'))) as (bare,bundle_unit):
+            with scoped_git_snapshot(s,self.run,workspace['path'],head,lambda _:None,workspace_claim=(s.engineering_root,assignment,s.policy_hash)) as (bare,bundle_unit):
                 require_fast_forward(bare,expected,head)
                 if workspace_snapshot(service,self.run,assignment=assignment)!=workspace or s.fence(self.run) is not True or not service.queue.may_start(self.run,self.queue_claim): raise LocalPushError('workspace or task changed')
                 env=dict(self.gh.environment);env.update({'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0','GIT_NO_REPLACE_OBJECTS':'1'})
                 command=local_push_command(bare,str(self.gh.executable),repo,branch,head,expected)
-                def before_push(unit):
-                    service.graph._lease(self.run,self.graph_claim)
-                    live=db.execute("SELECT 1 FROM external_actions a JOIN action_scopes z ON z.run=a.run AND z.action=a.action AND z.version=a.version WHERE a.run=? AND a.action=? AND a.version=? AND a.status='uncertain' AND z.scope=?",(self.run,action,head,scope)).fetchone()
-                    if not live or self.gh._digest()!=self.gh.digest or workspace_snapshot(service,self.run,assignment=assignment)!=workspace or s.fence(self.run) is not True or not service.queue.may_start(self.run,self.queue_claim): raise LocalPushError('push authorization changed')
-                result=_run_scoped(s,self.run,bare,command,env,time.monotonic()+60,8192,record('push'),before_push)
-                if result['exit_code']!=0:raise LocalPushError('push outcome uncertain')
-                from runner.local_scope import valid_scope_identity
-                row=db.execute("SELECT x.invocation,x.cgroup FROM local_pr_scopes p JOIN local_scopes x ON x.unit=p.unit AND x.run=p.run WHERE p.assignment=? AND p.kind='push' AND p.unit=? AND x.state='terminated'",(assignment,result['unit'])).fetchone()
-                if not row or not valid_scope_identity(result['unit'],*row):raise LocalPushError('push termination unverified')
-                if db.execute("UPDATE local_push_attempts SET state='terminated' WHERE assignment=? AND state='reserved'",(assignment,)).rowcount!=1:raise LocalPushError('push assignment changed')
-                registry=EngineeringWorkspace(s.engineering_root)
-                try:registry.release_local(self.run,assignment,bundle_unit)
-                finally:registry.close()
-            if workspace_snapshot(service,self.run)!=workspace:raise LocalPushError('workspace changed after push')
+                result=_run_scoped(s,self.run,bare,command,env,time.monotonic()+60,8192,lambda _:None,before_push)
+                if result['exit_code']!=0: raise LocalPushError('push outcome uncertain')
+                pushed=True
+                if not finish_pr_attempt(db,self.run,action,head,'done'): raise LocalPushError('push attempt changed')
+                self._release_bundle(assignment,bundle_unit)
+            if workspace_snapshot(service,self.run)!=workspace: raise LocalPushError('workspace changed after push')
             return True
-        except Exception:raise LocalPushError('push outcome requires inspection')
+        except Exception as failure:
+            self._settle_failure(action,head,assignment,pushed,launched)
+            raise LocalPushError('push outcome requires inspection') from failure
+    def _release_bundle(self,assignment,bundle_unit):
+        from runner.engineering_workspace import EngineeringWorkspace
+        registry=EngineeringWorkspace(self.service.model_supervisor.engineering_root)
+        try: registry.release_local(self.run,assignment,bundle_unit)
+        finally: registry.close()
+    def _settle_failure(self,action,head,assignment,pushed,launched):
+        # A success is already recorded as done; after a launch the observer reconciles against the remote.
+        if pushed: return
+        from runner.local_scope import unresolved_scope_rows
+        from runner.engineering_workspace import EngineeringWorkspace
+        db=self.service.graph.db
+        try:
+            if unresolved_scope_rows(db,self.run): return  # a scope may still run: stay reserved, so the observer does not treat it as quiescent
+            finish_pr_attempt(db,self.run,action,head,'failed' if launched else 'not_executed')
+            if not launched:
+                # Pre-launch failure: give back the workspace claim so the next attempt can take it.
+                registry=EngineeringWorkspace(self.service.model_supervisor.engineering_root)
+                try:
+                    if registry.db.execute('SELECT assignment FROM engineering_workspaces WHERE run=?',(self.run,)).fetchone()==(assignment,): registry.release(self.run,assignment)
+                finally: registry.close()
+        except Exception as exc:
+            trace('push.settle_failed', run=self.run, action=action[:24], error=f'{type(exc).__name__}: {str(exc)[:200]}')

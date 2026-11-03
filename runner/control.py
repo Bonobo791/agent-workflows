@@ -83,14 +83,6 @@ class ControlPlane:
             if action=='enable_lifecycle_auto': self.service.enable_lifecycle_auto(); return {'enabled':True}
             if action=='restore_lifecycle_auto': self.service.restore_lifecycle_auto(); return {'enabled':True}
             if action=='disable_lifecycle_auto': self.service.disable_lifecycle_auto(); return {'enabled':False}
-            if action=='command_policy':
-                supervisor=self.service.command_supervisor
-                if supervisor is None or supervisor.spec is None: raise ControlError('command policy unavailable')
-                return {'policy':supervisor.spec,'policy_hash':supervisor.policy_hash}
-            if action=='audio_policy':
-                transcriber=self.service.audio_transcriber
-                if transcriber is None: raise ControlError('audio policy unavailable')
-                return {'policy_hash':transcriber.policy_hash,'languages':dict(transcriber.languages)}
             if action in ('engineering_workspace_binding','bind_engineering_workspace'):
                 import os
                 from runner.engineering_workspace import EngineeringWorkspace

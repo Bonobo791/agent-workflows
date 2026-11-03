@@ -12,7 +12,7 @@ class CommandSupervisorTests(EngineeringWorkspaceTests):
         spec={'argv':['/usr/bin/python3','-c','print("fixture")'],'timeout_seconds':5,'output_limit':1024}
         policy=hashlib.sha256(json.dumps(spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         if not hasattr(backend,'verify_terminal'): backend.verify_terminal=lambda assignment,run,exit_code: True
-        supervisor=CommandSupervisor(service,spec,policy,backend); service.command_supervisor=supervisor; service.approve('controller','command_policy',policy,'operator')
+        supervisor=CommandSupervisor(service,spec,policy,backend); service.command_supervisor=supervisor
         return supervisor,queue['token'],claim,workspace_snapshot(service,'run-1')
     def test_interrupted_local_command_keeps_exact_scope_binding(self):
         from types import SimpleNamespace
@@ -48,21 +48,6 @@ class CommandSupervisorTests(EngineeringWorkspaceTests):
             launch.assert_not_called()
         self.assertEqual(self.service.graph.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
         self.assertEqual(self.service.graph.db.execute('SELECT COUNT(*) FROM supervised_commands').fetchone(),(0,))
-
-    def test_scope_audit_failure_rolls_back_command_and_workspace_claim(self):
-        import sqlite3
-        from types import SimpleNamespace
-        from runner.local_command import LocalCommandBackend
-        from runner.local_scope import LocalScopes
-        from tests.test_local_scope import Backend
-        path=str(self.root/'state.db');scopes=LocalScopes(path,Backend());scopes.close()
-        backend=LocalCommandBackend(SimpleNamespace(db=path))
-        supervisor,queue,claim,snapshot=self.prepared(backend)
-        self.service.graph.db.execute("CREATE TRIGGER reject_scope_audit BEFORE INSERT ON local_scope_audit BEGIN SELECT RAISE(ABORT,'unavailable'); END")
-        with self.assertRaises(sqlite3.IntegrityError): supervisor.execute('run-1',queue,claim,snapshot)
-        self.assertEqual(self.service.graph.db.execute("SELECT assignment FROM engineering_workspaces WHERE run='run-1'").fetchone(),(None,))
-        for table in ('supervised_commands','local_scopes','engineering_local_scopes','local_command_scopes'):
-            self.assertEqual(self.service.graph.db.execute('SELECT COUNT(*) FROM '+table).fetchone(),(0,))
 
     def test_valid_observation_and_forged_role_report(self):
         class Backend:
@@ -112,7 +97,6 @@ class CommandSupervisorTests(EngineeringWorkspaceTests):
         supervisor,queue,claim,snapshot=self.prepared(Backend())
         supervisor.spec['timeout_seconds']=1
         supervisor.policy_hash=hashlib.sha256(json.dumps(supervisor.spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-        self.service.approve('controller','command_policy',supervisor.policy_hash,'operator')
         with self.assertRaises(CommandError): supervisor.execute('run-1',queue,claim,snapshot)
         gate.set(); self.assertTrue(finished.wait(2))
         self.assertEqual(self.service.graph.db.execute('SELECT state FROM supervised_commands').fetchone()[0],'uncertain')

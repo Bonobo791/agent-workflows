@@ -1,4 +1,5 @@
 """Mockable stage runner. External actions and live execution are not enabled."""
+from runner.trace import trace
 import hashlib
 import json
 from runner.graph import GraphError
@@ -113,13 +114,14 @@ class GraphRunner:
                 raise ExecutionError('subscription limit reached; run paused') from exc
             if resumable and session and isinstance(result,dict) and result.get('session_id') != session: raise ExecutionError('writer or implementation session changed')
             decision=self.gate(stage,result) if isinstance(result,dict) else False
+            trace('graph.gate', run=run, stage=stage, decision=decision, status=result.get('status') if isinstance(result,dict) else None, reason=result.get('reason') if isinstance(result,dict) else None)
             if decision is True: status='passed'
             elif decision in ('blocked','unsuitable','awaiting_review'):
                 status=decision
                 result={**result, '_gate_status':status}
             else:
                 self.graph.resolve_attempt(run,stage,input_hash,token,'failed')
-                raise ExecutionError('stage gate failed')
+                raise ExecutionError(f"stage gate failed (decision {decision!r}, status {result.get('status') if isinstance(result,dict) else None!r}, reason {str(result.get('reason') if isinstance(result,dict) else '')[:200]!r})")
             output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
             ref=self.artifacts.put(output)
             if correction_id is not None and status!='passed':
@@ -129,4 +131,6 @@ class GraphRunner:
             self.graph.finish(run,stage,snapshot,status,ref,token,completion_input=input_hash,skill_fingerprint=skill_fingerprint,session_record=result.get('session_id') if resumable else None,correction_id=correction_id)
             return ref
         except ExecutionError: raise
-        except Exception as exc: raise ExecutionError(f'stage outcome requires inspection ({type(exc).__name__}: {str(exc)[:300]})') from exc
+        except Exception as exc:
+            trace('graph.exception', run=run, stage=stage, error=f'{type(exc).__name__}: {str(exc)[:600]}')
+            raise ExecutionError(f'stage outcome requires inspection ({type(exc).__name__}: {str(exc)[:300]})') from exc

@@ -107,7 +107,6 @@ class EngineeringEntrypointTests(unittest.TestCase):
                 service,control=build_control(root,'x'*40,execution_mode='local',local_supervisor_factory=factory,command_config=command,task_config=task,plan_token='synthetic-plan',github_token='synthetic-github',role_config={'skill_roots':[str(skillroot)],'required_skills':{role:['role'] for role in roles}},lifecycle_factory=lambda service:ManualLifecycle(root+'/state.db','worker','inc'))
                 try:
                     service.model_supervisor.preflight=lambda:True
-                    service.approve('controller','command_policy',service.command_supervisor.policy_hash,'operator')
                     control.handle('x'*40,{'action':'submit_configured'}); q=control.handle('x'*40,{'action':'manual_claim'})['claim']; g=control.handle('x'*40,{'action':'claim','run':'run-1'})['claim']
                     binding={'action':'engineering_workspace_binding','run':'run-1','queue_claim':q['token'],'graph_claim':g,'base':base}
                     proposal=control.handle('x'*40,binding); binding.update(action='bind_engineering_workspace',binding_hash=proposal['binding_hash']); control.handle('x'*40,binding)

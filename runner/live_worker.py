@@ -33,8 +33,8 @@ class LiveWorker:
             with self.runtime.open_session() as transport:
                 request=prompt+'\n\n'+json.dumps({'inputs':inputs,'skills':skills},ensure_ascii=False)
                 result=run_codex(transport,self.provenance,run,name,claim,hashes,request,model,session_id=session)
-            from runner.codex_executor import _pipeline_inputs
-            result['output']=_pipeline_inputs(result['output'],inputs['input_versions'])
+            from runner.codex_executor import _pipeline_fields
+            result["output"]=_pipeline_fields(result["output"],inputs["input_versions"])
             parsed=parse_marketing_result(result['output'],name)
             if parsed['input_versions'] != inputs['input_versions']: raise ExecutionError('stage input versions do not match')
             if parsed['status']=='passed':

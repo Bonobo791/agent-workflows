@@ -509,7 +509,6 @@ class AutoWorkerTests(unittest.TestCase):
                 with self.assertRaises(ManualLifecycleError): service.lifecycle.confirm_operator_stop('r','inc','terminated_and_fenced')
                 self.assertEqual(service.queue.get('r')['status'],'completed')
                 self.assertEqual(service.lifecycle.status('r')['status'],'pending')
-                scopes._require_recovery_fence('r',('worker','inc'))
             finally:
                 scopes.close(); service.lifecycle.close(); service.close()
 

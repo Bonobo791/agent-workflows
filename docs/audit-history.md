@@ -45,20 +45,14 @@ references and private response and tool-evidence references. The projection
 adds keyed turn correlation but exports none of those private references or
 contents. Model and token usage are not inferred from the response; token and
 quota usage remain unavailable unless the provider supplies validated evidence.
-`execution_launch_audit` records a launch request before the supervisor starts,
-then `completed` with the successful turn transaction. A failed launch or
-unconfirmed stop is labeled `uncertain`; a failure after supervisor-confirmed
-termination is labeled `failed`. These are observations, not proof that an
-uncertain process stopped. A failed request-audit write prevents launch. If a
-later failure observation cannot be stored, the request remains without a
-terminal observation; the executor still requests cancellation and fencing.
-The private row includes the selected model, but its projection exports only a
-keyed execution ID and allowlisted role and state. Prior launches are not
-backfilled. `execution_link_audit` records an `observed` link when the turn ID
-is received and a `completed` link with the turn completion transaction; the
-projection uses keyed IDs for each. The observed link can survive a failed turn.
-This observation does not imply
-the turn completed or the worker stopped.
+`execution_launches` holds one row per executor execution, updated in place.
+Its `launch_status` is `requested` before the supervisor starts, then `completed`
+in the successful turn transaction. A failed launch or unconfirmed stop is
+labeled `uncertain`; a failure after supervisor-confirmed termination is labeled
+`failed`. The row also keeps the observed session and turn so recovery can find
+the completed turn. These are observations, not proof that an uncertain process
+stopped. A failed request write prevents launch. The export projection does not
+include this table.
 `tool_audit` records each observed MCP, web-search or command-execution item as
 it arrives for a bound session and turn, including items before an interrupted
 turn. Command notifications are labeled `observed`, never asserted to have

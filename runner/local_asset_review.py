@@ -142,10 +142,7 @@ class LocalAssetReviewer:
             resolved=self.service.skill_resolver.resolve(self.service.required_skills['asset_review']);skills={name:item['sha256'] for name,item in resolved.items()}
             provenance=Provenance(graph)
             if not provenance.verify(run,'asset_review',session,skills) or not provenance.completed(run,'asset_review',session) or not provenance.subject_matches(run,'asset_review',session,subject) or provenance.completion_hash(run,'asset_review',session)!=row[2]: return False
-            model=self.service.model_policy.for_role('asset_review')['model'];binding=self.service.model_supervisor._binding(run,'asset_review',skills,model)[1]
-            from runner.local_scope import valid_scope_identity
-            row=graph.db.execute("SELECT t.unit,s.invocation,s.cgroup FROM local_turn_scopes t JOIN local_scopes s ON s.run=t.run AND s.unit=t.unit WHERE t.run=? AND t.role='asset_review' AND t.session=? AND t.turn=? AND t.binding=? AND s.state='terminated'",(run,session,turn,binding)).fetchone()
-            return bool(row and valid_scope_identity(*row))
+            return bool(graph.db.execute("SELECT 1 FROM execution_launches WHERE run=? AND role='asset_review' AND session=? AND turn=? AND launch_status='completed'",(run,session,turn)).fetchone())
         except Exception: return False
         finally: graph.close()
     def extra_inputs(self,run,session,subject,refs,access_ref):

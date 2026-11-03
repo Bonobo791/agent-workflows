@@ -1,4 +1,5 @@
 """Graph stage selection for a claimed task; external actions remain gated."""
+from runner.trace import trace
 from runner.graph import GraphError
 
 class StageError(RuntimeError): pass
@@ -67,12 +68,16 @@ class StageDispatcher:
                     if not callable(supports) or supports(current['version']) is True: return 'asset_review'
                 if current['status'] in ('awaiting_review','awaiting_approval','rate_limited'): return current['status']
                 continue
+            if stage.endswith('_review'):
+                writer=graph.get(run,stage[:-len('_review')]+'_draft')
+                if writer and writer['status'] in ('blocked','failed'): continue
             try: graph.prepare(run,stage,claim)
             except GraphError: continue
             return stage
         return 'blocked' if any((graph.get(run,name) or {}).get('status') in ('blocked','failed') for name in definition.dependencies) else None
     def step(self,run,queue_claim,graph_claim):
         result=self._step(run,queue_claim,graph_claim)
+        trace('step', run=run, stage=result.get('stage'), status=result.get('status'), reason=result.get('reason'))
         if result.get('status')!='awaiting_approval' or result.get('stage') not in ('freeze','open_draft','triage','ready','post_ready'):
             self.service.graph.db.execute('DELETE FROM approval_waits WHERE run=?',(run,))
         return result
@@ -458,14 +463,19 @@ class StageDispatcher:
             if name=='asset_brief':
                 prompt+='\nWrite result.txt as JSON with exactly these top-level keys: {"content_ref": input_versions[0], "social_drafts": {"linkedin": "draft artifact hash"}, "assets": [{"channel": "linkedin", "kind": "png", "width": 1200, "height": 627, "duration_seconds": null, "approved_text": [], "claim_ids": ["source register ID"], "media": [{"artifact_ref": "hash", "rights_ref": "hash"}], "captions": "", "alt_text": ""}]}. Each asset must contain exactly the listed keys; do not add fields. Replace the example values; channel is one of linkedin, x, facebook, instagram, or reddit; kind is png or mp4; duration_seconds is null for png or seconds for mp4. The pipeline sets content_ref and social_drafts; do not write them. The pipeline sets approved_text and attaches the stored draft of each channel; leave approved_text empty. Leave source notes, claim IDs and metadata off the visual. Use only requested asset channels and kinds from the admitted task, with one asset entry per requested file. An Instagram Reel uses the existing Instagram draft; there is no separate Reel draft stage. For multiple Instagram assets, bind each to the same exact Instagram draft. Use the supplied source_verification and any source_snapshots as upstream evidence; do not request a duplicate evidence artifact when a verified proof is present. Use alt_text to describe the requested visual treatment; assets for different channels must have distinct compositions even when their approved text is the same. Every final visual and social deliverable must be composed through OpenFilm. Keep text readable with clear spacing, high contrast and safe margins. Use empty media when no supplied rights-cleared media is needed. Video captions and alt text are required. Do not invent artifact references.'
                 prompt+='\nPreserve explicit placement and no-overlap constraints from the task in alt_text. No shape, border, ring, arc or animation may touch, cross or sit behind text.'
+            trace('stage.call', run=run, stage=name, refs=refs, skills=sorted(hashes), prompt_chars=len(prompt), review=review_stage, session=session)
             args=dict(run=run,role=name,claim=graph_claim,skills=hashes,prompt=prompt,model=model,input_versions=refs,output_paths=['result.txt','sources.json'] if name=='brief' else ['result.txt'],cancelled=lambda:not active())
             if service.model_executor is not None: args['instruction_length']=len(instructions)
             if review_stage:
                 args['prompt']+='\nReview subject: '+task_ref
                 result=executor.review(subject=task_ref,**args)
             else: result=executor.execute(session_id=session,**args)
-            parsed=parse_marketing_result(result['output'],name)
-            if parsed['input_versions']!=refs or parsed['outputs']!=result['outputs'] or not parsed['outputs']: raise StageError('stage output or input binding invalid')
+            try: parsed=parse_marketing_result(result['output'],name)
+            except Exception as exc:
+                trace('stage.unparsed', run=run, stage=name, error=f'{type(exc).__name__}: {exc}', head=str(result.get('output',''))[:300])
+                raise
+            trace('stage.parsed', run=run, stage=name, status=parsed['status'], reason=parsed.get('reason'), inputs_match=parsed['input_versions']==refs, outputs=parsed['outputs'], executor_outputs=result['outputs'], outputs_match=parsed['outputs']==result['outputs'])
+            if parsed['input_versions']!=refs or parsed['outputs']!=result['outputs'] or not parsed['outputs']: raise StageError(f"stage output or input binding invalid (inputs {parsed['input_versions']!r} vs {refs!r}; outputs {parsed['outputs']!r} vs {result['outputs']!r})"[:600])
             parsed['session_id']=result['session_id']
             if review_stage: parsed['_review_evidence']=result.get('evidence_ref')
             if name=='canonical_review' and page_rule_ref: parsed['_page_rules']=page_rule_ref
@@ -565,7 +575,7 @@ class StageDispatcher:
                 except Exception:
                     result['_blocked_reason']='current community rules and relevance unverified'
                     return 'blocked'
-            return True if result.get('status')=='passed' else 'blocked' if result.get('status') in ('blocked','failed') else 'awaiting_review' if result.get('status')=='awaiting_review' else False
+            return True if result.get('status')=='passed' else 'blocked' if result.get('status') in ('blocked','failed') else ('awaiting_review' if name=='canonical_draft' else 'blocked') if result.get('status')=='awaiting_review' else False
         runner=GraphRunner(service.graph,service.artifacts,specialist,gate,skill_resolver=service.skill_resolver,required_skills=service.required_skills)
         try:
             ref=runner.execute(run,stage,graph_claim,{'task_ref':task_ref,'feedback_ref':feedback_ref,'reddit_context_ref':reddit_context['ref'] if reddit_context else None,'page_rules_ref':page_rule_ref},correction_id=correction_id)

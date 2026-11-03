@@ -116,7 +116,7 @@ class EngineeringWorkspace:
             path=self._claim(run,assignment,policy,verified)
             self.db.execute('COMMIT'); return path
         except Exception: self.db.execute('ROLLBACK'); raise
-    def claim_local(self,run,assignment,policy,*,expected_path=None,pr_scope=None):
+    def claim_local(self,run,assignment,policy,*,expected_path=None):
         from runner.local_scope import reserve_scope
         verified=self._verified_claim_binding(run,assignment,policy)
         self.db.execute('BEGIN IMMEDIATE')
@@ -125,9 +125,6 @@ class EngineeringWorkspace:
             if expected_path is not None and path!=expected_path: raise WorkspaceError('engineering workspace changed')
             unit=reserve_scope(self.db,run)
             bind_scope_with_audit(self.db,run,assignment,unit)
-            if pr_scope is not None:
-                if not isinstance(pr_scope,tuple) or len(pr_scope)!=3 or any(not isinstance(value,str) or not value for value in pr_scope) or pr_scope[2]!='bundle': raise WorkspaceError('invalid push scope binding')
-                self.db.execute('INSERT INTO local_pr_scopes VALUES(?,?,?,?,?,?)',(unit,assignment,run,*pr_scope))
             self.db.execute('COMMIT'); return path,unit
         except Exception: self.db.execute('ROLLBACK'); raise
     def release(self,run,assignment):

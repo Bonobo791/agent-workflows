@@ -15,6 +15,7 @@ from tests.source_fixture import verifier as fixture_verifier
 @unittest.skipUnless((os.environ.get('WORKFLOW_TEST_PUBLIC_SOURCE')=='1' or os.environ.get('WORKFLOW_TEST_SYNTHETIC_SOURCE')=='1') and os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1' and os.environ.get('CODEX_TEST_EXECUTABLE') and not os.path.exists('/run/.containerenv'),'signed-in marketing probe not configured, or running in a container (scope cgroup checks need the host)')
 class LocalMarketingGraphLiveTests(unittest.TestCase):
     def test_fixture_reaches_freeze_approval_gate(self):
+        from runner.trace import trace
         from runner.codex_executor import CodexExecutor
         from runner.local_config_inspect import inspect_config
         from runner.local_process import start_local_process
@@ -116,6 +117,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
             results=[]
             for _ in range(9):
                 result=dispatcher.step('r',queue['token'],claim); results.append((result.get('stage'),result.get('status')))
+                trace('test.step', stage=result.get('stage'), status=result.get('status'), reason=result.get('reason'))
                 if result.get('stage')=='freeze' or (result.get('status') in ('blocked','failed','uncertain','rate_limited') and result.get('stage')!='canonical_review'): break
             self.assertEqual(results[:3],[('intake','passed'),('brief','passed'),('canonical_draft','passed')])
             self.assertIn(('canonical_review','passed'),results)
