@@ -69,8 +69,8 @@ HEDGE_WORDS = ['may', 'might', 'describes', 'positions', 'offers', 'various']
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
 SOCIAL_INPUTS = ['voice', '02-brief', '03-article#outline']
 SOCIAL_REVIEW_INPUTS = ['voice', '02-brief#Keywords', '02-brief#Facts', '02-brief#Channel ideas']
-IMAGE_INPUTS = ['design-system', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
-REEL_INPUTS = ['design-system', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
+IMAGE_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
+REEL_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
 STEPS = [
     {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources',
      'inputs': ['00-task'], 'review_inputs': ['00-task'],

@@ -3,6 +3,7 @@
 The attached images are up to 10 frames spread evenly across the video, at half size. The image note gives the second of each frame. Judge text size as it would look on a phone.
 
 Blocking findings:
+- Headline text that names a product or feature instead of the reader's problem.
 - Text that overlaps, is cut off, is too small to read on a phone, or has weak contrast in any frame.
 - Two frames more than 4 seconds apart that show the same screen.
 - No hook in the first frame, or an intro or logo before the hook.

@@ -3,6 +3,7 @@
 Look at each attached image. You see every image at half size, so judge the text size as it would look on a phone.
 
 Blocking findings:
+- Headline text that names a product or feature instead of the reader's problem.
 - Text that overlaps, is cut off, is too small to read on a phone, or has weak contrast.
 - Text closer than 60 px to an edge (30 px on your half-size copy).
 - More than one idea in an image.

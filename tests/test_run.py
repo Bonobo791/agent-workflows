@@ -422,6 +422,12 @@ class StepRoleTest(unittest.TestCase):
             run.check_models(FakeClient([], models={'gpt-6.1-sol': ['medium']}), run.ROLES, [brief])
 
 
+class ImageReelInputsTest(unittest.TestCase):
+    def test_images_and_reel_read_the_voice_and_angle_first(self):
+        for inputs in (run.IMAGE_INPUTS, run.REEL_INPUTS):
+            self.assertEqual(inputs[:3], ['design-system', 'voice', '02-brief#Angle'])
+
+
 class SearchLogTest(unittest.TestCase):
     def test_each_web_search_is_logged_and_returned(self):
         client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])
@@ -473,7 +479,7 @@ class DesignSystemTest(unittest.TestCase):
         brief = campaign / '02-brief'
         brief.mkdir()
         (brief / 'APPROVED').write_text('done\n')
-        (brief / 'output.md').write_text('## Core message\nOne idea.\n\n## Facts\n- Fact https://example.com (checked 2026-11-03)\n\n## Visual ideas\nA card.\n')
+        (brief / 'output.md').write_text('## Core message\nOne idea.\n\n## Angle\nA reader problem.\n\n## Facts\n- Fact https://example.com (checked 2026-11-03)\n\n## Visual ideas\nA card.\n')
         for step_id in ('04-linkedin', '05-x', '06-instagram'):
             step_dir = campaign / step_id
             step_dir.mkdir()
