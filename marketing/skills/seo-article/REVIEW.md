@@ -22,8 +22,10 @@ Blocking findings:
 - The article is mainly a feature list with no example or scene.
 - A banned hedge word in the hook (may, might, describes, positions, offers, various).
 - Copy that mentions the brief, supplied facts or supplied evidence.
+- A "not X, it's Y" or "X, not Y" contrast.
+- Meta talk about sources, such as "based on the facts".
 
 Minor findings:
-- Passive voice, filler, adverbs, "not X, it's Y" contrasts, flow or repetition.
+- Passive voice, filler, adverbs, flow or repetition.
 
 Pass only when there are no blocking findings.

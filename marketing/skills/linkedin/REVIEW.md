@@ -20,6 +20,8 @@ Blocking findings:
 - The post is mainly a feature list with no example or scene.
 - A banned hedge word in the hook (may, might, describes, positions, offers, various).
 - Copy that mentions the brief, supplied facts or supplied evidence.
+- A "not X, it's Y" or "X, not Y" contrast.
+- Meta talk about sources, such as "based on the facts".
 
 Minor findings:
 - Paragraph length, whitespace, wording.

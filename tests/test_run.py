@@ -428,6 +428,31 @@ class ImageReelInputsTest(unittest.TestCase):
             self.assertEqual(inputs[:3], ['design-system', 'voice', '02-brief#Angle'])
 
 
+class WordingTest(unittest.TestCase):
+    def test_each_banned_phrase_is_an_error(self):
+        for phrase in run.BANNED_PHRASES:
+            for variant in (phrase, phrase.upper()):
+                with self.subTest(phrase=variant):
+                    sentence = f'Studio shows {variant} on every page.'
+                    self.assertIn(f'remove "{phrase}" from: "{sentence}"', run.wording_errors(sentence))
+
+    def test_x_not_y_contrast_is_an_error(self):
+        sentence = 'Studio holds comments, not replies.'
+        self.assertEqual(run.wording_errors(sentence), [f'rewrite this contrast as a direct statement: "{sentence}"'])
+
+    def test_not_x_its_y_contrast_is_an_error(self):
+        for sentence in ("Not just a filter, it's a review queue.", "Not just a filter, it\u2019s a review queue."):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(run.wording_errors(sentence), [f'rewrite this contrast as a direct statement: "{sentence}"'])
+
+    def test_plain_sentence_passes(self):
+        self.assertEqual(run.wording_errors('Studio holds comments with links.'), [])
+
+    def test_instagram_caption_with_a_banned_phrase_fails(self):
+        output = '## Caption\nWe sent the reader the brief first.\nLink in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\nSave hours\n'
+        self.assertTrue(any('remove "the brief"' in e for e in run.check_instagram(output, task_text(), None)))
+
+
 class SearchLogTest(unittest.TestCase):
     def test_each_web_search_is_logged_and_returned(self):
         client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])

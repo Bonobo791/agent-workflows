@@ -65,6 +65,9 @@ VOICE_SECTIONS = ['Personality', 'Tone', 'How we talk to the reader', 'Sentence 
                   'Posts we like', "Posts we don't like"]
 TEMPLATE_NOTE = 'Template note:'
 HEDGE_WORDS = ['may', 'might', 'describes', 'positions', 'offers', 'various']
+BANNED_PHRASES = ['supplied facts', 'supplied evidence', 'the brief', 'provided facts', 'based on the facts']
+CONTRAST_RE = re.compile(r"\b(?:is|are|was|were|isn't|aren't)?\s*\w[\w\s']{0,40},\s+not\s+\w", re.I)  # "X, not Y"
+NOT_IT_RE = re.compile(r"\bnot (?:just |only )?\w[\w\s']{0,30}[,;]\s+(?:it[’']s|it is|but)\b", re.I)  # "not X, it's Y"
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
 SOCIAL_INPUTS = ['voice', '02-brief', '03-article#outline']
@@ -407,11 +410,27 @@ def check_article(output, task, brief):
     if words * 5 < target * 4 or words * 5 > target * 6:  # the same as 0.8 and 1.2 times the target, in whole numbers
         low, high = round(target * (1 - LENGTH_TOLERANCE)), round(target * (1 + LENGTH_TOLERANCE))
         errors.append(f"article is {words} words; the brief's target is {target}, so it must be {low} to {high}")
+    errors += wording_errors(output)
     return errors
 
 
 def first_line(text):
     return next((line.strip() for line in text.splitlines() if line.strip()), '')
+
+
+def sentences(text):
+    return [sentence.strip() for sentence in re.split(r'(?<=[.!?])\s+|\n+', text) if sentence.strip()]
+
+
+def wording_errors(text):
+    errors = []
+    for sentence in sentences(text):
+        for phrase in BANNED_PHRASES:
+            if re.search(rf'\b{re.escape(phrase)}\b', sentence, re.IGNORECASE):
+                errors.append(f'remove "{phrase}" from: "{sentence}"')
+        if CONTRAST_RE.search(sentence) or NOT_IT_RE.search(sentence):
+            errors.append(f'rewrite this contrast as a direct statement: "{sentence}"')
+    return errors
 
 
 def hedge_errors(line):
@@ -435,6 +454,7 @@ def check_linkedin(output, task, brief):
     if not 3 <= hashtags <= 5:
         errors.append(f'the Post has {hashtags} hashtags; the limit is 3 to 5')
     errors += hedge_errors(first_line(post))
+    errors += wording_errors(output)
     return errors
 
 
@@ -458,6 +478,7 @@ def check_x(output, task, brief):
     hashtags = len(HASHTAG_RE.findall(output))
     if hashtags > 2:
         errors.append(f'the thread has {hashtags} hashtags; the limit is 2')
+    errors += wording_errors(output)
     return errors
 
 
@@ -474,6 +495,7 @@ def check_instagram(output, task, brief):
     if words > 8:
         errors.append(f'the Image text has {words} words; the limit is 8')
     errors += hedge_errors(first_line(found.get('Caption', '')))
+    errors += wording_errors(output)
     return errors
 
 
