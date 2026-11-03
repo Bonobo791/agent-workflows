@@ -139,7 +139,8 @@ def produce(service, run, queue_claim, graph_claim, backend):
                     report_ref=failure[0]['look_report_ref']; report=json.loads(service.artifacts.get(report_ref))
                     if isinstance(report,dict) and set(report)=={'ok','lines'} and report['ok'] is False and isinstance(report['lines'],list) and all(isinstance(line,str) for line in report['lines']):
                         manifest.update(look_report_ref=report_ref,project_ref=result['project_ref'])
-                        if any(line.startswith('asset ') for line in report['lines']): manifest['reason']='text layout check failed; see visual report'
+                        failing=next((line for line in report['lines'] if line.startswith('asset ')), None)
+                        if failing is not None: manifest['reason']='text layout check failed: '+failing[:300]
             except (TypeError,ValueError,KeyError,ArtifactError): pass
             status='blocked'
         else:

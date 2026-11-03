@@ -6,11 +6,17 @@ import time
 import threading
 import traceback
 from runner.codex_session import run_codex
-from runner.output_ingest import collect_outputs
+from runner.output_ingest import collect_outputs, OutputError
 from runner.process_transport import ProcessTransport
 from runner.structured import parse_marketing_result
 from runner.trace import trace
 
+
+def _declared_blocked(output):
+    # A model that declares blocked or failed, with a reason, may leave no output files; that is its answer, not a collection error.
+    try: value=json.loads(output)
+    except (TypeError,ValueError): return False
+    return isinstance(value,dict) and value.get('status') in ('blocked','failed') and isinstance(value.get('reason'),str) and bool(value['reason'].strip())
 
 def _pipeline_fields(output,input_versions,outputs=None):
     # The model's echo of input_versions and its hashes of output files are not trusted; the pipeline sets both.
@@ -99,7 +105,7 @@ class CodexExecutor:
             if not callable(capability) or _bounded(lambda:capability(run,role,session_id,skills,model) if contextual else capability(run,role,session_id),deadline,cancelled) is not True: raise ExecutorError('persistent session unavailable')
         if _bounded(self.supervisor.preflight,deadline,cancelled) is not True: raise ExecutorError('isolated runtime preflight failed')
         execution=secrets.token_hex(32); db=self.provenance.graph.db
-        trace('exec.begin', run=run, role=role, model=model, inputs=input_versions, output_paths=output_paths, session=session_id, review_subject=review_subject)
+        trace('exec.begin', run=run, role=role, model=model, inputs=input_versions, output_paths=output_paths, session=session_id, review_subject=review_subject, skills=sorted(skills))
         db.execute('BEGIN IMMEDIATE')
         try:
             self.provenance.graph._lease(run,claim)
@@ -159,7 +165,11 @@ class CodexExecutor:
             # The supervisor, not exit of a single process, must confirm the output tree is quiescent.
             if _bounded(handle.finish,deadline,cancelled) is not True: raise ExecutorError('worker termination uncertain')
             finished=True
-            refs=collect_outputs(handle.output_dir,output_paths,self.artifacts)
+            try: refs=collect_outputs(handle.output_dir,output_paths,self.artifacts)
+            except OutputError:
+                if not _declared_blocked(result['output']): raise
+                trace('exec.declared_blocked', run=run, role=role)
+                refs=[]
             trace('exec.collected', run=run, role=role, output_paths=output_paths, refs=refs)
             result['output']=_pipeline_fields(result['output'],expected,refs)
             if image_refs is not None:

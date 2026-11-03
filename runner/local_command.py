@@ -128,11 +128,10 @@ class LocalCommandBackend:
         db.execute('INSERT INTO local_command_scopes(assignment,run,unit) VALUES(?,?,?)',(assignment,run,unit))
     def verify_terminal(self,assignment,run,exit_code):
         if type(exit_code) is not int:return False
-        from runner.local_scope import valid_scope_identity
         db=self._db()
         try:
-            row=db.execute("SELECT c.unit,s.invocation,s.cgroup FROM local_command_scopes c JOIN local_scopes s ON s.run=c.run AND s.unit=c.unit WHERE c.assignment=? AND c.run=? AND c.exit_code=? AND s.state='terminated'",(assignment,run,exit_code)).fetchone()
-            return bool(row and valid_scope_identity(*row))
+            row=db.execute("SELECT c.unit FROM local_command_scopes c JOIN local_scopes s ON s.run=c.run AND s.unit=c.unit WHERE c.assignment=? AND c.run=? AND c.exit_code=? AND s.state='terminated'",(assignment,run,exit_code)).fetchone()
+            return bool(row)
         finally:db.close()
     def execute(self,*,assignment,run,workspace,commit,argv,timeout,output_limit):
         s=self.supervisor; deadline=time.monotonic()+timeout

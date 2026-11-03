@@ -76,7 +76,7 @@ class ManualLifecycle:
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone():
             from runner.local_scope import unresolved_scope_rows
             columns={row[1] for row in db.execute('PRAGMA table_info(local_scopes)')}
-            if not {'run','unit','invocation','cgroup','state'}<=columns: raise ManualLifecycleError('local scope termination or launch remains unresolved')
+            if not {'run','unit','state'}<=columns: raise ManualLifecycleError('local scope termination or launch remains unresolved')
             if unresolved_scope_rows(db,run): raise ManualLifecycleError('local scope termination or launch remains unresolved')
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engineering_workspaces'").fetchone() and db.execute('SELECT 1 FROM engineering_workspaces WHERE run=? AND assignment IS NOT NULL',(run,)).fetchone(): raise ManualLifecycleError('engineering workspace claim remains unresolved')
     def confirm_operator_stop(self,run,incarnation,attestation):

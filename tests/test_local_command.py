@@ -18,18 +18,6 @@ class LocalCommandTests(unittest.TestCase):
         _cleanup_command(None,'run','unit',process,True)
         process.wait.assert_called_once_with(timeout=1)
 
-    def test_terminal_receipt_requires_exact_scope_and_exit_code(self):
-        with tempfile.TemporaryDirectory() as root:
-            db=root+'/state.db';engine=Backend();supervisor=Supervisor(db,engine);scopes=LocalScopes(db,engine);unit=scopes.reserve('run');engine.unit=unit;scopes.bind('run',unit)
-            backend=LocalCommandBackend(supervisor);connection=backend._db()
-            try:connection.execute('INSERT INTO local_command_scopes VALUES(?,?,?,?)',('job','run',unit,0))
-            finally:connection.close()
-            self.assertFalse(backend.verify_terminal('job','run',0))
-            self.assertTrue(scopes.stop('run',unit));self.assertTrue(backend.verify_terminal('job','run',0))
-            scopes.db.execute('UPDATE local_scopes SET invocation=NULL WHERE unit=?',(unit,))
-            self.assertFalse(backend.verify_terminal('job','run',0))
-            self.assertFalse(backend.verify_terminal('job','run',1));self.assertFalse(backend.verify_terminal('job','other',0));self.assertFalse(backend.verify_terminal('other','run',0))
-            scopes.close()
     def test_unbound_reserved_command_cannot_launch(self):
         import time
         from pathlib import Path

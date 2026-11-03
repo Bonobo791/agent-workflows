@@ -36,6 +36,7 @@ class LocalBuilderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); jobs=root/'jobs';jobs.mkdir(mode=0o700)
             skills=root/'skills'/'author';skills.mkdir(parents=True);(skills/'SKILL.md').write_text('Make a synthetic film.')
+            (root/'MANUAL.md').write_text('# OpenFilm\nSynthetic manual.\n')
             binary=root/'codex';binary.write_text('synthetic');binary.chmod(0o700)
             script=root/'fake.py';script.write_text(FAKE);backend=Backend()
             factory=lambda service:LocalSupervisor(str(root/'state.db'),str(binary),{'HOME':str(root)},backend,lambda run:True,lambda run,role:str(root),lambda:True,{'mcp_servers':[],'plugins':[]},policy_hash='a'*64)

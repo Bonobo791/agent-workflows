@@ -191,7 +191,7 @@ class LocalMarketingGraphLiveTests(unittest.TestCase):
         finally:
             heartbeat.__exit__(None,None,None)
             service.lifecycle.close(); service.close()
-            from tests.test_local_executor_crash_live import cleanup_crash_fixture
+            from tests.fixture_cleanup import cleanup_crash_fixture
             from types import SimpleNamespace
             try:
                 if completed and os.environ.get('WORKFLOW_TEST_PRESERVE')!='1': cleanup_crash_fixture(temporary,backend)

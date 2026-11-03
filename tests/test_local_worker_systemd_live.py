@@ -17,7 +17,7 @@ from runner.local_process import start_local_process
 from runner.local_scope import SystemdScopes
 from runner.protocol import AppServer
 from runner.service import Service
-from tests.test_local_executor_crash_live import cleanup_crash_fixture
+from tests.fixture_cleanup import cleanup_crash_fixture
 
 
 def write_environment(path,values):

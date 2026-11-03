@@ -22,7 +22,7 @@ class PlatformReviewerLiveTests(unittest.TestCase):
         from runner.service import Service
         from runner.skills import SkillResolver
         from runner.worker import manual_fence_ready
-        from tests.test_local_executor_crash_live import cleanup_crash_fixture
+        from tests.fixture_cleanup import cleanup_crash_fixture
 
         temporary=tempfile.TemporaryDirectory(prefix='workflow-platform-live-',delete=False)
         root=Path(temporary.name); workspace=root/'workspace'; workspace.mkdir(mode=0o700)

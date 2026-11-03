@@ -8,6 +8,31 @@ from runner.control import ControlPlane, UnixControlServer
 from runner.service import Service
 
 REQUIRED_SEO_SKILL='plan-seo-geo-growth'
+OPENFILM_SKILL='openfilm'
+
+def _attach_openfilm_skill(service,package_root,state_root):
+    # The OpenFilm manual is the asset_production skill: Codex writes film.html from it, and the render checks it.
+    from runner.skills import SkillError, SkillResolver
+    from runner.trace import trace
+    try: manual=(Path(package_root).resolve()/'MANUAL.md').read_text(encoding='utf-8')
+    except (OSError,UnicodeError) as exc: raise ConfigurationError('OpenFilm manual unavailable') from exc
+    skills_root=Path(state_root).resolve()/'openfilm-skill'
+    target=skills_root/OPENFILM_SKILL/'SKILL.md'
+    body='---\nname: openfilm\ndescription: Write OpenFilm films (film.html, pages and clips) from the supplied brief.\n---\n\n'+manual
+    if not target.is_file() or target.read_text(encoding='utf-8')!=body:
+        target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+        temporary=target.with_suffix('.tmp'); temporary.write_text(body,encoding='utf-8'); os.replace(temporary,target)
+    resolver=service.skill_resolver
+    try:
+        if resolver is None: raise SkillError('no skill resolver')
+        resolver.resolve([OPENFILM_SKILL])  # an operator's own openfilm skill stands; two copies would be ambiguous
+        source='operator'
+    except SkillError:
+        source='manual'
+        service.skill_resolver=SkillResolver(([str(root) for root in resolver.roots] if resolver is not None else [])+[str(skills_root)])
+    names=service.required_skills.setdefault('asset_production',[])
+    if OPENFILM_SKILL not in names: names.append(OPENFILM_SKILL)
+    trace('worker.openfilm_skill', source=source, names=names, bytes=len(body.encode('utf-8')))
 
 class ConfigurationError(RuntimeError): pass
 
@@ -82,6 +107,7 @@ def build_control(root, secret, *, openfilm_package_root=None, execution_mode='d
             service.openfilm_reviewer=LocalAssetReviewer(service)
         package_root=openfilm_package_root or os.environ.get('OPENFILM_PACKAGE_ROOT')
         if execution_mode=='local' and package_root and service.model_supervisor is not None:
+            _attach_openfilm_skill(service,package_root,root)
             from runner.openfilm_builder import CodexOpenFilmProjectBuilder
             from runner.openfilm_local import LocalOpenFilmBackend
             builder=openfilm_builder_factory(service) if openfilm_builder_factory is not None else CodexOpenFilmProjectBuilder(service)

@@ -99,7 +99,11 @@ export async function renderAssets(brief, projectRoot, outputRoot, api) {
     await confinedFile(project, join(folder, 'film.html'));
     let layout;
     try { layout = await api.layout(folder); }
-    catch { layout = ['layout inspection unavailable']; }
+    catch (error) {
+      const detail = String(error && error.message ? error.message : error).replace(/"data:[^"]*"/g, '"data…"').slice(0, 400);
+      log('asset.layout_error', { index, detail });
+      layout = [`layout inspection unavailable: ${detail}`];
+    }
     if (!Array.isArray(layout) || layout.some(x => typeof x !== 'string')) layout = ['layout inspection unavailable'];
     log('asset.layout', { index, problems: layout.slice(0, 12) });
     if (layout.length) {

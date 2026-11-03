@@ -1,10 +1,10 @@
-"""Durable record of local systemd scopes.
+"""Durable record of local systemd scopes: one row per scope, (run, unit, state).
 
-A scope is recorded before launch, bound once systemd reports it active, and marked
-terminated only after systemd reports the unit inactive or failed. Unresolved rows
-block shutdown and manual stop.
+A scope is recorded before launch, marked running once systemd reports it active, and
+terminated only after systemd reports it inactive or failed. Unresolved rows block
+shutdown and manual stop.
 """
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import secrets
 import sqlite3
@@ -14,14 +14,6 @@ class ScopeError(RuntimeError): pass
 
 # systemd reports a scope stopped by a timeout or kill as 'failed'.
 STOPPED_STATES=('inactive','failed')
-
-def valid_scope_identity(unit,invocation,cgroup):
-    return (isinstance(unit,str) and bool(unit) and isinstance(invocation,str) and re.fullmatch(r'[0-9a-f]{32}',invocation) is not None
-            and isinstance(cgroup,str) and cgroup.startswith('/') and cgroup.endswith('/'+unit) and '..' not in PurePosixPath(cgroup).parts)
-
-def valid_terminated_scope(db,run,unit):
-    row=db.execute("SELECT invocation,cgroup FROM local_scopes WHERE run=? AND unit=? AND state='terminated'",(run,unit)).fetchone()
-    return bool(row and valid_scope_identity(unit,*row))
 
 def unresolved_scope_rows(db,run):
     return db.execute("SELECT unit,state FROM local_scopes WHERE run=? AND state IS NOT 'terminated' ORDER BY unit",(run,)).fetchall()
@@ -65,14 +57,14 @@ class SystemdScopes:
         try: self._run('show-environment')
         except ScopeError as exc: raise ScopeError(f'systemctl --user cannot reach a user manager; start a user session manager ({exc})') from exc
     def inspect(self,unit):
-        result=self._run('show',unit,'--property=Id','--property=LoadState','--property=ActiveState','--property=InvocationID','--property=ControlGroup')
+        result=self._run('show',unit,'--property=Id','--property=LoadState','--property=ActiveState')
         fields={}
         for line in result.splitlines():
             key,sep,value=line.partition('=')
             if not sep or key in fields: raise ScopeError('invalid scope inspection')
             fields[key]=value
-        if set(fields)!={'Id','LoadState','ActiveState','InvocationID','ControlGroup'}: raise ScopeError('invalid scope inspection')
-        return dict(id=fields['Id'],load=fields['LoadState'],active=fields['ActiveState'],invocation=fields['InvocationID'],cgroup=fields['ControlGroup'])
+        if set(fields)!={'Id','LoadState','ActiveState'}: raise ScopeError('invalid scope inspection')
+        return dict(id=fields['Id'],load=fields['LoadState'],active=fields['ActiveState'])
     def stop(self,unit): self._run('stop',unit); return True
 
 class LocalScopes:
@@ -80,7 +72,7 @@ class LocalScopes:
         self.backend=backend
         self.db=sqlite3.connect(path,timeout=10,isolation_level=None)
         if not self.db.execute('PRAGMA database_list').fetchone()[2]: raise ScopeError('durable database required')
-        self.db.execute('CREATE TABLE IF NOT EXISTS local_scopes(run TEXT NOT NULL,unit TEXT PRIMARY KEY,invocation TEXT,cgroup TEXT,state TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS local_scopes(run TEXT NOT NULL,unit TEXT PRIMARY KEY,state TEXT NOT NULL)')
         # Enforces one unresolved scope per run.
         try: self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS local_scopes_live_v2 ON local_scopes(run) WHERE state IS NOT 'terminated'")
         except sqlite3.IntegrityError as exc:
@@ -100,16 +92,15 @@ class LocalScopes:
         if not row: raise ScopeError('scope assignment unavailable')
         return row[0]
     def inspect(self,run,unit):
-        row=self.db.execute('SELECT invocation,cgroup,state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
+        row=self.db.execute('SELECT state FROM local_scopes WHERE run=? AND unit=?',(run,unit)).fetchone()
         if not row: raise ScopeError('scope assignment unavailable')
         try: observed=self.backend.inspect(unit)
         except ScopeError: observed=None
-        return {'recorded':{'unit':unit,'state':row[2],'invocation':row[0],'cgroup':row[1]},'observed':observed}
+        return {'recorded':{'unit':unit,'state':row[0]},'observed':observed}
     def bind(self,run,unit):
         info=self.backend.inspect(unit)
-        group=info.get('cgroup','')
-        if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active' or not valid_scope_identity(unit,info.get('invocation'),group): raise ScopeError('active scope identity unverified')
-        if self.db.execute("UPDATE local_scopes SET state='running',invocation=?,cgroup=? WHERE run=? AND unit=? AND state='starting'",(info['invocation'],group,run,unit)).rowcount!=1: raise ScopeError('scope assignment changed')
+        if info.get('id')!=unit or info.get('load')!='loaded' or info.get('active')!='active': raise ScopeError('active scope unverified')
+        if self.db.execute("UPDATE local_scopes SET state='running' WHERE run=? AND unit=? AND state='starting'",(run,unit)).rowcount!=1: raise ScopeError('scope assignment changed')
     def assert_active(self,run,unit):
         if not self.db.execute("SELECT 1 FROM local_scopes WHERE run=? AND unit=? AND state='running'",(run,unit)).fetchone(): raise ScopeError('running scope unavailable')
         if self.backend.inspect(unit).get('active')!='active': raise ScopeError('running scope unavailable')
