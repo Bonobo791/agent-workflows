@@ -346,6 +346,10 @@ class DesignSystemTest(unittest.TestCase):
     def test_design_system_is_required_for_images(self):
         self.assertTrue(run.check_task(task_text('article, social, images', design_system='None.')))
 
+    def test_design_system_section_is_optional_without_images_or_reel(self):
+        self.assertEqual(run.check_task(task_text('article, social', without='Design system')), [])
+        self.assertTrue(run.check_task(task_text('article, social, images', without='Design system')))
+
     def test_design_system_file_must_exist(self):
         errors = run.check_task(task_text('article, social, images', design_system='nosuchsystem'))
         self.assertTrue(any('not found' in error for error in errors))

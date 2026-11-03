@@ -41,7 +41,7 @@ A step that fails the automatic checks goes back to the writer without a reviewe
 
 ## Task file
 
-Every task has these sections, in this order. Each one must be present and not empty; `None.` is allowed.
+Every task has these sections, in this order. Each one must be present and not empty; `None.` is allowed. `## Design system` is needed only when Deliverables include images or reel.
 
 ```
 # Task: <title>
