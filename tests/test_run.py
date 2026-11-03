@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'marketing'))
 import run  # noqa: E402
+from codex_client import CodexClient, CodexError  # noqa: E402
 
 ROLES = {
     'writer': {'model': 'w', 'effort': 'max'},
@@ -59,10 +60,11 @@ def task_text(deliverables='article', without=None, design_system='None.'):
 class FakeClient:
     """Stands in for CodexClient. `verdicts` is the reviewer's answers, in order."""
 
-    def __init__(self, verdicts, writer_text=None, models=MODELS, writer_outputs=()):
+    def __init__(self, verdicts, writer_text=None, models=MODELS, writer_outputs=(), searches=()):
         self.verdicts = list(verdicts)
         self.writer_text = writer_text
         self.writer_outputs = list(writer_outputs)  # JSON texts for the writer's calls, in order
+        self.searches = list(searches)  # web search queries each turn reports
         self.models_available = models
         self.prompts = []
         self.calls = []
@@ -88,7 +90,7 @@ class FakeClient:
             text = self.writer_text
         else:
             text = json.dumps({'output': f'draft {len(self.prompts)}', 'notes': ''})
-        return {'thread_id': thread_id, 'text': text, 'usage': USAGE}
+        return {'thread_id': thread_id, 'text': text, 'usage': USAGE, 'searches': list(self.searches)}
 
 
 def answers(*values):
@@ -320,9 +322,72 @@ class ChecksTest(unittest.TestCase):
 
     def test_sources_facts_need_a_source(self):
         bad = '## Facts\n- Ledgerly exports CSV files\n\n## Not found\nNone.\n'
-        good = '## Facts\n- Ledgerly exports CSV files https://example.com/export (checked 2026-11-03)\n- Plans start in December (from task)\n\n## Not found\nNone.\n'
-        self.assertTrue(run.check_sources(bad, '', None))
-        self.assertEqual(run.check_sources(good, '', None), [])
+        self.assertTrue(any('no source' in error for error in run.check_sources(bad, '', None, ['q'] * 5)))
+
+
+def sources_text(urls=5, sites=3, task_fact=True):
+    lines = [f'- Fact {n} https://site{n % sites}.example.com/page{n} (checked 2026-11-03)' for n in range(urls)]
+    if task_fact:
+        lines.append('- Plans start in December (from task)')
+    return '## Facts\n' + '\n'.join(lines) + '\n\n## Not found\nNone.\n'
+
+
+class SourcesTest(unittest.TestCase):
+    def test_enough_searches_urls_and_sites_pass(self):
+        self.assertEqual(run.check_sources(sources_text(), '', None, ['q'] * 5), [])
+
+    def test_fewer_than_five_searches_fail(self):
+        errors = run.check_sources(sources_text(), '', None, ['q'] * 4)
+        self.assertEqual(len(errors), 1)
+        self.assertIn('ran 4 web searches', errors[0])
+
+    def test_task_facts_do_not_count_as_url_facts(self):
+        errors = run.check_sources(sources_text(urls=4), '', None, ['q'] * 5)
+        self.assertIn('found 4', ' '.join(errors))
+
+    def test_urls_must_come_from_three_sites(self):
+        errors = run.check_sources(sources_text(sites=2), '', None, ['q'] * 5)
+        self.assertIn('2 different sites', ' '.join(errors))
+
+    def test_www_prefix_is_the_same_site(self):
+        facts = ['- A https://www.a.com/x (checked 2026-11-03)', '- B https://a.com/y (checked 2026-11-03)',
+                 '- C https://b.com/z (checked 2026-11-03)', '- D https://b.com/w (checked 2026-11-03)',
+                 '- E https://www.b.com/v (checked 2026-11-03)']
+        output = '## Facts\n' + '\n'.join(facts) + '\n\n## Not found\nNone.\n'
+        self.assertIn('2 different sites', ' '.join(run.check_sources(output, '', None, ['q'] * 5)))
+
+
+class WebSearchItemTest(unittest.TestCase):
+    def client_replying(self, items):
+        client = CodexClient.__new__(CodexClient)  # no app-server process: the replies are scripted
+        client.next_id, client.loaded = 0, set()
+        client._request = lambda method, params: {'thread': {'id': 't'}}
+        client._send = lambda message: None
+        replies = iter([{'method': 'item/completed', 'params': {'item': item}} for item in items]
+                       + [{'method': 'thread/tokenUsage/updated', 'params': {'threadId': 't', 'tokenUsage': {'total': USAGE}}},
+                          {'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}}])
+        client._recv = lambda: next(replies)
+        return client
+
+    def test_search_without_query_fails_loudly(self):
+        client = self.client_replying([{'type': 'webSearch', 'id': 'w1'}])
+        with self.assertRaisesRegex(CodexError, 'webSearch item has no query field'):
+            client.run_turn('p', 'm', 'low', '/tmp', thread_id='t')
+
+    def test_search_query_is_returned(self):
+        client = self.client_replying([{'type': 'webSearch', 'id': 'w1', 'query': 'ledgerly csv export'}])
+        result = client.run_turn('p', 'm', 'low', '/tmp', thread_id='t')
+        self.assertEqual(result['searches'], ['ledgerly csv export'])
+
+
+class SearchLogTest(unittest.TestCase):
+    def test_each_web_search_is_logged_and_returned(self):
+        client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])
+        tmp = Path(tempfile.mkdtemp())
+        with self.assertLogs('marketing', level='INFO') as logs:
+            _, _, searches = run.call_codex(client, {'model': 'm', 'effort': 'low'}, 'prompt', tmp, None, tmp / 'writer.json', 'writer', web=True)
+        self.assertEqual(searches, ['ledgerly csv export', 'instagram alt text rules'])
+        self.assertIn('writer: web search: ledgerly csv export', '\n'.join(logs.output))
 
 
 class ImagesTest(unittest.TestCase):
@@ -563,8 +628,8 @@ class CubicFixesTest(unittest.TestCase):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
         campaign.mkdir(parents=True)
         (campaign / '00-task.md').write_text(task_text())
-        sources = json.dumps({'output': '## Facts\n- A fact https://example.com (checked 2026-11-03)\n\n## Not found\nNone.\n', 'notes': ''})
-        client = FakeClient(['pass'], writer_outputs=[sources])
+        sources = json.dumps({'output': sources_text(), 'notes': ''})
+        client = FakeClient(['pass'], writer_outputs=[sources], searches=['q'] * 5)
         run.run_campaign(campaign, client, ask=answers('a'), steps=[run.STEPS[0]], skills_dir=run.SKILLS_DIR, roles=ROLES)
         self.assertEqual(client.web_searches, ['live', 'live'])  # writer and reviewer
         other = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
@@ -595,6 +660,20 @@ class ImportTest(unittest.TestCase):
         with self.assertRaises(run.WorkflowError):
             run.import_issue(client, self.campaign, 'MC-32', skills_dir=self.tmp / 'skills', roles=ROLES)
         self.assertFalse((self.campaign / '00-task.md').exists())
+
+
+class ImportFilterTest(unittest.TestCase):
+    def test_recheck_after_lines_stop_the_import(self):
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / 'skills' / 'import').mkdir(parents=True)
+        (tmp / 'skills' / 'import' / 'SKILL.md').write_text('import the issue')
+        campaign = tmp / 'campaigns' / 'mc-32'
+        campaign.mkdir(parents=True)
+        output = task_text() + 'Recheck after: 2027-01-05\n'
+        client = FakeClient([], writer_text=json.dumps({'output': output, 'notes': ''}))
+        with self.assertRaisesRegex(run.WorkflowError, '"recheck after" lines are not allowed; the workflow researches when it runs'):
+            run.import_issue(client, campaign, 'MC-32', skills_dir=tmp / 'skills', roles=ROLES)
+        self.assertFalse((campaign / '00-task.md').exists())
 
 
 class ReadInputTest(unittest.TestCase):

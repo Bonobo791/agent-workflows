@@ -138,7 +138,7 @@ class CodexClient:
         self.next_id += 1
         turn_request = self.next_id
         self._send({'id': turn_request, 'method': 'turn/start', 'params': params})
-        messages, usage, status, error = [], None, None, None
+        messages, searches, usage, status, error = [], [], None, None, None
         while True:
             message = self._recv()
             if 'id' in message and 'method' in message:
@@ -150,6 +150,10 @@ class CodexClient:
                 item = message['params'].get('item', {})
                 if item.get('type') == 'agentMessage' and item.get('text'):
                     messages.append(item['text'])
+                elif item.get('type') == 'webSearch':
+                    if 'query' not in item:
+                        raise CodexError(f'webSearch item has no query field: {item}')
+                    searches.append(item['query'])
             elif method == 'thread/tokenUsage/updated' and message['params']['threadId'] == thread_id:
                 usage = message['params']['tokenUsage']['total']
             elif method == 'turn/completed':
@@ -161,4 +165,4 @@ class CodexClient:
             raise CodexError(f'turn ended with status {status!r}: {error}')
         if usage is None:
             raise CodexError('turn completed without a thread/tokenUsage/updated notification')
-        return {'thread_id': thread_id, 'text': messages[-1] if messages else '', 'usage': usage}
+        return {'thread_id': thread_id, 'text': messages[-1] if messages else '', 'usage': usage, 'searches': searches}

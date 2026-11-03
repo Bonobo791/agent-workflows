@@ -15,6 +15,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -38,6 +39,10 @@ MAX_REVIEW_FRAMES = 10
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
 URL_RE = re.compile(r'https?://\S+')
+RECHECK_RE = re.compile(r're-?check after', re.IGNORECASE)
+MIN_SEARCHES = 5  # the sources step
+MIN_URL_FACTS = 5
+MIN_SITES = 3
 HASHTAG_RE = re.compile(r'(?<!\w)#\w+')
 X_POST_START_RE = re.compile(r'^\d+/', re.MULTILINE)
 LINK = '[ARTICLE LINK]'
@@ -270,6 +275,8 @@ def check_task(task, design=True):
     if not (task.splitlines() or [''])[0].startswith('# Task: '):
         errors.append('the first line must start with "# Task: "')
     errors += missing_sections(task, TASK_SECTIONS)
+    if any(RECHECK_RE.search(line) for line in task.splitlines()):
+        errors.append('"recheck after" lines are not allowed; the workflow researches when it runs')
     if 'Deliverables' in sections(task):
         try:
             wanted = parse_deliverables(task)
@@ -328,12 +335,24 @@ def x_posts(output):
     return [output[start:end].strip() for start, end in zip(starts, ends)]
 
 
-def check_sources(output, task, brief):
+def site_of(fact):
+    return (urlparse(URL_RE.search(fact).group(0)).hostname or '').removeprefix('www.')
+
+
+def check_sources(output, task, brief, searches=()):
     errors = missing_sections(output, ['Facts', 'Not found'])
     facts = facts_of(output)
     if not facts:
         errors.append('the Facts section needs at least one "- " line')
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts if not has_source(fact)]
+    if len(searches) < MIN_SEARCHES:
+        errors.append(f'the sources step ran {len(searches)} web searches; it needs at least {MIN_SEARCHES}')
+    url_facts = [fact for fact in facts if URL_RE.search(fact)]
+    if len(url_facts) < MIN_URL_FACTS:
+        errors.append(f'the Facts need at least {MIN_URL_FACTS} facts with a URL; found {len(url_facts)}')
+    sites = {site_of(fact) for fact in url_facts}
+    if len(sites) < MIN_SITES:
+        errors.append(f'the URL facts cite {len(sites)} different sites; they need at least {MIN_SITES}')
     return errors
 
 
@@ -546,7 +565,14 @@ def call_codex(client, role, prompt, cwd, schema, save_path, what, images=(), we
     record_usage(cwd, what, role, result)
     log.info('%s: answered in %.0f s on thread %s; thread total so far: %s', what, time.monotonic() - started,
              result['thread_id'], usage_line(result['usage']))
-    return parse_json(result['text'], save_path, what), result['thread_id']
+    for query in result['searches']:
+        log.info('%s: web search: %s', what, query)
+    return parse_json(result['text'], save_path, what), result['thread_id'], result['searches']
+
+
+def read_searches(step_dir):
+    path = step_dir / 'searches.txt'
+    return path.read_text().splitlines() if path.is_file() else []
 
 
 def safe_write(root, rel_path, content):
@@ -684,6 +710,8 @@ def read_writer_thread(step_dir):
 def write(client, roles, skills_dir, campaign, step, step_dir, revision):
     for stale in ('review.json', 'review.md'):
         (step_dir / stale).unlink(missing_ok=True)
+    if revision is None:
+        (step_dir / 'searches.txt').unlink(missing_ok=True)
     print(f"[{step['id']}] writer working...")
     if revision is None:
         log.info('[%s] first draft', step['id'])
@@ -692,9 +720,11 @@ def write(client, roles, skills_dir, campaign, step, step_dir, revision):
         review, notes = revision
         log.info('[%s] revising: %s', step['id'], 'owner notes' if notes else 'automatic rewrite of the review findings')
         prompt, thread_id = revision_prompt(step, review, notes), read_writer_thread(step_dir)
-    written, thread_id = call_codex(client, roles[step['role']], prompt, step_dir, WRITER_SCHEMAS[step['kind']], step_dir / 'writer.json',
-                                    'writer', web=step['web'], thread_id=thread_id, persist=True)
+    written, thread_id, searches = call_codex(client, roles[step['role']], prompt, step_dir, WRITER_SCHEMAS[step['kind']],
+                                              step_dir / 'writer.json', 'writer', web=step['web'], thread_id=thread_id, persist=True)
     (step_dir / 'writer-thread.txt').write_text(thread_id + '\n')
+    with (step_dir / 'searches.txt').open('a') as file:  # every web search the writer ran in this step, across revisions
+        file.write(''.join(query + '\n' for query in searches))
     return written, materialize(step, step_dir, written)
 
 
@@ -702,7 +732,11 @@ def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
     errors = []
     if step['check'] is not None:
         brief = (campaign / '02-brief' / 'output.md').read_text() if step['id'] in ('03-article', '04-linkedin', '05-x', '06-instagram') else None
-        errors = CHECKS[step['check']]((step_dir / 'output.md').read_text(), (campaign / '00-task.md').read_text(), brief)
+        output, task = (step_dir / 'output.md').read_text(), (campaign / '00-task.md').read_text()
+        if step['check'] == 'sources':
+            errors = check_sources(output, task, brief, read_searches(step_dir))
+        else:
+            errors = CHECKS[step['check']](output, task, brief)
     if errors:
         print(f"[{step['id']}] automatic checks failed; skipping the reviewer")
         log.info('[%s] automatic checks failed (%d): %s', step['id'], len(errors), '; '.join(errors))
@@ -713,7 +747,8 @@ def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
             log.info('[%s] automatic checks passed', step['id'])
         print(f"[{step['id']}] reviewer working...")
         prompt = review_prompt(skills_dir, campaign, step, step_dir)
-        review, _ = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images, web=step['web'])
+        review, _, _ = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images,
+                                  web=step['web'])
         if any(finding['severity'] == 'blocking' for finding in review['findings']):
             review['verdict'] = 'revise'
     blocking = sum(finding['severity'] == 'blocking' for finding in review['findings'])
@@ -826,14 +861,15 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
 def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
     check_models(client, roles, [{'role': 'writer'}])
     prompt = '\n\n'.join([load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)])
-    written, _ = call_codex(client, roles['writer'], prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer')
-    errors = check_task(written['output'], design=False)  # the owner sets the design system when checking 00-task.md
-    log.info('import: task text %d characters; task check %s', len(written['output']), 'passed' if not errors else 'failed: ' + '; '.join(errors))
+    written, _, _ = call_codex(client, roles['writer'], prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer')
+    output = written['output']
+    errors = check_task(output, design=False)  # the owner sets the design system when checking 00-task.md
+    log.info('import: task text %d characters; task check %s', len(output), 'passed' if not errors else 'failed: ' + '; '.join(errors))
     log.info('import notes: %s', written['notes'] or 'none')
     if errors:
         raise WorkflowError(f"the imported task is not valid ({'; '.join(errors)}); see {campaign / 'import.json'}")
-    (campaign / '00-task.md').write_text(written['output'].rstrip() + '\n')
-    return written['output']
+    (campaign / '00-task.md').write_text(output.rstrip() + '\n')
+    return output
 
 
 def cmd_new(name, task_file, issue):

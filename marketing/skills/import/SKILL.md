@@ -44,5 +44,7 @@ Rules:
 - Start dates, due dates and "do not start before" lines go under Details as "Schedule: ...", never under Constraints.
 - If the issue asks for social, images or reel without an article, include article and add this line under Constraints: - Article added because the social posts link to it; owner to confirm.
 - If the Deliverables include images or reel, write a `## Design system` section after Constraints with the body `None.`, and add this line under Constraints: - Design system not set; owner to choose one from marketing/design-systems/. Otherwise leave the section out.
+- Leave out internal process lines: who does a step, approval routes, internal checklists, and notes to the team about how the work runs. Keep only what the campaign's content needs.
+- Leave out any "recheck after" date or line. Keep other dates.
 - Use no em dashes. Never invent a fact.
 - If the tracker cannot be reached, return an empty output and say why in notes.
