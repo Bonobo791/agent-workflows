@@ -51,6 +51,7 @@ def task_text(deliverables='article', without=None, design_system='None.'):
         ('Sources', 'None.'),
         ('Required headings', 'None.'),
         ('Constraints', 'None.'),
+        ('Voice', 'moderaty'),
         ('Design system', design_system),
     ]
     body = ''.join(f'## {name}\n{text}\n\n' for name, text in parts if name != without)
@@ -378,6 +379,34 @@ class WebSearchItemTest(unittest.TestCase):
         client = self.client_replying([{'type': 'webSearch', 'id': 'w1', 'query': 'ledgerly csv export'}])
         result = client.run_turn('p', 'm', 'low', '/tmp', thread_id='t')
         self.assertEqual(result['searches'], ['ledgerly csv export'])
+
+
+class VoiceAndAngleTest(unittest.TestCase):
+    def test_brief_needs_an_angle(self):
+        brief = full_brief('- Target length: 800 words').replace('## Angle\nText.\n\n', '')
+        self.assertTrue(any('Angle' in error for error in run.check_brief(brief, task_text(), None)))
+
+    def test_hook_with_a_hedge_word_fails(self):
+        def linkedin(first_line):
+            return f'## Post\n{first_line}\n\nLink in the first comment.\n#one #two #three\n\n## First comment\n{run.LINK}\n'
+        bad = run.check_linkedin(linkedin('YouTube Studio may be enough'), task_text(), None)
+        self.assertIn('the first line uses "may"; open on the reader\'s problem instead', bad)
+        self.assertEqual(run.check_linkedin(linkedin('You wake up to 300 spam comments'), task_text(), None), [])
+        self.assertEqual(run.check_linkedin(linkedin('Maybe you need a filter'), task_text(), None), [])
+
+    def test_x_hook_ignores_the_post_number(self):
+        output = f'1/ You wake up to 300 spam comments.\n\n2/ Moderaty may help {run.LINK}'
+        errors = run.check_x(output, task_text(), None)
+        self.assertEqual([error for error in errors if 'uses' in error], ['the first line uses "may"; open on the reader\'s problem instead'])
+
+    def test_voice_file_needs_every_section_filled(self):
+        template = (run.VOICE_DIR / 'TEMPLATE.md').read_text()
+        self.assertEqual(len(run.check_voice(template)), len(run.VOICE_SECTIONS))
+        filled = ''.join(f'## {heading}\nFilled in.\n\n' for heading in run.VOICE_SECTIONS)
+        self.assertEqual(run.check_voice(filled), [])
+
+    def test_voice_must_name_a_file(self):
+        self.assertIn('not None', ' '.join(run.voice_errors(task_text().replace('## Voice\nmoderaty\n', '## Voice\nNone.\n'))))
 
 
 class SearchLogTest(unittest.TestCase):

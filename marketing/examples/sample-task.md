@@ -24,5 +24,8 @@ None.
 ## Constraints
 None.
 
+## Voice
+TEMPLATE
+
 ## Design system
 TEMPLATE

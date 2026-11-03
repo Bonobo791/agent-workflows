@@ -16,6 +16,9 @@ Blocking findings:
 - The line before the hashtags is not a genuine question the reader can answer from their own work.
 - Engagement bait, one-line-per-paragraph drama, or an invented personal story.
 - Any em dash.
+- The first line names a product or feature, not the reader's problem or a concrete moment.
+- The post is mainly a feature list with no example or scene.
+- A banned hedge word in the hook (may, might, describes, positions, offers, various).
 
 Minor findings:
 - Paragraph length, whitespace, wording.

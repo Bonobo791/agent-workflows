@@ -47,21 +47,27 @@ HASHTAG_RE = re.compile(r'(?<!\w)#\w+')
 X_POST_START_RE = re.compile(r'^\d+/', re.MULTILINE)
 LINK = '[ARTICLE LINK]'
 X_LINK_LENGTH = 23
-BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Open questions']
+BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Angle', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Open questions']
 TARGET_RE = re.compile(r'^- Target length: (\d+) words$', re.MULTILINE)
 META_MIN = 150
 META_MAX = 160
 LENGTH_TOLERANCE = 0.2
 USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 DELIVERABLES = ['article', 'social', 'images', 'reel']
-TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints']
+TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints', 'Voice']
 # Design system names are file names: letters, digits and hyphens. TEMPLATE is uppercase, so NAME_RE would reject it.
 DESIGN_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]*$')
 DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not']
+# Voice files are named like design systems. A section still holding its template note stops the run.
+VOICE_DIR = HERE / 'voice'
+VOICE_SECTIONS = ['Personality', 'Tone', 'How we talk to the reader', 'Sentence style', 'Words we use', 'Words we never use',
+                  'Posts we like', "Posts we don't like"]
+TEMPLATE_NOTE = 'Template note:'
+HEDGE_WORDS = ['may', 'might', 'describes', 'positions', 'offers', 'various']
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
-SOCIAL_INPUTS = ['02-brief', '03-article#outline']
-SOCIAL_REVIEW_INPUTS = ['02-brief#Keywords', '02-brief#Facts', '02-brief#Channel ideas']
+SOCIAL_INPUTS = ['voice', '02-brief', '03-article#outline']
+SOCIAL_REVIEW_INPUTS = ['voice', '02-brief#Keywords', '02-brief#Facts', '02-brief#Channel ideas']
 IMAGE_INPUTS = ['design-system', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
 REEL_INPUTS = ['design-system', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
 STEPS = [
@@ -69,10 +75,10 @@ STEPS = [
      'inputs': ['00-task'], 'review_inputs': ['00-task'],
      'writer_skills': ['content-research-and-sourcing'], 'review_skills': ['content-research-and-sourcing']},
     {'id': '02-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'brief',
-     'inputs': ['00-task', '01-sources'], 'review_inputs': ['00-task', '01-sources'],
+     'inputs': ['voice', '00-task', '01-sources'], 'review_inputs': ['voice', '00-task', '01-sources'],
      'writer_skills': ['content-brief'], 'review_skills': ['content-brief']},
     {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'article',
-     'inputs': ['00-task', '02-brief'], 'review_inputs': ['00-task', '02-brief'],
+     'inputs': ['voice', '00-task', '02-brief'], 'review_inputs': ['voice', '00-task', '02-brief'],
      'writer_skills': ['stop-slop', 'on-page-seo', 'internal-linking', 'educational-content-and-how-to'],
      'review_skills': ['stop-slop', 'on-page-seo']},
     {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'linkedin',
@@ -403,6 +409,17 @@ def check_article(output, task, brief):
     return errors
 
 
+def first_line(text):
+    return next((line.strip() for line in text.splitlines() if line.strip()), '')
+
+
+def hedge_errors(line):
+    for word in HEDGE_WORDS:
+        if re.search(rf'\b{word}\b', line, re.IGNORECASE):
+            return [f'the first line uses "{word}"; open on the reader\'s problem instead']
+    return []
+
+
 def check_linkedin(output, task, brief):
     errors = missing_sections(output, ['Post', 'First comment'])
     found = sections(output)
@@ -416,6 +433,7 @@ def check_linkedin(output, task, brief):
     hashtags = len(HASHTAG_RE.findall(post))
     if not 3 <= hashtags <= 5:
         errors.append(f'the Post has {hashtags} hashtags; the limit is 3 to 5')
+    errors += hedge_errors(first_line(post))
     return errors
 
 
@@ -432,6 +450,7 @@ def check_x(output, task, brief):
         length = len(post.replace(LINK, 'x' * X_LINK_LENGTH))
         if length > 280:
             errors.append(f'post {number} is {length} characters (the link counts as {X_LINK_LENGTH}); the limit is 280')
+        errors += hedge_errors(first_line(re.sub(r'^\d+/\s*', '', post)))
     links = output.count(LINK)
     if links != 1 or LINK not in posts[-1]:
         errors.append(f'{LINK} must appear exactly once, in the last post (it appears {links} times)')
@@ -453,7 +472,32 @@ def check_instagram(output, task, brief):
     words = len(found.get('Image text', '').split())
     if words > 8:
         errors.append(f'the Image text has {words} words; the limit is 8')
+    errors += hedge_errors(first_line(found.get('Caption', '')))
     return errors
+
+
+def check_voice(text):
+    found = sections(text)
+    errors = []
+    for heading in VOICE_SECTIONS:
+        body = found.get(heading, '')
+        if not body:
+            errors.append(f'voice file: section "## {heading}" is missing or empty')
+        elif any(line.startswith(TEMPLATE_NOTE) for line in body.splitlines()):
+            errors.append(f'voice file: section "## {heading}" still has its template note')
+    return errors
+
+
+def voice_errors(task):
+    name = sections(task).get('Voice', '')
+    if name in ('', 'None.'):
+        return ['the task needs a ## Voice section that names a voice file in marketing/voice/, not None.']
+    if not DESIGN_NAME_RE.match(name):
+        return [f'voice name "{name}" must use letters, digits and hyphens only']
+    path = VOICE_DIR / f'{name}.md'
+    if not path.is_file():
+        return [f'voice file not found: {path}']
+    return [f'{path.name}: {error}' for error in check_voice(path.read_text())]
 
 
 CHECKS = {'sources': check_sources, 'brief': check_brief, 'article': check_article,
@@ -470,6 +514,9 @@ def read_input(campaign, spec):
     if input_id == 'design-system':
         name = section((campaign / '00-task.md').read_text(), 'Design system', '00-task')
         return (DESIGN_DIR / f'{name}.md').read_text()
+    if input_id == 'voice':
+        name = section((campaign / '00-task.md').read_text(), 'Voice', '00-task')
+        return (VOICE_DIR / f'{name}.md').read_text()
     if input_id == '00-task':
         text = (campaign / '00-task.md').read_text()
     else:
@@ -847,6 +894,10 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
     check_skills(skills_dir, steps)
     check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
+    if any('voice' in step['inputs'] + step['review_inputs'] for step in steps):
+        errors = voice_errors((campaign / '00-task.md').read_text())
+        if errors:
+            raise WorkflowError('; '.join(errors))
     for step in steps:
         if (campaign / step['id'] / 'APPROVED').is_file():
             log.info('[%s] already approved; skipping', step['id'])

@@ -15,6 +15,9 @@ Blocking findings:
 - Generic hashtags such as #fyp or #viral, or hashtags that do not match the post.
 - The caption does not match the brief's Channel idea for Instagram.
 - Any em dash.
+- The first line of the caption names a product or feature, not the reader's problem or a concrete moment.
+- The post is mainly a feature list with no example or scene.
+- A banned hedge word in the hook (may, might, describes, positions, offers, various).
 
 Minor findings:
 - Tone, line length, wording.

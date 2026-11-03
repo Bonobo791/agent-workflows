@@ -18,6 +18,9 @@ Blocking findings:
 - A comparison article with no comparison table.
 - A call to action that does not match the brief's Goal.
 - Any em dash.
+- The opening paragraph names a product or feature, not the reader's problem or a concrete moment.
+- The article is mainly a feature list with no example or scene.
+- A banned hedge word in the hook (may, might, describes, positions, offers, various).
 
 Minor findings:
 - Passive voice, filler, adverbs, "not X, it's Y" contrasts, flow or repetition.

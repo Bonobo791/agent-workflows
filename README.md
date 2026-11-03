@@ -41,7 +41,7 @@ A step that fails the automatic checks goes back to the writer without a reviewe
 
 ## Task file
 
-Every task has these sections, in this order. Each one must be present and not empty; `None.` is allowed. `## Design system` is needed only when Deliverables include images or reel.
+Every task has these sections, in this order. Each one must be present and not empty; `None.` is allowed. `## Design system` is needed only when Deliverables include images or reel. `## Voice` names a file in `marketing/voice/`; the steps need it.
 
 ```
 # Task: <title>
@@ -67,11 +67,20 @@ article, social, images, reel
 ## Constraints
 <rules the content must follow, or None.>
 
+## Voice
+<a file name from marketing/voice without .md, such as moderaty>
+
 ## Design system
 <a file name from marketing/design-systems without .md, such as moderaty, or None. when Deliverables have no images or reel>
 ```
 
 Make a new design system by copying `marketing/design-systems/TEMPLATE.md`.
+
+## Brand voice
+
+Every task names a voice file in `## Voice`. Make one by copying `marketing/voice/TEMPLATE.md` to `marketing/voice/<name>.md` and filling in every section: replace each `Template note:` line with your text. The steps 02 to 06 and their reviewers read the voice file first.
+
+Before any Codex call, a run that reaches steps 02 to 06 checks the voice file. It stops if `## Voice` is missing or None, the file does not exist, or a section is empty or still has a `Template note:` line. The owner writes the voice; the program does not.
 
 Deliverables is a comma-separated list of `article`, `social`, `images` and `reel`. See `marketing/examples/sample-task.md`.
 

@@ -3,7 +3,7 @@
 The program has already checked the items listed under Checked. Do not report those.
 
 Checked:
-- The nine brief sections exist and are not empty.
+- The ten brief sections exist and are not empty.
 - Every fact under Facts has a URL or ends with "(from task)".
 - The Article plan has exactly one "- Target length: 2000 words" line, with a whole number.
 - Channel ideas has the three channel lines when Deliverables include social, or "Not needed." when they do not.
@@ -17,6 +17,7 @@ Blocking findings:
 - Required headings from the task that are missing, reworded or out of order.
 - Channel ideas or Visual ideas filled in when the Deliverables leave them out, or "Not needed." where they are needed.
 - A Goal, Audience or Core message that contradicts the task.
+- The Angle names no reader problem from the task's Audience, or its Voice line does not match the task's voice file.
 - Any em dash.
 
 Minor findings:

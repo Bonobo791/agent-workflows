@@ -13,6 +13,9 @@ Blocking findings:
 - A claim that is not in the brief's Facts, or one that contradicts the brief's Facts or its Channel idea for X.
 - Engagement bait such as "RT if you agree".
 - Any em dash.
+- The first line of post 1 names a product or feature, not the reader's problem or a concrete moment.
+- The thread is mainly a feature list with no example or scene.
+- A banned hedge word in the hook (may, might, describes, positions, offers, various).
 
 Minor findings:
 - A thread where a single post would do.
