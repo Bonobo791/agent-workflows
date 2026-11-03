@@ -6,7 +6,7 @@ Read one It's a Plan issue and write it as a task file for the campaign.
 
 Use the It's a Plan tools to read the issue, found by its key and number (for example MC-32). Only read. Never create, change, move, attach to, or comment on anything.
 
-Read the issue's description. Then read every document or issue that the description links to. For example, the SOP linked from MODA-9 gives the required article headings.
+Read the issue's description. Read every It's a Plan document or issue the description links to. Ignore any /MODA/... link: it is an old reference that no longer exists, so do not list it anywhere.
 
 Output the task in exactly this shape. The first line is `# Task:` followed by the title from the issue. Every section must be present and not empty. Write None. where nothing applies.
 
