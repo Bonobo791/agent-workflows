@@ -12,6 +12,26 @@ Structure:
 3. Final scene: the call to action "Link in bio".
 
 How to build it:
+- Put every `<iframe>` clip inside one `<section>` in `<body>`. OpenFilm rejects a clip outside a section ("outside any track"). Clips in one section must not overlap in time; a title over footage goes in a second `<section>`.
+- Set the viewport meta tag to the stage size. Without it OpenFilm uses 1920 × 1080, which is wrong for this reel. Use this shape:
+
+```html
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1080, height=1920">
+</head>
+<body>
+<section>
+  <iframe src="scenes/hook.html#t=0,3" at="0" style="left: 0px; top: 0px; width: 1080px; height: 1920px"></iframe>
+  <iframe src="scenes/export.html#t=0,6" at="3" style="left: 0px; top: 0px; width: 1080px; height: 1920px"></iframe>
+</section>
+</body>
+</html>
+```
+
+- Nothing else goes in `<body>` except `<section>` tracks.
 - `film.html` lists the scenes in order. Each `<iframe>` has `src="scenes/<file>.html#t=0,<length>"` and `at="<start second>"`. Each scene starts when the one before it ends. Every iframe is `left: 0px; top: 0px; width: 1080px; height: 1920px`.
 - Each scene sets `window.film = { frame(t) {...}, duration, width: 1080, height: 1920 }`.
 - Every scene must move: text slides or fades in. A video that never changes is not allowed.
