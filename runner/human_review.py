@@ -17,7 +17,7 @@ class HumanReview:
     def _require_current(self,db,run,queue_claim,graph_claim,version):
         from runner.graph import GraphError
         try: self.service.graph._lease(run,graph_claim)
-        except GraphError: raise HumanReviewError('graph claim unavailable') from None
+        except GraphError: raise HumanReviewError('graph claim unavailable')
         row=db.execute('SELECT status,token,expires FROM jobs WHERE run=?',(run,)).fetchone()
         if not row or row[0]!='running' or not isinstance(row[1],str) or not isinstance(queue_claim,str) or not secrets.compare_digest(row[1],queue_claim) or row[2] is None or row[2]<=time.time(): raise HumanReviewError('queue claim unavailable')
         stage=self.service.graph.get(run,'assembly')
@@ -32,20 +32,20 @@ class HumanReview:
             assets=manifest['assets']
             if not isinstance(assets,list) or any(not isinstance(a,dict) or a.get('kind') not in ('png','mp4') or not isinstance(a.get('artifact_ref'),str) for a in assets): raise ValueError()
             return sorted({a['artifact_ref'] for a in assets if a['kind']=='mp4'})
-        except Exception: raise HumanReviewError('video review evidence unavailable') from None
+        except Exception: raise HumanReviewError('video review evidence unavailable')
 
     def decide(self,run,queue_claim,graph_claim,version,decision,video_playback_refs=None):
         service=self.service
         if decision not in ('approved','rejected') or not isinstance(version,str): raise HumanReviewError('invalid review decision')
         if service.graph._definition(run).name!='marketing': raise HumanReviewError('human review package unavailable')
-        if not service.verify_terminal(run): raise HumanReviewError('review package evidence unavailable')
+        if not service.verify_terminal(run): raise HumanReviewError(f"review package evidence unavailable: {service._terminal_reason(run) or 'state changed'}")
         if service.task_intake is None or not callable(getattr(service.task_intake,'revalidate',None)) or service.task_intake.revalidate(run) is not True: raise HumanReviewError('task freshness unavailable or changed')
         db=service.graph.db; db.execute('BEGIN IMMEDIATE')
         try:
             self._require_current(db,run,queue_claim,graph_claim,version)
             refs=self._video_refs(run) if decision=='approved' else []
             if refs and (not isinstance(video_playback_refs,list) or any(not isinstance(ref,str) for ref in video_playback_refs) or sorted(video_playback_refs)!=refs): raise HumanReviewError('full video playback acknowledgement required for each video')
-            if not service.verify_terminal(run):raise HumanReviewError('review package evidence unavailable')
+            if not service.verify_terminal(run):raise HumanReviewError(f"review package evidence unavailable: {service._terminal_reason(run) or 'state changed'}")
             self._require_current(db,run,queue_claim,graph_claim,version)
             last=db.execute('SELECT COALESCE(MAX(id),0) FROM human_review_audit').fetchone()[0]
             created=time.time()

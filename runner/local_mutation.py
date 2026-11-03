@@ -71,4 +71,4 @@ class LocalMutationTransport:
                 terminal=db.execute("SELECT x.invocation,x.cgroup FROM local_pr_scopes p JOIN local_scopes x ON x.unit=p.unit AND x.run=p.run WHERE p.assignment=? AND p.kind=? AND p.unit=? AND x.state='terminated'",(assignment,kind,result['unit'])).fetchone()
                 if not terminal or not valid_scope_identity(result['unit'],*terminal) or db.execute("UPDATE local_mutation_attempts SET state='terminated' WHERE assignment=? AND state='reserved'",(assignment,)).rowcount!=1:raise ValueError()
                 return output
-        except Exception:raise LocalMutationError('mutation outcome requires inspection') from None
+        except Exception:raise LocalMutationError('mutation outcome requires inspection')

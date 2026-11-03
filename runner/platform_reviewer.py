@@ -32,7 +32,7 @@ class PlatformReviewer:
             proof TEXT PRIMARY KEY,run TEXT NOT NULL,brief_ref TEXT NOT NULL,register_ref TEXT NOT NULL,bundle_ref TEXT NOT NULL,
             session TEXT NOT NULL,turn TEXT NOT NULL,skills TEXT NOT NULL,response_ref TEXT NOT NULL,report_ref TEXT NOT NULL,policy_hash TEXT NOT NULL)''')
     def _policy(self):
-        data={'config':self.config,'reviewer_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),'local_policy':self.service.model_supervisor.policy_hash}
+        data={'config':self.config,'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),'local_policy':self.service.model_supervisor.policy_hash}
         return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def _graph(self):
         graph=GraphStore(self.db_path);graph.register(marketing_definition());graph.register(engineering_definition());return graph

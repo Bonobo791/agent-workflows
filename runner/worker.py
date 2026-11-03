@@ -11,7 +11,7 @@ REQUIRED_SEO_SKILL='plan-seo-geo-growth'
 
 class ConfigurationError(RuntimeError): pass
 
-def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=None, intake_factory=None, docker_socket=None, docker_image=None, docker_config=None, task_config=None, plan_token=None, github_token=None, role_config=None, command_config=None, pr_credentials=None, openfilm_builder_factory=None, openfilm_policy_verifier=None, openfilm_builder_policy_verifier=None, reddit_context_factory=None, page_rules=None, local_supervisor_factory=None, github_http=None, source_config=None, platform_config=None, audio_config=None):
+def build_control(root, secret, *, openfilm_package_root=None, execution_mode='disabled', lifecycle_factory=None, intake_factory=None, task_config=None, plan_token=None, github_token=None, role_config=None, command_config=None, openfilm_builder_factory=None, reddit_context_factory=None, page_rules=None, local_supervisor_factory=None, github_http=None, source_config=None, platform_config=None, audio_config=None):
     """Construct the private control plane; trusted integrations may inject lifecycle.
 
     Injection is deliberately a Python integration boundary, not an environment
@@ -19,14 +19,12 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
     """
     if execution_mode not in ('disabled','local'):
         raise ConfigurationError('live execution requires approved credential delivery, verified worker isolation, and workflow dispatch')
-    if execution_mode=='local' and (not callable(local_supervisor_factory) or lifecycle_factory is None or docker_socket or docker_image or (docker_config is not None and (not isinstance(docker_config,dict) or docker_config.get('engine')!='podman-rootless'))): raise ConfigurationError('local execution requires a trusted supervisor and manual lifecycle')
+    if execution_mode=='local' and (not callable(local_supervisor_factory) or lifecycle_factory is None): raise ConfigurationError('local execution requires a trusted supervisor and manual lifecycle')
     if execution_mode!='local' and local_supervisor_factory is not None: raise ConfigurationError('local supervisor requires local execution mode')
     if github_http is not None and (execution_mode!='local' or github_token is not None or not callable(getattr(github_http,'request',None))): raise ConfigurationError('invalid local GitHub read client')
     plan_gateway=isinstance(task_config,dict) and task_config.get('plan_endpoint')=='codex-apps'
     if plan_gateway and (execution_mode!='local' or plan_token is not None): raise ConfigurationError('Codex tracker gateway requires local execution without a token')
     if task_config is not None and (intake_factory is not None or (not plan_gateway and not plan_token) or (not github_token and github_http is None)): raise ConfigurationError('configured task requires Plan and GitHub read access')
-    if docker_config is not None and (docker_socket or docker_image): raise ConfigurationError('choose one Docker configuration')
-    if bool(docker_socket) != bool(docker_image): raise ConfigurationError('Docker socket and immutable image required together')
     if source_config is not None and (execution_mode!='local' or not isinstance(source_config,dict) or set(source_config)!={'urls'}): raise ConfigurationError('local source URL policy required')
     if platform_config is not None and execution_mode!='local': raise ConfigurationError('local platform policy required')
     if audio_config is not None and execution_mode!='local': raise ConfigurationError('local audio policy required')
@@ -38,7 +36,7 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
             if not isinstance(page_rules,dict) or not page_rules: raise ConfigurationError('page rules unavailable')
             try:
                 for format_name in page_rules: policy_bytes(page_rules,format_name)
-            except Exception: raise ConfigurationError('invalid page rules') from None
+            except Exception: raise ConfigurationError('invalid page rules')
             import copy
             service.page_rules=copy.deepcopy(page_rules)
         if role_config is not None:
@@ -50,25 +48,6 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
             service.required_skills={stage:list(names) for stage,names in role_config['required_skills'].items()}
             for stage in ('canonical_draft','canonical_review'):
                 if stage in stages and REQUIRED_SEO_SKILL not in service.required_skills.setdefault(stage,[]): service.required_skills[stage].append(REQUIRED_SEO_SKILL)
-        if docker_config is not None:
-            from runner.docker_config import DockerConfig
-            from runner.docker_controller import DockerAssignments, UnixEngine
-            from runner.docker_supervisor import DockerSupervisor
-            from runner.codex_executor import CodexExecutor
-            from runner.session_store import SessionStore
-            from runner.model_policy import ModelPolicy
-            from runner.adapter import CredentialDelivery
-            config=DockerConfig(docker_config,Path(root))
-            service.docker_assignments=DockerAssignments(str(Path(root)/'state.db'),UnixEngine(config.socket),config.image)
-            service.docker_supervisor=DockerSupervisor(service.docker_assignments,config,lambda run: manual_fence_ready(service,run),session_root=Path(root),credential_delivery=CredentialDelivery())
-            service.model_policy=ModelPolicy()
-            service.docker_executor=CodexExecutor(service.docker_supervisor,service.provenance,service.artifacts,service.fence_execution,model_policy=service.model_policy)
-            service.session_store=SessionStore(Path(root))
-        if docker_socket:
-            from runner.docker_controller import DockerAssignments, UnixEngine
-            service.docker_assignments=DockerAssignments(str(Path(root)/'state.db'),UnixEngine(docker_socket),docker_image)
-            from runner.docker_supervisor import DockerSupervisor
-            service.docker_supervisor=DockerSupervisor(service.docker_assignments)
         if lifecycle_factory is not None:
             service.lifecycle=lifecycle_factory(service)
             if service.lifecycle is None: raise ConfigurationError('lifecycle provider unavailable')
@@ -101,18 +80,13 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
         if execution_mode=='local' and service.required_skills.get('asset_review'):
             from runner.local_asset_review import LocalAssetReviewer
             service.openfilm_reviewer=LocalAssetReviewer(service)
-        if execution_mode=='local' and docker_config is not None and openfilm_builder_factory is None and openfilm_policy_verifier is None and openfilm_builder_policy_verifier is None:
-            from runner.podman_policy import PodmanRenderPolicy
-            policy=PodmanRenderPolicy(service.docker_supervisor.config,os.environ)
-            openfilm_policy_verifier=policy; openfilm_builder_policy_verifier=policy
-        if openfilm_builder_factory is not None or openfilm_policy_verifier is not None or openfilm_builder_policy_verifier is not None:
-            if not callable(openfilm_policy_verifier) or service.docker_supervisor is None or service.docker_supervisor.config is None or service.lifecycle is None or (openfilm_builder_factory is None and not callable(openfilm_builder_policy_verifier)) or (openfilm_builder_factory is not None and not callable(openfilm_builder_factory)): raise ConfigurationError('OpenFilm requires an isolated Docker runtime, lifecycle, project builder and policy verifier')
-            from runner.docker_openfilm import DockerOpenFilmBackend
-            if openfilm_builder_factory is None:
-                from runner.openfilm_builder import CodexOpenFilmProjectBuilder
-                builder=CodexOpenFilmProjectBuilder(service,openfilm_builder_policy_verifier)
-            else: builder=openfilm_builder_factory(service)
-            service.openfilm_backend=DockerOpenFilmBackend(service.docker_supervisor,service.artifacts,builder,openfilm_policy_verifier)
+        package_root=openfilm_package_root or os.environ.get('OPENFILM_PACKAGE_ROOT')
+        if execution_mode=='local' and package_root and service.model_supervisor is not None:
+            from runner.openfilm_builder import CodexOpenFilmProjectBuilder
+            from runner.openfilm_local import LocalOpenFilmBackend
+            builder=openfilm_builder_factory(service) if openfilm_builder_factory is not None else CodexOpenFilmProjectBuilder(service)
+            renders=os.path.join(root,'openfilm-renders'); os.makedirs(renders,mode=0o700,exist_ok=True)
+            service.openfilm_backend=LocalOpenFilmBackend(service,builder,package_root,renders)
         if task_config is not None:
             from runner.configured_task import ConfiguredTask
             from runner.plan_mcp import HTTPSMCP, PlanMCP
@@ -126,10 +100,6 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
         if intake_factory is not None:
             service.task_intake=intake_factory(service)
             if service.task_intake is None: raise ConfigurationError('task intake unavailable')
-        if pr_credentials is not None:
-            if not isinstance(pr_credentials,dict) or set(pr_credentials)!={'push','mutation'} or service.docker_supervisor is None or service.docker_supervisor.config is None or service.task_intake is None or not callable(getattr(getattr(service.task_intake,'github',None),'request',None)): raise ConfigurationError('PR authority requires trusted credential issuers, task client, and Docker configuration')
-            from runner.pr_authority import PRRuntimeAuthority
-            service.pr_authority=PRRuntimeAuthority(service,service.task_intake.github,pr_credentials['push'],pr_credentials['mutation'])
         if execution_mode=='local' and github_http is not None and service.task_intake is not None:
             from runner.gh_read import GHRead
             if isinstance(github_http,GHRead):
@@ -143,13 +113,9 @@ def build_control(root, secret, *, execution_mode='disabled', lifecycle_factory=
         if command_config is not None:
             import hashlib, json
             digest=hashlib.sha256(json.dumps(command_config,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-            if service.model_supervisor is not None:
-                from runner.local_command import LocalCommandBackend
-                backend=LocalCommandBackend(service.model_supervisor)
-            else:
-                if service.docker_supervisor is None or service.docker_supervisor.config is None: raise ConfigurationError('isolated runtime required for command supervisor')
-                from runner.docker_command import DockerCommandBackend
-                backend=DockerCommandBackend(service.docker_supervisor)
+            if service.model_supervisor is None: raise ConfigurationError('local runtime required for command supervisor')
+            from runner.local_command import LocalCommandBackend
+            backend=LocalCommandBackend(service.model_supervisor)
             service.command_supervisor=CommandSupervisor(service,command_config,digest,backend)
         else: service.command_supervisor=CommandSupervisor(service)
         from runner.source_reviewer import SourceReviewer
@@ -170,7 +136,7 @@ def read_secret(path):
             if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode & 0o077 or info.st_size>4096: raise ConfigurationError('unsafe control secret')
             with os.fdopen(fd,'r',encoding='utf-8',closefd=False) as f: secret=f.read().strip()
         finally: os.close(fd)
-    except (OSError, UnicodeError): raise ConfigurationError('control secret unavailable') from None
+    except (OSError, UnicodeError): raise ConfigurationError('control secret unavailable')
     if len(secret)<32: raise ConfigurationError('control secret too short')
     return secret
 
@@ -197,7 +163,7 @@ def read_runtime_config(path):
         finally: os.close(fd)
         if not isinstance(data,dict): raise ConfigurationError('invalid runtime configuration')
         return data
-    except (OSError,ValueError,UnicodeError): raise ConfigurationError('runtime configuration unavailable') from None
+    except (OSError,ValueError,UnicodeError): raise ConfigurationError('runtime configuration unavailable')
 
 def lock_state_directory(root):
     import fcntl
@@ -211,7 +177,7 @@ def lock_state_directory(root):
             info=os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077 or info.st_nlink!=1: raise ConfigurationError('unsafe worker lock')
             try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            except BlockingIOError: raise ConfigurationError('state directory already in use') from None
+            except BlockingIOError: raise ConfigurationError('state directory already in use')
             return fd
         except Exception:
             os.close(fd); raise
@@ -240,8 +206,6 @@ def run_worker(root,secret):
         target=os.environ.get('MANUAL_WORKER_TARGET'); incarnation=os.environ.get('MANUAL_WORKER_INCARNATION')
         if not target or not incarnation: raise ConfigurationError('manual worker target and incarnation required')
         factory=lambda service: ManualLifecycle(str(root/'state.db'),target,incarnation)
-    config_path=os.environ.get('DOCKER_RUNTIME_CONFIG_FILE')
-    config=read_runtime_config(config_path) if config_path else None
     task_path=os.environ.get('WORKFLOW_TASK_CONFIG_FILE')
     task_config=read_runtime_config(task_path) if task_path else None
     role_path=os.environ.get('WORKFLOW_ROLE_CONFIG_FILE')
@@ -273,11 +237,11 @@ def run_worker(root,secret):
         executable=shutil.which('gh')
         if not executable: raise ConfigurationError('GitHub CLI unavailable')
         github_http=GHRead(executable,os.environ)
-    service,control=build_control(root,secret,docker_config=config,role_config=role_config,command_config=command_config,page_rules=page_rules,task_config=task_config,plan_token=plan_token,github_token=github_token,execution_mode=execution_mode,lifecycle_factory=factory,docker_socket=os.environ.get('DOCKER_CONTROLLER_SOCKET'),docker_image=os.environ.get('DOCKER_WORKER_IMAGE'),local_supervisor_factory=local_factory,github_http=github_http,source_config=source_config,platform_config=platform_config,audio_config=audio_config)
+    service,control=build_control(root,secret,role_config=role_config,command_config=command_config,page_rules=page_rules,task_config=task_config,plan_token=plan_token,github_token=github_token,execution_mode=execution_mode,lifecycle_factory=factory,local_supervisor_factory=local_factory,github_http=github_http,source_config=source_config,platform_config=platform_config,audio_config=audio_config)
     from runner.auto_worker import AutoWorker
     def auto_factory():
-        return build_control(root,secret,docker_config=config,role_config=role_config,command_config=command_config,page_rules=page_rules,task_config=task_config,plan_token=plan_token,github_token=github_token,execution_mode=execution_mode,lifecycle_factory=factory,docker_socket=os.environ.get('DOCKER_CONTROLLER_SOCKET'),docker_image=os.environ.get('DOCKER_WORKER_IMAGE'),local_supervisor_factory=local_factory,github_http=github_http,source_config=source_config,platform_config=platform_config,audio_config=audio_config)
-    control.auto_worker=AutoWorker(auto_factory,root) if task_config is not None and mode=='manual' and (config is not None or local_factory is not None) and role_config is not None else None
+        return build_control(root,secret,role_config=role_config,command_config=command_config,page_rules=page_rules,task_config=task_config,plan_token=plan_token,github_token=github_token,execution_mode=execution_mode,lifecycle_factory=factory,local_supervisor_factory=local_factory,github_http=github_http,source_config=source_config,platform_config=platform_config,audio_config=audio_config)
+    control.auto_worker=AutoWorker(auto_factory,root) if task_config is not None and mode=='manual' and local_factory is not None and role_config is not None else None
     try:
         socket_dir=Path(os.environ.get('WORKFLOW_CONTROL_DIR') or root)
         if os.environ.get('WORKFLOW_CONTROL_DIR'): socket_dir.mkdir(mode=0o700,exist_ok=True)

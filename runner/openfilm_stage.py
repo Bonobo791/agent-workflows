@@ -46,7 +46,7 @@ def produce(service, run, queue_claim, graph_claim, backend):
     timeout=getattr(backend,'timeout_seconds',None)
     if type(timeout) is not int or not 1<=timeout<=600: raise OpenFilmStageError('bounded render timeout required')
     try: ready=_bounded(backend.ready,time.monotonic()+timeout,lambda:not service.queue.may_start(run,queue_claim))
-    except Exception: raise OpenFilmStageError('isolated render supervisor unavailable') from None
+    except Exception as exc: raise OpenFilmStageError('isolated render supervisor unavailable') from exc
     if ready is not True: raise OpenFilmStageError('isolated render supervisor unavailable')
     runner=GraphRunner(graph,service.artifacts,lambda *_:None,lambda *_:False,skill_resolver=service.skill_resolver,required_skills=service.required_skills)
     runner._verify_upstream_skills(run,'asset_production',graph_claim)
@@ -67,10 +67,10 @@ def produce(service, run, queue_claim, graph_claim, backend):
         validate_sources(service.artifacts,register_ref,source_record['_source_verification'])
         validate_brief(service.artifacts,brief,content_ref,register_ref,social_draft_inputs(service,run))
         canonical_text=service.artifacts.get(content_ref).decode('utf-8')
-    except Exception: raise OpenFilmStageError('asset brief or approved source unavailable') from None
+    except Exception as exc: raise OpenFilmStageError('asset brief or approved source unavailable') from exc
     if callable(getattr(backend,'blocker',None)):
         try: blocker=_bounded(lambda:backend.blocker(brief),time.monotonic()+timeout,lambda:not service.queue.may_start(run,queue_claim))
-        except Exception: raise OpenFilmStageError('render capability unavailable') from None
+        except Exception as exc: raise OpenFilmStageError('render capability unavailable') from exc
         if blocker is not None:
             if blocker not in ('supplied media unavailable or unsupported','project builder does not support this brief'): raise OpenFilmStageError('render capability unavailable')
             ref=service.artifacts.put(json.dumps({'status':'blocked','reason':blocker,'outputs':[]},sort_keys=True).encode())
@@ -93,17 +93,17 @@ def produce(service, run, queue_claim, graph_claim, backend):
             graph.finish(run,'asset_production',snapshot,'blocked',ref,graph_claim,skill_fingerprint=fingerprint,queue_claim=queue_claim)
             return {'stage':'asset_production','status':'blocked','artifact_ref':ref,'reason':'platform constraints unsupported or unclear'}
         verify_platform(service,run,brief_ref,brief,platform_ref,timeout,cancelled)
-    except UncertainExecutorError:
+    except UncertainExecutorError as exc:
         try: service.fence_execution(run)
         except Exception: pass
-        raise PlatformReviewUncertain('platform review outcome uncertain; inspect worker before retry') from None
+        raise PlatformReviewUncertain('platform review outcome uncertain; inspect worker before retry') from exc
     except Exception:
         ref=service.artifacts.put(json.dumps({'status':'blocked','reason':'current platform constraints unavailable','outputs':[]},sort_keys=True).encode())
         graph.finish(run,'asset_production',snapshot,'blocked',ref,graph_claim,skill_fingerprint=fingerprint,queue_claim=queue_claim)
         return {'stage':'asset_production','status':'blocked','artifact_ref':ref,'reason':'current platform constraints unavailable'}
     input_hash=hashlib.sha256(json.dumps({'brief':brief_ref,'snapshot':snapshot,'skills':fingerprint},sort_keys=True,separators=(',',':')).encode()).hexdigest()
     try: attempt=graph.begin_attempt(run,'asset_production',input_hash,graph_claim,2)
-    except GraphError as exc: raise OpenFilmStageError(str(exc)) from None
+    except GraphError as exc: raise OpenFilmStageError(str(exc)) from exc
     attempt_id=hashlib.sha256(json.dumps([run,'asset_production',input_hash,attempt],separators=(',',':')).encode()).hexdigest()
     def cancelled(): return not service.queue.may_start(run,queue_claim)
     terminated=False
@@ -172,11 +172,11 @@ def produce(service, run, queue_claim, graph_claim, backend):
                 status='blocked'
         ref=service.artifacts.put(json.dumps(manifest,sort_keys=True,separators=(',',':')).encode())
         graph.finish(run,'asset_production',snapshot,status,ref,graph_claim,completion_input=input_hash,skill_fingerprint=fingerprint,queue_claim=queue_claim)
-        return {'stage':'asset_production','status':status,'artifact_ref':ref}
-    except Exception:
+        return {'stage':'asset_production','status':status,'artifact_ref':ref,'reason':manifest.get('reason')}
+    except Exception as exc:
         if not terminated:
             try: _bounded(lambda:backend.cancel(run,attempt_id),time.monotonic()+timeout,lambda:False)
             except Exception: pass
         try: service.fence_execution(run)
         except Exception: pass
-        raise OpenFilmStageError('render outcome requires inspection') from None
+        raise OpenFilmStageError('render outcome requires inspection') from exc

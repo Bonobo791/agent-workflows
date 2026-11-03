@@ -13,7 +13,7 @@ class ArtifactStore:
     def __init__(self, directory): self.directory=directory
     def _dir(self):
         try: fd=os.open(self.directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-        except OSError: raise ArtifactError('artifact directory unavailable') from None
+        except OSError: raise ArtifactError('artifact directory unavailable')
         info=os.fstat(fd)
         if info.st_uid != os.geteuid() or info.st_mode & 0o077:
             os.close(fd); raise ArtifactError('artifact directory must be owner-only')
@@ -27,7 +27,7 @@ class ArtifactStore:
             try: os.link(name,digest,src_dir_fd=directory,dst_dir_fd=directory,follow_symlinks=False)
             except FileExistsError: pass
             os.fsync(directory)
-        except OSError: raise ArtifactError('artifact write failed') from None
+        except OSError: raise ArtifactError('artifact write failed')
         finally:
             try: os.unlink(name,dir_fd=directory)
             except FileNotFoundError: pass
@@ -46,5 +46,5 @@ class ArtifactStore:
                 if len(data)>MAX_BYTES or hashlib.sha256(data).hexdigest()!=digest: raise ArtifactError('artifact integrity failure')
                 return data
             finally: os.close(fd)
-        except OSError: raise ArtifactError('artifact unavailable') from None
+        except OSError: raise ArtifactError('artifact unavailable')
         finally: os.close(directory)

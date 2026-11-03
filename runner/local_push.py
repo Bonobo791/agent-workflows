@@ -2,7 +2,7 @@
 from pathlib import Path
 import re
 import shlex
-from runner.docker_push import push_argv
+from runner.git_push import push_argv
 
 class LocalPushError(RuntimeError): pass
 
@@ -14,7 +14,7 @@ def local_push_command(bare,gh,repo,branch,head,expected_remote):
         index=args.index('push')
         args[index:index]=['-c','credential.helper=!'+shlex.quote(gh)+' auth git-credential']
         return args
-    except Exception:raise LocalPushError('invalid exact push target') from None
+    except Exception:raise LocalPushError('invalid exact push target')
 
 class LocalPushTransport:
     """Push one exact approved commit from a verified bare snapshot."""
@@ -29,7 +29,7 @@ class LocalPushTransport:
         from runner.engineering_workspace import EngineeringWorkspace
         from runner.local_git_snapshot import scoped_git_snapshot
         from runner.local_command import _run_scoped
-        from runner.docker_push import require_fast_forward
+        from runner.git_push import require_fast_forward
         service=self.service;s=service.model_supervisor;db=service.graph.db
         if s is None or s.preflight() is not True or s.fence(self.run) is not True or not service.queue.may_start(self.run,self.queue_claim) or self.gh._digest()!=self.gh.digest: raise LocalPushError('local push boundary unavailable')
         service.graph._lease(self.run,self.graph_claim)
@@ -75,4 +75,4 @@ class LocalPushTransport:
                 finally:registry.close()
             if workspace_snapshot(service,self.run)!=workspace:raise LocalPushError('workspace changed after push')
             return True
-        except Exception:raise LocalPushError('push outcome requires inspection') from None
+        except Exception:raise LocalPushError('push outcome requires inspection')

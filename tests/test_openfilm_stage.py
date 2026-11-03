@@ -296,7 +296,7 @@ class OpenFilmStageTests(unittest.TestCase):
                 service.provenance.mark_completed(run,'instagram_review',session,kwargs['claim'],output_hash=response_ref)
                 proof={'run':run,'stage':'instagram_draft','subject_hash':subject,'reviewer_role':'instagram_review','reviewer_session':session,'skills':skills,'review_output_ref':response_ref}
                 return {'session_id':session,'outputs':[output_ref],'output':output,'evidence_ref':service.artifacts.put(json.dumps(proof).encode())}
-        service.docker_executor=Executor(); dispatcher=StageDispatcher(service)
+        service.model_executor=Executor(); dispatcher=StageDispatcher(service)
         result=dispatcher._model_stage('run','instagram_review',self.queue,self.claim)
         self.assertEqual(result['status'],'passed')
         self.assertTrue(dispatcher._verify_recorded_review('run','instagram_review'))
@@ -390,109 +390,6 @@ class OpenFilmStageTests(unittest.TestCase):
             return
         self.assertEqual([item['kind'] for item in manifest['assets']],['png','mp4'])
         self.assertEqual(result['status'],'awaiting_review')
-    def test_docker_backend_runs_fixed_networkless_render_and_verifies_identity(self):
-        self._docker_backend_render(False)
-    def test_docker_backend_retains_failed_look_evidence(self):
-        self._docker_backend_render(True)
-    def _docker_backend_render(self,visual_failure):
-        from runner.docker_config import DockerConfig
-        from runner.docker_controller import DockerAssignments
-        from runner.docker_supervisor import DockerSupervisor
-        from runner.docker_openfilm import DockerOpenFilmBackend
-        jobs=self.root/'state'/'jobs'; jobs.mkdir(mode=0o700)
-        config=DockerConfig({'socket':'/private/engine.sock','image':'example@sha256:'+'1'*64,'network':'aw-test','job_root':str(jobs)},self.root/'state')
-        test=self
-        class Engine:
-            def __init__(self): self.spec=None; self.state='created'; self.cid='a'*64; self.exit_code=0; self.cancel_on_start=False; self.wait_timeouts=[]
-            def request(self,method,path,body=None,*,timeout=None):
-                if path=='/containers/create': self.spec=body; return 201,{'Id':self.cid}
-                if path.endswith('/json'):
-                    host={**self.spec['HostConfig'],'Privileged':False,'CapAdd':None}
-                    cfg={'Labels':self.spec['Labels'],'Image':self.spec['Image'],'Entrypoint':self.spec['Entrypoint'],'Cmd':self.spec['Cmd'],'User':self.spec['User'],'Env':self.spec['Env']}
-                    return 200,{'Id':self.cid,'Config':cfg,'HostConfig':host,'State':{'Running':self.state=='running','Status':self.state,'ExitCode':self.exit_code}}
-                if path.endswith('/start'):
-                    if self.cancel_on_start:
-                        backend.cancel('run',self.spec['Labels']['agent-workflows.run'][3:])
-                        self.state='running'; return 204,None
-                    workspace=next(m['Source'] for m in self.spec['HostConfig']['Mounts'] if m['Target']=='/workspace')
-                    output=next(m['Source'] for m in self.spec['HostConfig']['Mounts'] if m['Target']=='/output')
-                    assert (Path(workspace)/'project'/'film.html').is_file()
-                    if visual_failure:
-                        Path(output,'look-failure.json').write_text(json.dumps({'ok':False,'lines':['✗ synthetic missing font']}))
-                        self.exit_code=1; self.state='exited'; return 204,None
-                    Path(output,'asset.png').write_bytes(png()); Path(output,'preview.png').write_bytes(png(3,2))
-                    Path(output,'look.json').write_text(json.dumps({'ok':True,'lines':['✓ sampled text layout inspected','✓ same picture']}))
-                    def entry(name): return {'path':name,'sha256':hashlib.sha256(Path(output,name).read_bytes()).hexdigest()}
-                    asset=entry('asset.png'); asset.update(previews=[entry('preview.png')],report=entry('look.json'))
-                    Path(output,'render-result.json').write_text(json.dumps({'outputs':[asset]}))
-                    self.state='exited'; return 204,None
-                if '/stop?' in path: self.state='exited'; self.exit_code=137; return 204,None
-                if '/wait?' in path:
-                    self.wait_timeouts.append(timeout)
-                    return 200,{'StatusCode':self.exit_code}
-                raise AssertionError(path)
-        class Builder:
-            def ready(self): return True
-            def supports(self,brief): return True
-            def build(self,**kwargs): return {'project_ref':test.project,'proof_ref':test.terminal}
-            def verify(self,run,attempt_id,brief_ref,project_ref,proof_ref): return run=='run' and brief_ref==test.brief_ref and project_ref==test.project and proof_ref==test.terminal
-            def cancel(self,run,attempt_id): pass
-        engine=Engine(); assignments=DockerAssignments(str(self.root/'state'/'state.db'),engine,config.image)
-        supervisor=DockerSupervisor(assignments,config,lambda run:True)
-        self.service.docker_supervisor=supervisor
-        backend=DockerOpenFilmBackend(supervisor,self.service.artifacts,Builder(),lambda policy:True,timeout_seconds=10)
-        self.service.openfilm_backend=backend
-        from runner.control import ControlPlane
-        from runner.service import ServiceError
-        control=ControlPlane(self.service,'synthetic-secret')
-        self.assertEqual(control.handle('synthetic-secret',{'action':'openfilm_policy'})['policy_hash'],backend.policy_hash)
-        with self.assertRaises(ServiceError): self.service.approve('controller','openfilm_policy','wrong','operator')
-        self.assertFalse(backend.ready())
-        self.service.approve('controller','docker_config',config.policy_hash,'operator')
-        self.assertFalse(backend.ready())
-        self.service.approve('controller','openfilm_policy',backend.policy_hash,'operator')
-        try:
-            with patch.object(backend,'_policy',return_value='changed'):
-                self.assertFalse(backend.ready())
-            graph=self.service.graph
-            count=graph.begin_attempt('run','asset_production','probe',self.claim,2)
-            attempt=hashlib.sha256(json.dumps(['run','asset_production','probe',count],separators=(',',':')).encode()).hexdigest()
-            self.assertFalse(backend._active(graph.db,'run',attempt,'wrong',self.queue))
-            self.assertFalse(backend._active(graph.db,'run',attempt,self.claim,'wrong'))
-            self.assertTrue(backend._active(graph.db,'run',attempt,self.claim,self.queue))
-            graph.resolve_attempt('run','asset_production','probe',self.claim,'not_executed')
-            result=produce(self.service,'run',self.queue,self.claim,backend)
-            self.assertEqual(engine.wait_timeouts,[10])
-            if visual_failure:
-                self.assertEqual(result['status'],'blocked')
-                manifest=json.loads(self.service.artifacts.get(result['artifact_ref']))
-                self.assertIn('synthetic missing font',self.service.artifacts.get(manifest['look_report_ref']).decode())
-                self.assertEqual(manifest['project_ref'],self.project)
-                return
-            self.assertEqual(result['status'],'awaiting_review')
-            manifest=json.loads(self.service.artifacts.get(result['artifact_ref']))
-            receipt=json.loads(self.service.artifacts.get(manifest['supervisor_ref']))
-            self.assertTrue(backend.verify_terminal('run',manifest['attempt_id'],self.brief_ref,receipt))
-            original_env=engine.spec['Env'][:]
-            engine.spec['Env']=[item if not item.startswith('PLAYWRIGHT_BROWSERS_PATH=') else 'PLAYWRIGHT_BROWSERS_PATH=/unexpected' for item in original_env]
-            self.assertFalse(backend.verify_terminal('run',manifest['attempt_id'],self.brief_ref,receipt))
-            engine.spec['Env']=original_env+['PLAYWRIGHT_BROWSERS_PATH=/unexpected']
-            self.assertFalse(backend.verify_terminal('run',manifest['attempt_id'],self.brief_ref,receipt))
-            engine.spec['Env']=original_env
-            self.assertEqual(engine.spec['HostConfig']['NetworkMode'],'none')
-            workspace=next(item['Source'] for item in engine.spec['HostConfig']['Mounts'] if item['Target']=='/workspace')
-            job_input=Path(workspace,'brief.json').read_text()
-            self.assertNotIn(self.claim,job_input); self.assertNotIn(self.queue,job_input)
-            engine.spec['HostConfig']['NetworkMode']='aw-test'
-            self.assertFalse(backend.verify_terminal('run',manifest['attempt_id'],self.brief_ref,receipt))
-            graph=self.service.graph
-            graph.invalidate('run','asset_production',graph.prepare('run','asset_production',self.claim),self.claim)
-            engine.cid='b'*64; engine.state='created'; engine.exit_code=0; engine.cancel_on_start=True
-            with self.assertRaises(OpenFilmStageError): produce(self.service,'run',self.queue,self.claim,backend)
-            self.assertEqual(engine.wait_timeouts,[10,None])
-            self.assertEqual(engine.state,'exited')
-            self.assertEqual(graph.db.execute("SELECT status FROM graph_attempts WHERE stage='asset_production' AND status='uncertain'").fetchone(),('uncertain',))
-        finally: assignments.close(); self.service.docker_supervisor=None
     def test_backend_failure_requests_cancel_and_leaves_uncertain_attempt(self):
         def fail(**kwargs): raise RuntimeError('transport failure')
         self.backend.execute=fail

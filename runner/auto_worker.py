@@ -14,6 +14,21 @@ from runner.human_review import HumanReviewError
 
 class AutoWorkerError(RuntimeError): pass
 
+def lease_heartbeat(path,run,queue_token,claim,interval=HEARTBEAT_INTERVAL):
+    # Renews the job and graph leases from a background thread while a stage runs; any driver uses this, not its own loop.
+    from contextlib import contextmanager
+    @contextmanager
+    def running():
+        stop=threading.Event(); errors=[]
+        def beat():
+            while not stop.wait(interval):
+                try: renew_leases(path,run,queue_token,claim)
+                except Exception as error: errors.append(error); return
+        thread=threading.Thread(target=beat,daemon=True); thread.start()
+        try: yield errors
+        finally: stop.set(); thread.join(timeout=interval+5)
+    return running()
+
 def renew_leases(path,run,queue_claim,graph_claim,ttl=60):
     if ttl<=0: raise AutoWorkerError('invalid lease duration')
     db=sqlite3.connect(path,timeout=5,isolation_level=None)

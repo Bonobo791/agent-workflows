@@ -16,15 +16,13 @@ The intended workflows are:
   to human merge review. Merge and deployment are not implemented.
 
 The private control service, durable graph, exact-version approvals, correction
-fences, source-review adapter, Docker command adapter and GitHub control bridge
+fences, source-review adapter, local command backend and GitHub control bridge
 have local fixture coverage. The worker has **no configured real Codex
 credential delivery, trusted source-tool authority, isolated Git push authority,
-or independent remote-outcome observer**. The claim-scoped PR authority can use the Docker push adapter and a read-only observer, but no real credential provider is configured; isolated draft/readiness requires a separately supplied scoped credential issuer. Docker authorization, real filesystem and network isolation, actual
-app-server session recovery and host lifecycle behavior remain unverified.
+or independent remote-outcome observer**. The local PR authority pushes and calls GitHub from the host, using the operator's own credentials, and needs a configured GitHub client. Real filesystem and network isolation, actual app-server session recovery and host lifecycle behavior remain unverified.
 
 `WORKFLOW_EXECUTION_MODE=live` is rejected. This is not a network sandbox:
-private control actions can contact configured services or the Docker controller
-when their separate configuration and approvals permit it. Do not point them at
+private control actions can contact configured services when their separate configuration and approvals permit it. Do not point them at
 real systems until those actions and the host boundary have been specifically
 approved and validated. The included Compose setup is not a tested deployment.
 
@@ -54,7 +52,7 @@ task data, session histories, local databases or environment files.
 ## Operator control
 
 The owner-only Unix socket can admit one explicitly configured task and advance
-stages manually. With the exact task, role, Docker and manual-lifecycle settings,
+stages manually. With the exact task, role and manual-lifecycle settings,
 the owner can explicitly start a one-task background loop; it renews queue and
 graph claims together and waits at blockers and human gates. A local owner may
 record a decision bound to the exact marketing review package; that is not a
@@ -65,9 +63,7 @@ see the [pilot restart procedure](docs/PILOT_SETUP.md) for the identity and
 claim checks.
 
 An engineering test gate requires a supervisor-observed command record bound to
-an approved exact command, workspace and commit. The Docker command adapter is
-constructed only from private command configuration and requires separate
-Docker and command-policy approval. Model-written test reports remain role
+an approved exact command, workspace and commit. The local command backend is constructed only from private command configuration and requires separate command-policy approval. Model-written test reports remain role
 assertions; fixture execution is not real host verification.
 New local engineering executions reserve the workspace and its scope together;
 a reservation does not prove launch or termination. Interrupted work remains

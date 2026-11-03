@@ -18,8 +18,8 @@ class Scheduler:
             started=self.supervisor.start_guarded(claim['run'],claim['token'],lambda:self.queue.may_start(claim['run'],claim['token']))
             if started is not True and started is not False: raise SchedulerError('invalid supervisor response')
             if started is False: return None
-        except Exception:
+        except Exception as exc:
             try: self.queue.mark_uncertain(claim['run'],claim['token'])
             except Exception: pass
-            raise SchedulerError('worker start outcome uncertain; inspect before retry') from None
+            raise SchedulerError('worker start outcome uncertain; inspect before retry') from exc
         return claim

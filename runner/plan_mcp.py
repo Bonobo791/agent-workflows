@@ -46,7 +46,7 @@ class HTTPSMCP:
             body=base64.b64decode(result['body'],validate=True)
             if len(body)>2097152: raise ValueError()
             return result['status'],result['headers'],body
-        except Exception: raise MCPError('MCP request failed') from None
+        except Exception: raise MCPError('MCP request failed')
         finally: _stop_helper(process)
 
 class PlanMCP:
@@ -80,7 +80,7 @@ class PlanMCP:
             matches=[m for m in messages if m.get('id')==message['id'] and 'method' not in m]
             if len(matches)!=1 or 'error' in matches[0] or not isinstance(matches[0].get('result'),dict): raise MCPError('invalid MCP response')
             return matches[0]['result']
-        except (ValueError,TypeError,UnicodeError,AttributeError): raise MCPError('invalid MCP response') from None
+        except (ValueError,TypeError,UnicodeError,AttributeError): raise MCPError('invalid MCP response')
     def initialize(self):
         self.next_id=1
         response=self._post({'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'agent_workflows','version':'0.1.0'}}})

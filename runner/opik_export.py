@@ -18,7 +18,7 @@ def create_opik_trace_exporter(endpoint,session,timeout=5):
             except ValueError: local=host.lower()=='localhost'
             if not local: raise ValueError()
         if port is not None and not 1<=port<=65535: raise ValueError()
-    except ValueError: raise ValueError('invalid Opik endpoint') from None
+    except ValueError: raise ValueError('invalid Opik endpoint')
     if getattr(session,'trust_env',None) is not False: raise ValueError('explicit HTTP session required')
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter, Compression
     transport=StrictOTLPTraceSession(session)

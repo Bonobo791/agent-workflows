@@ -56,8 +56,8 @@ class GuardedLaunch:
             if cancelled() or time.monotonic()>=deadline: raise LaunchError(RECEIPT_UNAVAILABLE)
             self.receipt=(receipt['pid'],receipt['nonce'])
             return receipt
-        except (OSError,ValueError,TypeError):
-            raise LaunchError(RECEIPT_UNAVAILABLE) from None
+        except (OSError,ValueError,TypeError) as exc:
+            raise LaunchError(RECEIPT_UNAVAILABLE) from exc
         finally:
             os.close(self.ack_fd);self.ack_fd=None
 
@@ -66,8 +66,8 @@ class GuardedLaunch:
             raise LaunchError(AUTHORIZATION_UNAVAILABLE)
         try:
             if os.write(self.go_fd,b'G')!=1: raise LaunchError(AUTHORIZATION_UNAVAILABLE)
-        except OSError:
-            raise LaunchError(AUTHORIZATION_UNAVAILABLE) from None
+        except OSError as exc:
+            raise LaunchError(AUTHORIZATION_UNAVAILABLE) from exc
         finally:
             os.close(self.go_fd);self.go_fd=None
 

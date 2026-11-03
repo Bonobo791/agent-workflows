@@ -66,7 +66,7 @@ def inspect_config(executable,workspace,environment):
             integrations[kind]=sorted(values)
         if _binary_hash(binary)!=digest: raise ValueError()
         return {'codex_executable':str(binary),'codex_sha256':digest,'disabled_integrations':integrations}
-    except Exception: raise InspectionError('local runtime inspection unavailable') from None
+    except Exception: raise InspectionError('local runtime inspection unavailable')
     finally:
         if process is not None:
             try:os.killpg(process.pid,signal.SIGTERM)
@@ -105,7 +105,7 @@ def write_config(executable,workspace,destination,environment):
         os.unlink(temporary,dir_fd=directory_fd); temporary=None
         os.fsync(directory_fd)
     except ConfigTooLarge: raise
-    except Exception: raise InspectionError('local runtime configuration could not be created; inspect the destination before retrying') from None
+    except Exception: raise InspectionError('local runtime configuration could not be created; inspect the destination before retrying')
     finally:
         if directory_fd is not None:
             if temporary is not None:

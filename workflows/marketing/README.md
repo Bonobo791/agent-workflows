@@ -39,10 +39,7 @@ establish current community rules or user permission to post.
 
 The opt-in OpenFilm stage accepts a versioned brief, stores an editable project,
 validates rendered files and requires a separate subject-bound media review.
-`openfilm_status` remains a handoff guard, not file verification. The default
-worker does not configure the trusted builder, platform authority, isolated
-render supervisor or independent media reviewer, so media remains blocked until
-those boundaries are supplied. See [OPENFILM.md](OPENFILM.md) for tested and
+`openfilm_status` remains a handoff guard, not file verification. The default worker does not configure the project builder, platform authority or independent media reviewer, so media remains blocked until those are supplied. Renders run on the host without a container boundary. See [OPENFILM.md](OPENFILM.md) for tested and
 untested behavior. Paid generation and publication are not automatic.
 
 When independently verified media-review evidence is available, the private

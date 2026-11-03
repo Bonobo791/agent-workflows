@@ -56,7 +56,7 @@ def request_control(request):
     except (OSError,ValueError,ConfigurationError):
         if transmitting and uncertain:
             error,message=uncertain
-            raise error(message) from None
+            raise error(message)
         raise
     return response
 

@@ -87,35 +87,22 @@ class ControlPlane:
                 supervisor=self.service.command_supervisor
                 if supervisor is None or supervisor.spec is None: raise ControlError('command policy unavailable')
                 return {'policy':supervisor.spec,'policy_hash':supervisor.policy_hash}
-            if action=='openfilm_policy':
-                backend=self.service.openfilm_backend
-                if backend is None: raise ControlError('OpenFilm policy unavailable')
-                return {'policy_hash':backend.policy_hash,'image':backend.supervisor.config.image,'network':'none','version':'0.2.6'}
-            if action=='openfilm_builder_policy':
-                builder=getattr(self.service.openfilm_backend,'builder',None)
-                if builder is None or not hasattr(builder,'policy_hash'): raise ControlError('OpenFilm builder policy unavailable')
-                return {'policy_hash':builder.policy_hash}
             if action=='audio_policy':
                 transcriber=self.service.audio_transcriber
                 if transcriber is None: raise ControlError('audio policy unavailable')
                 return {'policy_hash':transcriber.policy_hash,'languages':dict(transcriber.languages)}
-            if action=='docker_escalate': return {'terminated':self.service.docker_escalate(request['run'])}
             if action in ('engineering_workspace_binding','bind_engineering_workspace'):
                 import os
                 from runner.engineering_workspace import EngineeringWorkspace
                 service=self.service; run=request['run']; graph_claim=request['graph_claim']
                 service.graph._lease(run,graph_claim)
                 if not service.queue.may_start(run,request['queue_claim']): raise ControlError('queue claim unavailable')
-                intake=service.task_intake; local=service.model_supervisor; supervisor=service.docker_supervisor
-                if intake is None or (local is None and (supervisor is None or supervisor.config is None)) or service.graph._definition(run).name!='engineering': raise ControlError('configured engineering runtime required')
+                intake=service.task_intake; local=service.model_supervisor
+                if intake is None or local is None or service.graph._definition(run).name!='engineering': raise ControlError('configured engineering runtime required')
                 config=intake.config
                 if config['run']!=run or config['workflow']!='engineering': raise ControlError('configured task mismatch')
-                if local is not None:
-                    policy=local.policy_hash; workspace_root=local.engineering_root
-                    if not policy or not workspace_root: raise ControlError('local engineering policy unavailable')
-                else:
-                    policy=supervisor.config.policy_hash; workspace_root=supervisor.config.job_root.parent
-                    if not service.actions.db.execute("SELECT 1 FROM external_actions WHERE run='controller' AND action='docker_config' AND version=? AND status='approved'",(policy,)).fetchone(): raise ControlError('approved Docker policy required')
+                policy=local.policy_hash; workspace_root=local.engineering_root
+                if not policy or not workspace_root: raise ControlError('local engineering policy unavailable')
                 registry=EngineeringWorkspace(workspace_root)
                 try:
                     repository=config['github_owner']+'/'+config['github_repo']
@@ -186,7 +173,7 @@ class ControlPlane:
             if action=='revoke_freeze_approval': self.service.actions.revoke_freeze(request['run'],request['version']); return {'revoked':True}
             if action=='approve': self.service.approve(request['run'],request['approval'],request['version'],'local-owner'); return {'approved':True}
             if action=='complete' and self.fixture_mode: return {'result':self.service.complete(request['run'],request['stage'],request['claim'],request['evidence'])}
-        except Exception: raise ControlError('request failed') from None
+        except Exception: raise ControlError('request failed')
         raise ControlError('action unavailable')
 
 class _Handler(socketserver.StreamRequestHandler):

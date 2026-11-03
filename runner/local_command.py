@@ -19,7 +19,7 @@ def run_scoped_sandbox(supervisor,run,workspace,argv,deadline,output_limit,on_re
         try:
             work=Path(workspace)
             if not isinstance(read_dirs,list) or not work.is_absolute() or any(work.is_relative_to(Path(root)) or Path(root).is_relative_to(work) for root in read_dirs): raise ValueError()
-        except (TypeError,ValueError): raise LocalCommandError('read roots must be separate from workspace') from None
+        except (TypeError,ValueError): raise LocalCommandError('read roots must be separate from workspace')
     app,child_env=managed_app_server_spec(s.executable,s.environment,disabled_integrations=s.disabled_integrations,output_dir=output_dir,read_dirs=read_dirs)
     sandbox=[app[0],'sandbox','-C',workspace,'-P','workflow_local',*app[4:],'--',*argv]
     return _run_scoped(s,run,workspace,sandbox,child_env,deadline,output_limit,on_reserved,on_started,workspace_claim=workspace_claim,reserved_command=reserved_command)
@@ -38,8 +38,8 @@ def _claim_command_launch(s,run,workspace,reserved_command,workspace_claim):
             audit=db.execute("SELECT 1 FROM local_command_launch_audit WHERE id>? AND schema_version=1 AND run=? AND assignment=? AND unit=? AND status='starting'",(last,run,assignment,unit)).fetchone()
             if not audit: raise LocalCommandError('command launch audit unavailable')
             db.execute('COMMIT')
-        except sqlite3.IntegrityError:
-            db.execute('ROLLBACK'); raise LocalCommandError('command launch unavailable') from None
+        except sqlite3.IntegrityError as exc:
+            db.execute('ROLLBACK'); raise LocalCommandError('command launch unavailable') from exc
         except Exception:
             db.execute('ROLLBACK'); raise
     finally: db.close()
@@ -106,7 +106,7 @@ def _run_scoped(s,run,workspace,argv,child_env,deadline,output_limit,on_reserved
         if not stopped: raise LocalCommandError('scope termination unavailable')
         process.wait(timeout=max(.01,deadline-time.monotonic()))
         return {'outcome':'exited','exit_code':exit_code,'stdout':stdout,'stderr':stderr,'unit':unit}
-    except Exception: raise LocalCommandError('local command outcome uncertain') from None
+    except Exception: raise LocalCommandError('local command outcome uncertain')
     finally:
         if launch is not None:launch.close()
         _cleanup_command(s,run,unit,process,stopped)

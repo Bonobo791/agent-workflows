@@ -34,7 +34,7 @@ class LocalProcessHandle:
             if scopes.stop(self.run,self.unit) is not True: raise LocalProcessError('scope termination unverified')
         finally: scopes.close()
         try: self.process.wait(timeout=10)
-        except subprocess.TimeoutExpired: raise LocalProcessError('scope client termination uncertain') from None
+        except subprocess.TimeoutExpired: raise LocalProcessError('scope client termination uncertain')
         for stream in (self.process.stdin,self.process.stdout):
             if stream is not None: stream.close()
         return True
@@ -48,7 +48,7 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
         info=path.lstat()
         if not path.is_absolute() or any(ord(c)<32 for c in str(path)) or path.resolve(strict=True)!=path or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077: raise ValueError()
         args,child_env=managed_app_server_spec(executable,environment,disabled_integrations=disabled_integrations)
-    except (OSError,TypeError,ValueError): raise LocalProcessError('private canonical workspace required') from None
+    except (OSError,TypeError,ValueError): raise LocalProcessError('private canonical workspace required')
     manager_env={k:environment[k] for k in ('HOME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in environment}
     manager_env['PATH']='/usr/bin:/bin'
     unit=reserve_for_execution(db,run,backend,path,workspace_claim)
@@ -64,7 +64,7 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
         output_dir.mkdir(mode=0o700)
         git_dir=str(path/'.git') if allow_git else None
         args,child_env=managed_app_server_spec(executable,environment,disabled_integrations=disabled_integrations,output_dir=str(output_dir),git_dir=git_dir)
-    except (OSError,ValueError): raise LocalProcessError('private output allocation unavailable') from None
+    except (OSError,ValueError): raise LocalProcessError('private output allocation unavailable')
     command=['/usr/bin/systemd-run','--user','--scope','--quiet','--unit',unit,'--','/usr/bin/env','-i']
     command.extend(k+'='+v for k,v in child_env.items())
     launch=None
@@ -78,10 +78,11 @@ def start_local_process(db,run,workspace,executable,environment,backend,fence,di
             scopes.release_confirmed(run,unit,launch,fence,deadline=deadline)
         finally: scopes.close()
         return LocalProcessHandle(db,run,unit,str(path),str(output_dir),args[0],launch.process,backend,fence,git_dir)
-    except Exception:
+    except Exception as error:
         if launch is not None:
             launch.close()
             for stream in (launch.process.stdin,launch.process.stdout):
                 if stream is not None:stream.close()
             reap_after_failure(launch.process)
-        raise LocalProcessError('scope launch outcome unresolved') from None
+        # The cause class is kept in the message; the detail stays out of it.
+        raise LocalProcessError(f'scope launch outcome unresolved ({type(error).__name__})') from error

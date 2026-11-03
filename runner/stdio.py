@@ -15,7 +15,7 @@ class NDJSONTransport:
             data=json.dumps(message,separators=(',',':'),allow_nan=False).encode('utf-8')+b'\n'
             if len(data)>MAX_SEND_LINE: raise StdioError('message too large')
             self.writer.write(data); self.writer.flush()
-        except (OSError,TypeError,ValueError): raise StdioError('transport write failed') from None
+        except (OSError,TypeError,ValueError): raise StdioError('transport write failed')
     def receive(self):
         try:
             data=self.reader.readline(MAX_LINE+1)
@@ -23,4 +23,4 @@ class NDJSONTransport:
             message=json.loads(data)
             if not isinstance(message,dict): raise StdioError('invalid transport message')
             return message
-        except (OSError,TypeError,ValueError): raise StdioError('transport read failed') from None
+        except (OSError,TypeError,ValueError): raise StdioError('transport read failed')

@@ -57,7 +57,7 @@ class ScopeTests(unittest.TestCase):
             with self.subTest(value=value),patch.object(backend,'_run',return_value=value):
                 self.assertIs(backend.no_pending_job('unit.scope'),expected)
         with patch.object(backend,'_run',side_effect=ScopeError('unavailable')):
-            self.assertFalse(backend.no_pending_job('unit.scope'))
+            with self.assertRaises(ScopeError): backend.no_pending_job('unit.scope')
     def test_reservation_audit_failure_is_not_reported_as_existing_scope(self):
         with tempfile.TemporaryDirectory() as root:
             scopes=LocalScopes(root+'/state.db',Backend())

@@ -57,7 +57,7 @@ class AppServer:
         else:
             thread = self._request('thread/start', {'model':model})
         try: tid = thread['thread']['id']
-        except (KeyError, TypeError): raise ProtocolError('missing thread ID') from None
+        except (KeyError, TypeError): raise ProtocolError('missing thread ID')
         if thread_id and tid != thread_id: raise ProtocolError('resumed unexpected thread')
         self.on_thread(tid)
         self.before_turn()
@@ -66,7 +66,7 @@ class AppServer:
         if effort is not None: params.update({'model':model,'effort':effort})
         turn = self._request('turn/start', params)
         try: turn_id = turn['turn']['id']
-        except (KeyError, TypeError): raise ProtocolError('missing turn ID') from None
+        except (KeyError, TypeError): raise ProtocolError('missing turn ID')
         self.on_turn(turn_id)
         while True:
             message = self.pending.pop(0) if self.pending else self.transport.receive()

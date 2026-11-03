@@ -32,7 +32,7 @@ class AudioTranscriber:
         try:
             if not self.python.is_symlink() or not self.python.resolve(strict=True).is_relative_to(Path(self.roots[1])) or not self.python.resolve(strict=True).is_file() or fingerprint(self.roots)!=self.expected: raise ValueError()
             self.ffmpeg_hash=self._ffmpeg_hash();self.policy_hash=self._policy()
-        except Exception: raise AudioTranscriptionError('audio runtime unavailable or changed') from None
+        except Exception: raise AudioTranscriptionError('audio runtime unavailable or changed')
         service.graph.db.execute('''CREATE TABLE IF NOT EXISTS local_audio_transcripts(
             id TEXT PRIMARY KEY,run TEXT NOT NULL,subject TEXT NOT NULL,asset_ref TEXT NOT NULL,channel TEXT NOT NULL,unit TEXT UNIQUE,
             policy_hash TEXT NOT NULL,audio_ref TEXT,transcript_ref TEXT,receipt_ref TEXT,state TEXT NOT NULL)''')
@@ -119,7 +119,7 @@ class AudioTranscriber:
                 if graph.db.execute("UPDATE local_audio_transcripts SET audio_ref=?,transcript_ref=?,receipt_ref=?,state='complete' WHERE id=? AND run=? AND unit=? AND state='reserved'",(audio_ref,transcript_ref,receipt_ref,operation,run,unit)).rowcount!=1: raise AudioTranscriptionError('audio receipt unavailable')
                 return receipt_ref
         except AudioTranscriptionError: raise
-        except Exception: raise AudioTranscriptionError('audio transcription unavailable') from None
+        except Exception: raise AudioTranscriptionError('audio transcription unavailable')
         finally:graph.close()
     def verify(self,run,subject,asset_ref,channel,receipt_ref):
         graph=GraphStore(self.db_path)

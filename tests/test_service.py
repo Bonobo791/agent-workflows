@@ -4,16 +4,6 @@ from types import SimpleNamespace
 from runner.service import Service, ServiceError
 
 class ServiceTests(unittest.TestCase):
-    def test_openfilm_builder_approval_requires_current_exact_policy(self):
-        with tempfile.TemporaryDirectory() as root:
-            s=Service(root)
-            builder=SimpleNamespace(policy_hash='approved',_policy=lambda:'approved')
-            s.openfilm_backend=SimpleNamespace(builder=builder)
-            with self.assertRaises(ServiceError): s.approve('controller','openfilm_builder_policy','wrong','operator')
-            s.approve('controller','openfilm_builder_policy','approved','operator')
-            builder._policy=lambda:'changed'
-            with self.assertRaises(ServiceError): s.approve('controller','openfilm_builder_policy','approved','operator')
-            s.close()
     def test_marketing_restart_approval_and_blocked_asset(self):
         with tempfile.TemporaryDirectory() as root:
             s=Service(root); s.create('r','marketing','task'); token=s.claim('r')

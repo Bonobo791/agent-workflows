@@ -19,6 +19,8 @@ TRANSITION_AUDIT_UNAVAILABLE='scope transition audit unavailable'
 TERMINATION_AUDIT="SELECT 1 FROM local_scope_audit WHERE id>? AND schema_version=1 AND run=? AND unit=? AND state='terminated'"
 TERMINATE_STOPPING="UPDATE local_scopes SET state='terminated' WHERE run=? AND unit=? AND invocation=? AND cgroup=? AND state='stopping'"
 NONCE_PATTERN='[0-9a-f]{64}'
+# systemd reports a scope stopped by a timeout or kill as 'failed'; the empty-cgroup and no-pending-job checks still decide quiescence.
+STOPPED_STATES=('inactive','failed')
 
 class ScopeError(RuntimeError): pass
 
@@ -65,7 +67,7 @@ class SystemdScopes:
     def _run(self,*args):
         try:
             return subprocess.run(['/usr/bin/systemctl','--user',*args],env=self.environment,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=15,check=True).stdout
-        except (OSError,subprocess.SubprocessError): raise ScopeError('scope operation unavailable') from None
+        except (OSError,subprocess.SubprocessError) as exc: raise ScopeError('scope operation unavailable') from exc
     def inspect(self,unit):
         result=self._run('show',unit,'--property=Id','--property=LoadState','--property=ActiveState','--property=InvocationID','--property=ControlGroup')
         fields={}
@@ -81,19 +83,19 @@ class SystemdScopes:
         try:
             process=start_stop_witness(path,run,unit,nonce,self.environment)
             return process.wait(timeout=90)==0
-        except (OSError,ValueError,subprocess.SubprocessError):return False
+        except (OSError,ValueError,subprocess.SubprocessError) as exc: raise ScopeError(f'stop witness failed: {type(exc).__name__}') from exc
     def no_pending_job(self,unit):
         try:
             result=self._run('show',unit,'--property=Id','--property=Job').splitlines()
             return sorted(result)==sorted(['Id='+unit,'Job='])
-        except ScopeError:return False
+        except ScopeError as exc: raise ScopeError(f'job check failed: {exc}') from exc
     def pid_in_cgroup(self,pid,cgroup):
         if type(pid) is not int or pid<=1 or not isinstance(cgroup,str) or not cgroup.startswith('/'): return False
         try:
             with (Path('/proc')/str(pid)/'cgroup').open() as stream: content=stream.read(65537)
             if len(content)>65536:return False
             return [line for line in content.splitlines() if line.startswith('0::')]==['0::'+cgroup]
-        except (OSError,UnicodeError):return False
+        except (OSError,UnicodeError) as exc: raise ScopeError(f'cgroup read failed: {type(exc).__name__}') from exc
     def empty_cgroup(self,path):
         parts=PurePosixPath(path).parts
         if not path.startswith('/') or not parts or any(p in ('.','..') for p in parts): return False
@@ -105,9 +107,9 @@ class SystemdScopes:
         except FileNotFoundError:
             try: target.parent.stat()
             except FileNotFoundError: return Path('/sys/fs/cgroup/cgroup.controllers').is_file()
-            except OSError: return False
+            except OSError as exc: raise ScopeError(f'cgroup inspection failed: {type(exc).__name__}') from exc
             return False
-        except (OSError,ValueError): return False
+        except (OSError,ValueError) as exc: raise ScopeError(f'cgroup inspection failed: {type(exc).__name__}') from exc
 
 class LocalScopes:
     def __init__(self,path,backend):
@@ -116,8 +118,8 @@ class LocalScopes:
         if not self.db.execute('PRAGMA database_list').fetchone()[2]: raise ScopeError('durable database required')
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scopes(run TEXT NOT NULL,unit TEXT PRIMARY KEY,invocation TEXT,cgroup TEXT,state TEXT NOT NULL)')
         try: self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS local_scopes_live_v2 ON local_scopes(run) WHERE state IS NOT 'terminated'")
-        except sqlite3.IntegrityError:
-            self.db.close(); raise ScopeError('conflicting unresolved scopes') from None
+        except sqlite3.IntegrityError as exc:
+            self.db.close(); raise ScopeError('conflicting unresolved scopes') from exc
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,unit TEXT NOT NULL,state TEXT NOT NULL,created REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_launch_receipts(run TEXT NOT NULL,unit TEXT PRIMARY KEY,invocation TEXT NOT NULL,cgroup TEXT NOT NULL,pid INTEGER NOT NULL,nonce_hash TEXT NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS local_scope_launch_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,schema_version INTEGER NOT NULL,run TEXT NOT NULL,unit TEXT NOT NULL,invocation TEXT NOT NULL,cgroup TEXT NOT NULL,pid INTEGER NOT NULL,nonce_hash TEXT NOT NULL,status TEXT NOT NULL,created REAL NOT NULL)')
@@ -140,8 +142,8 @@ class LocalScopes:
         try:
             unit=reserve_scope(self.db,run)
             self.db.execute('COMMIT'); return unit
-        except sqlite3.IntegrityError:
-            self.db.execute('ROLLBACK'); raise ScopeError('scope reservation unavailable') from None
+        except sqlite3.IntegrityError as exc:
+            self.db.execute('ROLLBACK'); raise ScopeError('scope reservation unavailable') from exc
         except Exception:
             self.db.execute('ROLLBACK'); raise
     def state(self,run,unit):
@@ -222,7 +224,7 @@ class LocalScopes:
     def _require_inactive(self,unit,invocation,cgroup):
         for _ in range(2):
             info=self.backend.inspect(unit)
-            if (info.get('id')!=unit or info.get('active')!='inactive' or info.get('load') not in ('loaded','not-found')
+            if (info.get('id')!=unit or info.get('active') not in STOPPED_STATES or info.get('load') not in ('loaded','not-found')
                     or info.get('invocation') not in ('',invocation) or info.get('cgroup') not in ('',cgroup)
                     or self.backend.empty_cgroup(cgroup) is not True or self.backend.no_pending_job(unit) is not True):
                 raise ScopeError('scope quiescence unverified')
@@ -283,9 +285,9 @@ class LocalScopes:
             if self.db.execute(TERMINATE_STOPPING,(run,unit,*receipt[:2])).rowcount!=1: raise ScopeError(ASSIGNMENT_CHANGED)
             if not self.db.execute(TERMINATION_AUDIT,(last,run,unit)).fetchone(): raise ScopeError(TRANSITION_AUDIT_UNAVAILABLE)
             self.db.execute('COMMIT');return True
-        except Exception:
+        except Exception as exc:
             if self.db.in_transaction:self.db.execute('ROLLBACK')
-            raise ScopeError('scope stop uncertain; run remains fenced') from None
+            raise ScopeError('scope stop uncertain; run remains fenced') from exc
     def stop(self,run,unit):
         row=self._active_identity(run,unit)
         witness=getattr(self.backend,'stop_witnessed',None)
@@ -294,10 +296,10 @@ class LocalScopes:
         try:
             if self.backend.stop(unit) is not True: raise ScopeError('scope stop uncertain')
             after=self.backend.inspect(unit)
-            if after.get('id')!=unit or after.get('active')!='inactive' or after.get('load') not in ('loaded','not-found') or (after.get('load')=='loaded' and after.get('invocation') not in ('',row[0])) or not self.backend.empty_cgroup(row[1]): raise ScopeError('scope termination unverified')
+            if after.get('id')!=unit or after.get('active') not in STOPPED_STATES or after.get('load') not in ('loaded','not-found') or (after.get('load')=='loaded' and after.get('invocation') not in ('',row[0])) or not self.backend.empty_cgroup(row[1]): raise ScopeError('scope termination unverified')
             self._transition(run,unit,'terminated',TERMINATE_STOPPING,(run,unit,*row[:2]))
             return True
-        except Exception: raise ScopeError('scope stop uncertain; run remains fenced') from None
+        except Exception as exc: raise ScopeError('scope stop uncertain; run remains fenced') from exc
     def reserve_stop(self,run,unit):
         identity=self._active_identity(run,unit)
         nonce=secrets.token_hex(32);digest=hashlib.sha256(bytes.fromhex(nonce)).hexdigest()
@@ -320,8 +322,8 @@ class LocalScopes:
         try:
             if verify_quiescent(run,unit,row[0],row[1]) is not True: raise ScopeError('stop request may still be in flight')
             info=self.backend.inspect(unit)
-            if info.get('id')!=unit or info.get('active')!='inactive' or info.get('load') not in ('loaded','not-found') or (info.get('load')=='loaded' and info.get('invocation') not in ('',row[0])) or not self.backend.empty_cgroup(row[1]): raise ScopeError('scope termination unverified')
+            if info.get('id')!=unit or info.get('active') not in STOPPED_STATES or info.get('load') not in ('loaded','not-found') or (info.get('load')=='loaded' and info.get('invocation') not in ('',row[0])) or not self.backend.empty_cgroup(row[1]): raise ScopeError('scope termination unverified')
             if verify_quiescent(run,unit,row[0],row[1]) is not True: raise ScopeError('stop request may still be in flight')
             self._transition(run,unit,'terminated',TERMINATE_STOPPING,(run,unit,row[0],row[1]))
             return True
-        except Exception: raise ScopeError('scope stop remains unresolved') from None
+        except Exception as exc: raise ScopeError('scope stop remains unresolved') from exc

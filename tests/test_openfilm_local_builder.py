@@ -39,8 +39,7 @@ class LocalBuilderTests(unittest.TestCase):
             binary=root/'codex';binary.write_text('synthetic');binary.chmod(0o700)
             script=root/'fake.py';script.write_text(FAKE);backend=Backend()
             factory=lambda service:LocalSupervisor(str(root/'state.db'),str(binary),{'HOME':str(root)},backend,lambda run:True,lambda run,role:str(root),lambda:True,{'mcp_servers':[],'plugins':[]},policy_hash='a'*64)
-            runtime={'socket':'/tmp/not-connected.sock','image':'sha256:'+'1'*64,'network':'none','job_root':str(jobs),'engine':'podman-rootless'}
-            service,_=build_control(str(root),'x'*40,execution_mode='local',local_supervisor_factory=factory,docker_config=runtime,lifecycle_factory=lambda _:ManualLifecycle(str(root/'state.db'),'worker','inc'),role_config={'skill_roots':[str(root/'skills')],'required_skills':{'asset_production':['author']}},openfilm_policy_verifier=lambda _:True,openfilm_builder_policy_verifier=lambda _:True)
+            service,_=build_control(str(root),'x'*40,execution_mode='local',openfilm_package_root=str(root),local_supervisor_factory=factory,lifecycle_factory=lambda _:ManualLifecycle(str(root/'state.db'),'worker','inc'),role_config={'skill_roots':[str(root/'skills')],'required_skills':{'asset_production':['author']}})
             class Handle:
                 def __init__(self,run):
                     self.run=run;self.output_dir=str(root/'out');Path(self.output_dir).mkdir(mode=0o700);self.output_path_prefix=self.output_dir
@@ -59,11 +58,8 @@ class LocalBuilderTests(unittest.TestCase):
                 service.model_policy.discover(lambda *_:{'data':[{'model':'fake-terra','displayName':'GPT-6.1 Terra','supportedReasoningEfforts':[{'reasoningEffort':'medium'}]}],'nextCursor':None})
                 builder=service.openfilm_backend.builder
                 self.assertIs(builder.supervisor,service.model_supervisor)
-                service.approve('controller','docker_config',service.docker_supervisor.config.policy_hash,'operator')
-                service.approve('controller','openfilm_builder_policy',builder.policy_hash,'operator')
                 service.create('run','marketing','task');service.enqueue('run');job=service.lifecycle.claim();claim=service.claim('run')
                 content=service.artifacts.put(b'Approved text');brief={'content_ref':content,'assets':[{'media':[]}]};brief_ref=service.artifacts.put(json.dumps(brief).encode());attempt='1'*64
-                service.graph.db.execute("INSERT INTO openfilm_render_jobs(assignment,task_run,attempt_id,policy_hash,state,brief_ref) VALUES(?,?,?,?,?,?)",('of-'+attempt,'run',attempt,service.openfilm_backend.policy_hash,'building',brief_ref))
                 with patch.object(service.model_supervisor,'preflight',return_value=True),patch('runner.local_supervisor.start_local_process',side_effect=lambda db,run,*args,**kwargs:Handle(run)):
                     built=builder.build(run='run',attempt_id=attempt,brief_ref=brief_ref,brief=brief,canonical='Approved text',graph_claim=claim,queue_claim=job['token'])
                 self.assertTrue(builder.verify('run',attempt,brief_ref,built['project_ref'],built['proof_ref']))

@@ -458,54 +458,6 @@ with patch.object(supervisor,'preflight',return_value=True), patch('runner.local
                 if cancel: self.assertEqual(fenced,['r'])
                 graph.close()
 
-    def test_executor_accepts_upgraded_docker_stream_and_records_provenance(self):
-        import json, socketserver, struct, threading
-        from runner.docker_attach import DockerAttachTransport
-        from runner.docker_controller import UnixEngine
-        class EngineHandler(socketserver.BaseRequestHandler):
-            def handle(self):
-                head=b''
-                while b'\r\n\r\n' not in head: head+=self.request.recv(1024)
-                self.request.sendall(b'HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n')
-                reader=self.request.makefile('rb')
-                def emit(message,channel=1):
-                    data=json.dumps(message).encode()+b'\n'; frame=struct.pack('>BxxxI',channel,len(data))+data
-                    self.request.sendall(frame[:3]); self.request.sendall(frame[3:])
-                for line in reader:
-                    msg=json.loads(line); method=msg.get('method'); ident=msg.get('id')
-                    if method=='initialize': emit({'id':ident,'result':{}})
-                    elif method=='thread/start': emit({'id':ident,'result':{'thread':{'id':'thread-one'}}})
-                    elif method=='turn/start':
-                        emit({'id':ident,'result':{'turn':{'id':'turn-one'}}})
-                        emit({'ignored':'stderr'},2)
-                        emit({'method':'item/agentMessage/delta','params':{'threadId':'thread-one','turnId':'wrong','delta':'wrong'}})
-                        emit({'method':'item/agentMessage/delta','params':{'threadId':'thread-one','turnId':'turn-one','delta':'correct'}})
-                        emit({'method':'turn/completed','params':{'threadId':'thread-one','turn':{'id':'turn-one','status':'completed'}}})
-                        break
-                reader.close()
-        class Server(socketserver.UnixStreamServer): pass
-        with tempfile.TemporaryDirectory() as root:
-            output=Path(root)/'out'; output.mkdir(); (output/'draft.txt').write_text('synthetic output')
-            art=Path(root)/'art'; art.mkdir(mode=0o700)
-            sock=str(Path(root)/'engine.sock'); server=Server(sock,EngineHandler); thread=threading.Thread(target=server.serve_forever); thread.start()
-            class AttachedHandle:
-                output_dir=str(output)
-                def open_transport(self,deadline,cancelled):
-                    self.sock=UnixEngine(sock).attach('a'*64); return DockerAttachTransport(self.sock,deadline,cancelled)
-                def finish(self): self.sock.close(); return True
-                def cancel(self):
-                    if hasattr(self,'sock'): self.sock.close()
-            class AttachedSupervisor:
-                def preflight(self): return True
-                def start(self,run,role): return AttachedHandle()
-            graph=GraphStore(root+'/db'); graph.register(marketing_definition()); graph.create('r','marketing'); claim=graph.claim('r',60)
-            try:
-                store=ArtifactStore(str(art)); executor=CodexExecutor(AttachedSupervisor(),Provenance(graph),store,lambda run:None)
-                result=executor.execute(run='r',role='canonical_draft',claim=claim,skills={},prompt='p',model='m',input_versions=['input'],output_paths=['draft.txt'])
-                self.assertEqual(result['output'],'correct'); self.assertEqual(store.get(result['outputs'][0]),b'synthetic output')
-                self.assertEqual(graph.db.execute('SELECT count(*) FROM completed_turn_outputs').fetchone()[0],1)
-            finally: graph.close(); server.shutdown(); thread.join(); server.server_close()
-
     def test_fence_before_turn_blocks_turn_and_fences_worker(self):
         class Transport:
             def __init__(self): self.sent=[]; self.responses=[{'id':1,'result':{}},{'id':2,'result':{'thread':{'id':'thread-one'}}}]

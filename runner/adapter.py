@@ -51,7 +51,7 @@ def managed_app_server_spec(executable, base_environment, *, disabled_integratio
             codex_home=base_environment['CODEX_HOME']
             if not isinstance(codex_home,str) or not Path(codex_home).is_absolute() or not Path(codex_home).is_dir(): raise ValueError()
             env['CODEX_HOME']=codex_home
-    except (KeyError, TypeError, ValueError, OSError): raise ExecutionDisabled('managed Codex executable and absolute home directories required') from None
+    except (KeyError, TypeError, ValueError, OSError): raise ExecutionDisabled('managed Codex executable and absolute home directories required')
     output_rule=''
     if output_dir is not None:
         import stat
@@ -59,7 +59,7 @@ def managed_app_server_spec(executable, base_environment, *, disabled_integratio
             path=Path(output_dir); info=path.lstat()
             if not path.is_absolute() or path.resolve(strict=True)!=path or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077 or any(ord(c)<32 for c in str(path)): raise ValueError()
             output_rule=', '+json.dumps(str(path))+' = "write"'
-        except (OSError,TypeError,ValueError): raise ExecutionDisabled('private output directory required') from None
+        except (OSError,TypeError,ValueError): raise ExecutionDisabled('private output directory required')
     git_rule=''
     if git_dir is not None:
         import stat
@@ -67,7 +67,7 @@ def managed_app_server_spec(executable, base_environment, *, disabled_integratio
             path=Path(git_dir); info=path.lstat()
             if path.name!='.git' or not path.is_absolute() or path.resolve(strict=True)!=path or not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077 or any(ord(c)<32 for c in str(path)): raise ValueError()
             git_rule=', '+json.dumps(str(path))+' = "write"'
-        except (OSError,TypeError,ValueError): raise ExecutionDisabled('private Git directory required') from None
+        except (OSError,TypeError,ValueError): raise ExecutionDisabled('private Git directory required')
     read_rules=''
     if read_dirs is not None:
         import stat
@@ -83,7 +83,7 @@ def managed_app_server_spec(executable, base_environment, *, disabled_integratio
                 paths.append(path)
             if any(a!=b and (a.is_relative_to(b) or b.is_relative_to(a)) for a in paths for b in paths): raise ValueError()
             read_rules=''.join(', '+json.dumps(str(path))+' = "read"' for path in paths)
-        except (OSError,TypeError,ValueError): raise ExecutionDisabled('scoped read directories unavailable') from None
+        except (OSError,TypeError,ValueError): raise ExecutionDisabled('scoped read directories unavailable')
     settings=[
         'default_permissions="workflow_local"',
         'permissions.workflow_local.filesystem={ ":minimal" = "read", ":workspace_roots" = "write", '+json.dumps(str(binary))+' = "read"'+output_rule+git_rule+read_rules+' }',
@@ -138,7 +138,7 @@ def verify_managed_workspace(request, workspace, executable, *, output_dir=None,
     from pathlib import Path
     if not callable(request) or not isinstance(workspace,str) or not Path(workspace).is_absolute(): raise ExecutionDisabled('absolute managed workspace required')
     try: result=request('config/read',{'cwd':workspace,'includeLayers':False})
-    except Exception: raise ExecutionDisabled('managed Codex configuration unavailable') from None
+    except Exception: raise ExecutionDisabled('managed Codex configuration unavailable')
     if not isinstance(result,dict): raise ExecutionDisabled('managed Codex configuration unavailable')
     return verify_managed_config(result.get('config'),executable,output_dir=output_dir,git_dir=git_dir)
 

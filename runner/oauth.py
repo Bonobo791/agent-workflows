@@ -76,8 +76,8 @@ def validate_token_response(response, client_id, nonce, trusted_jwks, expected_s
         return claims
     except OAuthError:
         raise
-    except Exception:
-        raise OAuthError('identity validation failed') from None
+    except Exception as exc:
+        raise OAuthError('identity validation failed') from exc
 
 def complete_authorization(attempt, callback, post_form, trusted_jwks, store, *, expected_subject=None, now=None):
     """Complete a user-initiated attempt using injected transport and verified keys.
@@ -90,7 +90,7 @@ def complete_authorization(attempt, callback, post_form, trusted_jwks, store, *,
     import time
     form=attempt.callback(callback)
     try: response=post_form(form)
-    except Exception: raise OAuthError('token exchange failed') from None
+    except Exception: raise OAuthError('token exchange failed')
     if not isinstance(response,dict): raise OAuthError('invalid token response')
     if (not all(isinstance(response.get(k),str) and response[k] for k in ('access_token','refresh_token','id_token'))
         or str(response.get('token_type','')).lower() != 'bearer'

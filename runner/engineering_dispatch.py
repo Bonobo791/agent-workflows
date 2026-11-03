@@ -13,11 +13,11 @@ class EngineeringError(RuntimeError): pass
 
 def workspace_snapshot(service,run,assignment=None):
     local=service.model_supervisor
-    registry=EngineeringWorkspace(local.engineering_root if local is not None else service.docker_supervisor.config.job_root.parent)
+    registry=EngineeringWorkspace(local.engineering_root)
     try:
         row=registry.db.execute('SELECT repository,base,branch,owner,path,policy,assignment FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
         config=service.task_intake.config
-        policy=local.policy_hash if local is not None else service.docker_supervisor.config.policy_hash
+        policy=local.policy_hash
         if not row or row[0]!=config['github_owner']+'/'+config['github_repo'] or row[2]!=config['github_branch'] or row[5]!=policy or row[6]!=assignment: raise EngineeringError('workspace binding unavailable')
         path=registry.verify(run,*row[:4],row[5])
         head=registry._git(path,'rev-parse','--verify','HEAD^{commit}')
@@ -32,13 +32,13 @@ def recover_unadopted(service,run):
     row=db.execute('SELECT approved,rejected FROM engineering_unadopted WHERE run=?',(run,)).fetchone()
     if not row: return
     local=service.model_supervisor
-    registry=EngineeringWorkspace(local.engineering_root if local is not None else service.docker_supervisor.config.job_root.parent)
+    registry=EngineeringWorkspace(local.engineering_root)
     try:
         binding=registry.db.execute('SELECT repository,base,branch,owner,policy FROM engineering_workspaces WHERE run=?',(run,)).fetchone()
-        config=service.task_intake.config; policy=local.policy_hash if local is not None else service.docker_supervisor.config.policy_hash
+        config=service.task_intake.config; policy=local.policy_hash
         if not binding or binding[0]!=config['github_owner']+'/'+config['github_repo'] or binding[2]!=config['github_branch'] or binding[4]!=policy: raise EngineeringError('workspace binding unavailable')
         registry.recover_unadopted(run,binding[0],binding[1],binding[2],binding[3],binding[4],*row)
-    except Exception: raise EngineeringError('rejected correction recovery requires inspection') from None
+    except Exception: raise EngineeringError('rejected correction recovery requires inspection')
     finally: registry.close()
     db.execute('DELETE FROM engineering_unadopted WHERE run=?',(run,))
 
@@ -46,7 +46,7 @@ def dispatch(dispatcher,run,stage,queue_claim,graph_claim,feedback_ref=None,corr
     service=dispatcher.service
     if stage=='test' and (service.command_supervisor is None or not service.command_supervisor.ready()): return {'stage':'test','status':'blocked','reason':'trusted command supervisor unavailable'}
     names=service.required_skills.get(stage)
-    executor=service.model_executor or service.docker_executor
+    executor=service.model_executor
     if not names or service.skill_resolver is None or executor is None or service.model_policy is None: raise EngineeringError('role configuration unavailable')
     try: model=service.model_policy.for_role(stage)['model']
     except Exception:
@@ -110,7 +110,7 @@ def dispatch(dispatcher,run,stage,queue_claim,graph_claim,feedback_ref=None,corr
                     report=json.loads(service.artifacts.get(parsed['outputs'][0]))
                     commands=report['commands']
                     if not isinstance(commands,list) or not commands or any(not isinstance(item,dict) or set(item)!={'command','exit_code','output'} or not isinstance(item['command'],str) or not item['command'].strip() or type(item['exit_code']) is not int or item['exit_code']!=0 or not isinstance(item['output'],str) for item in commands): raise ValueError('invalid test report')
-                except Exception: raise EngineeringError('valid test report required') from None
+                except Exception: raise EngineeringError('valid test report required')
                 supervisor=service.command_supervisor
                 if supervisor is None or not supervisor.ready(): raise EngineeringError('trusted command supervisor unavailable')
                 parsed['_command_evidence']=supervisor.execute(run,queue_claim,graph_claim,before)
@@ -157,7 +157,7 @@ def approval_package(service,run):
         if parsed!=public or subject not in parsed['input_versions'] or parsed['status']!='passed': raise ValueError('QA output mismatch')
         package={'repository':current['repository'],'branch':current['branch'],'base':current['base'],'commit':commit,'implementation_evidence':results['implement']['evidence_ref'],'test_report':results['test']['outputs'][0],'test_evidence_kind':'supervisor_observed','trusted_execution_verified':True,'command_evidence':command_ref,'role_report_kind':'role_reported','qa_evidence':qa['_review_evidence'],'stage_versions':{k:v['version'] for k,v in stages.items()}}
         return service.artifacts.put(json.dumps(package,sort_keys=True,separators=(',',':')).encode())
-    except Exception: raise EngineeringError('draft approval evidence unavailable or stale') from None
+    except Exception: raise EngineeringError('draft approval evidence unavailable or stale')
 
 def verify_blocked_qa(service,run):
     """Verify the exact blocked review and subject before a writer can resume."""
@@ -175,4 +175,4 @@ def verify_blocked_qa(service,run):
         if parsed!=public or parsed['status']!='blocked' or not any(f['severity']=='blocking' and f['resolution']=='open' and f['evidence']==subject for f in parsed['findings']): raise ValueError('no actionable subject-bound finding')
         for ref in parsed['outputs']: service.artifacts.get(ref)
         return qa['version']
-    except Exception: raise EngineeringError('verified blocking QA evidence unavailable') from None
+    except Exception: raise EngineeringError('verified blocking QA evidence unavailable')

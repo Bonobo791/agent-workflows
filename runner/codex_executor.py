@@ -9,6 +9,15 @@ from runner.output_ingest import collect_outputs
 from runner.process_transport import ProcessTransport
 from runner.structured import parse_marketing_result
 
+
+def _pipeline_inputs(output,input_versions):
+    # The model's echo of input_versions is not trusted; the pipeline sets the expected references.
+    try: value=json.loads(output)
+    except (TypeError,ValueError): return output
+    if not isinstance(value,dict): return output
+    value['input_versions']=list(input_versions)
+    return json.dumps(value,ensure_ascii=False)
+
 class ExecutorError(RuntimeError): pass
 class UncertainExecutorError(ExecutorError): pass
 
@@ -37,7 +46,7 @@ def _bounded(call,deadline,cancelled,late_cleanup=None):
                 if result: break
                 state['abandoned']=True
             raise UncertainExecutorError('supervisor operation timed out or cancelled; outcome uncertain')
-    if not result or not result[0][0]: raise ExecutorError('supervisor operation failed') from None
+    if not result or not result[0][0]: raise ExecutorError('supervisor operation failed')
     return result[0][1]
 
 class CodexExecutor:
@@ -138,6 +147,8 @@ class CodexExecutor:
             if local_output is not None:
                 prompt=_local_prompt(prompt,local_output,output_paths,instruction_length)
             result=run_codex(transport,self.provenance,run,role,claim,skills,prompt,model,session_id=session_id,review_subject=review_subject,record_completion=False,before_turn=before_turn,on_tool=on_tool,before_thread=getattr(handle,'verify_config',None),images=image_paths or None,on_thread=on_thread,on_turn=on_turn)
+            expected=list(dict.fromkeys(list(input_versions)+([review_subject] if review_subject else [])))
+            result['output']=_pipeline_inputs(result['output'],expected)
             if cancelled(): raise ExecutorError('execution cancelled')
             # The supervisor, not exit of a single process, must confirm the output tree is quiescent.
             if _bounded(handle.finish,deadline,cancelled) is not True: raise ExecutorError('worker termination uncertain')

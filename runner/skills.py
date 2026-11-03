@@ -62,5 +62,5 @@ class SkillResolver:
                 except FileNotFoundError: continue
             if len(matches)!=1: raise SkillError('skill unavailable or ambiguous: '+name)
             try: result[name]=_package(matches[0])
-            except (OSError,UnicodeError): raise SkillError('skill unreadable: '+name) from None
+            except (OSError,UnicodeError): raise SkillError('skill unreadable: '+name)
         return result

@@ -46,21 +46,24 @@ class LocalSupervisor:
         return workspace,hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def _engineering(self,run,role,workspace):
         return bool(self.engineering_root and role in ('implement','test','qa') and workspace==str(Path(self.engineering_root)/'workspaces'/run/'repo'))
-    def can_resume(self,run,role,session,skills,model):
-        if role not in _WRITERS or not isinstance(session,str) or not session: return False
+    def can_resume(self,run,role,session,skills,model): return self._resume_reason(run,role,session,skills,model) is None
+    def _resume_reason(self,run,role,session,skills,model):
+        if role not in _WRITERS or not isinstance(session,str) or not session: return 'invalid role or session'
         try:
             _,binding=self._binding(run,role,skills,model)
             dbh=self._db()
             try:
                 row=dbh.execute('SELECT session,binding,state FROM local_sessions WHERE run=? AND role=?',(run,role)).fetchone()
-                return row==(session,binding,'idle') and not unresolved_scope_rows(dbh,run)
+                if row!=(session,binding,'idle'): return 'session not idle or not recorded'
+                if unresolved_scope_rows(dbh,run): return 'unresolved scope rows'
+                return None
             finally: dbh.close()
-        except Exception: return False
+        except Exception as exc: return f'{type(exc).__name__}: {exc}'
     def start_execution(self,run,role,session,skills,model):
         if not self.preflight() or self.fence(run) is not True: raise LocalSupervisorError('local policy or run fence unavailable')
         workspace,binding=self._binding(run,role,skills,model)
         if session is not None:
-            if not self.can_resume(run,role,session,skills,model): raise LocalSupervisorError('local session unavailable')
+            if not self.can_resume(run,role,session,skills,model): raise LocalSupervisorError(f"local session unavailable: {self._resume_reason(run,role,session,skills,model) or 'state changed'}")
             dbh=self._db()
             try:
                 if dbh.execute("UPDATE local_sessions SET state='active' WHERE run=? AND role=? AND session=? AND binding=? AND state='idle'",(run,role,session,binding)).rowcount!=1: raise LocalSupervisorError('local session already claimed')
@@ -94,7 +97,7 @@ class LocalSessionHandle:
         try:
             if self.session is None:
                 try: dbh.execute("INSERT INTO local_sessions VALUES(?,?,?,?, 'active')",(self.run,self.role,session,self.binding))
-                except sqlite3.IntegrityError: raise LocalSupervisorError('session already bound') from None
+                except sqlite3.IntegrityError: raise LocalSupervisorError('session already bound')
             if not dbh.execute("SELECT 1 FROM local_sessions WHERE run=? AND role=? AND session=? AND binding=? AND state='active'",(self.run,self.role,session,self.binding)).fetchone(): raise LocalSupervisorError('session binding changed')
             self.session=session
         finally: dbh.close()

@@ -30,7 +30,7 @@ class LocalAssetReviewer:
             access_ref TEXT PRIMARY KEY,run TEXT NOT NULL,subject TEXT NOT NULL,session TEXT NOT NULL,turn TEXT NOT NULL,
             image_refs TEXT NOT NULL,response_ref TEXT NOT NULL,policy_hash TEXT NOT NULL)''')
     def _policy(self):
-        data={'local_policy':self.service.model_supervisor.policy_hash,'reviewer_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),'sampler_policy':self.sampler.policy_hash if self.sampler else None,'audio_policy':self.transcriber.policy_hash if self.transcriber else None,'delivery_sha256':{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in ('codex_executor.py','codex_session.py','protocol.py')}}
+        data={'local_policy':self.service.model_supervisor.policy_hash,'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),'sampler_policy':self.sampler.policy_hash if self.sampler else None,'audio_policy':self.transcriber.policy_hash if self.transcriber else None}
         return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def _graph(self):
         graph=GraphStore(self.db_path);graph.register(marketing_definition());graph.register(engineering_definition());return graph

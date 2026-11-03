@@ -122,10 +122,10 @@ def review(service, run, queue_claim, graph_claim, reviewer, backend):
         if snapshot['current']!=current['revision']: raise ValueError('manifest changed')
         skill_fingerprint=graph.db.execute('SELECT fingerprint FROM graph_skill_state WHERE run=? AND stage=?',(run,'asset_production')).fetchone()
         if not skill_fingerprint: raise ValueError('production skills unavailable')
-    except Exception: raise OpenFilmStageError('independent asset review inputs unavailable') from None
+    except Exception: raise OpenFilmStageError('independent asset review inputs unavailable')
     attempt_hash=hashlib.sha256(json.dumps({'manifest':manifest_ref,'skills':skills},sort_keys=True,separators=(',',':')).encode()).hexdigest()
     try: attempt=graph.begin_attempt(run,'asset_production',attempt_hash,graph_claim,2)
-    except GraphError as exc: raise OpenFilmStageError(str(exc)) from None
+    except GraphError as exc: raise OpenFilmStageError(str(exc))
     review_id=hashlib.sha256(json.dumps([run,'asset_review',attempt_hash,attempt],separators=(',',':')).encode()).hexdigest()
     try:
         result=_bounded(lambda:reviewer.review(run=run,attempt_id=review_id,claim=graph_claim,subject=manifest_ref,inputs=inputs,asset_refs=refs,skills=skills,skill_contents=contents,model=model),time.monotonic()+timeout,cancelled)
@@ -146,9 +146,9 @@ def review(service, run, queue_claim, graph_claim, reviewer, backend):
         ref=service.artifacts.put(json.dumps(record,sort_keys=True,separators=(',',':')).encode())
         graph.finish(run,'asset_production',snapshot,parsed['status'],ref,graph_claim,completion_input=attempt_hash,skill_fingerprint=skill_fingerprint[0],queue_claim=queue_claim)
         return {'stage':'asset_production','status':parsed['status'],'artifact_ref':ref}
-    except Exception:
+    except Exception as exc:
         try: _bounded(lambda:reviewer.cancel(run,review_id),time.monotonic()+timeout,lambda:False)
         except Exception: pass
         try: service.fence_execution(run)
         except Exception: pass
-        raise OpenFilmStageError('asset review outcome requires inspection') from None
+        raise OpenFilmStageError('asset review outcome requires inspection') from exc

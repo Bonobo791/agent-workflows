@@ -155,17 +155,14 @@ must not contain private skills, credentials, user data or session histories.
   asset production, Instagram and Reddit before assembling a human-review
   package. The test does not publish or establish media, community-context or
   human acceptance.
-  Adding `WORKFLOW_TEST_RENDER=1`, `OPENFILM_TEST_MANUAL`,
-  `OPENFILM_PODMAN_IMAGE` and `OPENFILM_PODMAN_SOCKET` runs an offline still
-  render and independent image review in that fixture. Its platform authority
+  Adding `WORKFLOW_TEST_RENDER=1`, `OPENFILM_TEST_MANUAL` and `OPENFILM_PACKAGE_ROOT` (the OpenFilm package directory) runs an offline still render and independent image review in that fixture. Its platform authority
   is synthetic; the probe does not establish actual platform compliance.
   The fixture uses the real manual assignment and launch fence for the local
   model and renderer, then requests a manual stop and verifies the fence closes.
   It does not simulate an in-flight failure or establish crash recovery.
   As a negative platform control, set `WORKFLOW_TEST_PLATFORM_SOURCE` to an
   official source that does not establish the requested Instagram API feed PNG
-  specifications. The test requires a verified platform block and confirms no
-  render container was created. A passing probe proves the evidence gate
+  specifications. The test requires a verified platform block. A passing probe proves the evidence gate
   blocked; it does not prove the platform rejects that image.
   Source-backed block findings are revalidated against the current brief and
   authority before assembly and again before a human decision. If their proof
@@ -266,23 +263,6 @@ non-HTML views block rather than silently truncate. Outgoing model frames are
 capped separately at 16 MiB; incoming frames retain their 2 MiB cap. These
 limits do not establish source support or model review.
 
-For a local OpenFilm image, build the base with `podman build -f
-containers/openfilm/Dockerfile -t localhost/agent-workflows-openfilm-base:0.2.6 .`.
-Pass its full `sha256:` image ID as `OPENFILM_BASE_IMAGE` when building
-`Dockerfile.openfilm`, then configure the resulting full image ID. The base
-pins Playwright and npm package integrity, but Ubuntu package repositories can
-change; approve and test the resulting image ID rather than assuming rebuilds
-are byte-identical. The local image smoke test does not establish Engine API,
-workspace provenance, visual review or production policy verification.
-On an SELinux-enforcing rootless Podman host, select `engine` as
-`podman-rootless` in the render runtime configuration. This policy uses
-`keep-id` and private relabeling for the two job mounts; its terminal check
-requires the recorded image ID, namespace annotation and matching SELinux
-labels. An opt-in synthetic test exercised the actual adapter on this host.
-A separate opt-in cancellation test stops a running synthetic renderer and
-checks the container is terminated while the attempt remains uncertain and
-no result is committed. This does not reconcile an interrupted stop or
-establish full marketing workflow acceptance.
 Channel reviews bind the frozen source and admitted task as well as the draft.
 When a running task has older reviews without these inputs, dispatch invalidates
 those reviews and the assembled package only with current claims and no
@@ -292,12 +272,7 @@ While an owner decision is being applied or an approved package is completing,
 the automatic worker rejects new owner requests. Requests already queued before
 completion are processed first. Completion preflight still permits prompt stop
 and status requests; a recorded decision on one package version is immutable.
-The standard local worker constructs the renderer when the Podman runtime
-configuration is present. Its policy check verifies the socket owner and
-access, rootless Podman, seccomp, SELinux, the pinned image ID and the renderer
-helper copied from a stopped container; it removes that exact probe container.
-The exact runtime, builder and render policies still require separate local
-approvals. A synthetic local Codex-to-PNG run passed using the installed
+The standard local worker constructs the local OpenFilm backend when `OPENFILM_PACKAGE_ROOT` is set. It runs on the host with no container or approval gate. A synthetic local Codex-to-PNG run passed using the installed
 OpenFilm manual and this verifier. A configured platform reviewer has passed a
 synthetic test against a live official source. With an `asset_review` role
 skill, the local worker can independently review PNG assets and their previews
@@ -356,19 +331,6 @@ existing volumes retain their prior ownership and must be provisioned privately
 for that UID before startup. The control secret must also be an owner-only file
 owned by the worker's mapped UID. Other runtimes and volume drivers require
 independent verification of their copy-up and UID-mapping behavior.
-
-For rootless Podman on the validated host, use `compose.podman.yaml` alongside
-`compose.yaml` to map the host user to UID/GID 10001 and relabel the secret
-bind mount. Run `docker-compose -f compose.yaml -f compose.podman.yaml up -d`
-with `CONTROL_SECRET_PATH` set to a private
-owner-only host file and the Podman socket configured for the Compose provider.
-The override puts the private control socket in container `/tmp` and leaves
-durable state in `/data`. The CLI must use the same `WORKFLOW_CONTROL_DIR`;
-the Compose service sets it to `/tmp/workflow-control`. A state-directory lock
-prevents two current-version workers sharing a volume. Stop any older worker
-before upgrading: a legacy `/data/control.sock` blocks the new socket path and
-requires inspection rather than automatic removal. Do not run mixed versions
-against the same state directory.
 
 On 2026-11-01, main `52640f0` was built without network access using cached
 layers as local image `sha256:809f90f5be088c10fdd308902022be7030a20a784338c5ad2364ae5f49e9b7c8`

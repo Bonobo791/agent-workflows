@@ -28,16 +28,17 @@ class CommandSupervisor:
         service.graph.db.execute('''CREATE TRIGGER IF NOT EXISTS command_audit_update AFTER UPDATE OF state ON supervised_commands WHEN NEW.state!=OLD.state BEGIN
             INSERT INTO command_audit(schema_version,run,assignment,status,commit_id,policy_hash,record_ref,started,created) VALUES(1,NEW.run,NEW.id,NEW.state,NEW.commit_id,NEW.policy_hash,NEW.record_ref,NEW.started,(julianday('now')-2440587.5)*86400.0);
         END''')
-    def ready(self):
-        if self.spec is None or not callable(getattr(self.backend,'execute',None)) or not callable(getattr(self.backend,'verify_terminal',None)): return False
+    def ready(self): return self._ready_reason() is None
+    def _ready_reason(self):
+        if self.spec is None or not callable(getattr(self.backend,'execute',None)) or not callable(getattr(self.backend,'verify_terminal',None)): return 'backend or spec missing'
         try:
-            exact=hashlib.sha256(json.dumps(self.spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()==self.policy_hash
+            if hashlib.sha256(json.dumps(self.spec,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=self.policy_hash: return 'policy hash mismatch'
             approved=self.service.actions.db.execute("SELECT 1 FROM external_actions WHERE run='controller' AND action='command_policy' AND version=? AND status='approved'",(self.policy_hash,)).fetchone()
-            return bool(exact and approved)
-        except Exception: return False
+            return None if approved else 'command policy not approved'
+        except Exception as exc: return f'{type(exc).__name__}: {exc}'
     def execute(self,run,queue_claim,graph_claim,expected):
         from runner.engineering_dispatch import workspace_snapshot
-        if not self.ready(): raise CommandError('trusted command backend unavailable')
+        if not self.ready(): raise CommandError(f"trusted command backend unavailable: {self._ready_reason() or 'state changed'}")
         service=self.service; graph=service.graph; db=graph.db
         if not service.queue.may_start(run,queue_claim): raise CommandError('queue claim unavailable')
         current=workspace_snapshot(service,run)
@@ -83,7 +84,7 @@ class CommandSupervisor:
                 try: service.fence_execution(run)
                 except Exception: pass
             if isinstance(exc,CommandError): raise
-            raise CommandError('command outcome uncertain; inspection required') from None
+            raise CommandError('command outcome uncertain; inspection required') from exc
     def verify(self,run,commit,ref,current):
         if not self.ready(): return False
         try:

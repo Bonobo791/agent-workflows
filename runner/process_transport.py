@@ -19,25 +19,25 @@ class ProcessTransport:
             if ready[1 if write else 0]: return
     def send(self,message):
         try: data=json.dumps(message,separators=(',',':'),allow_nan=False).encode()+b'\n'
-        except (TypeError,ValueError): raise StdioError('invalid request') from None
+        except (TypeError,ValueError): raise StdioError('invalid request')
         if len(data)>MAX_SEND_LINE: raise StdioError('message too large')
         fd=self.process.stdin.fileno()
         try:
             while data:
                 self._wait(fd,True); data=data[os.write(fd,data):]
-        except OSError: raise StdioError('process write failed') from None
+        except OSError: raise StdioError('process write failed')
     def receive(self):
         fd=self.process.stdout.fileno()
         while b'\n' not in self.buffer:
             if len(self.buffer)>MAX_LINE: raise StdioError('message too large')
             self._wait(fd)
             try: data=os.read(fd,65536)
-            except OSError: raise StdioError('process read failed') from None
+            except OSError: raise StdioError('process read failed')
             if not data: raise StdioError('process closed output')
             self.buffer+=data
         line,self.buffer=self.buffer.split(b'\n',1)
         if len(line)+1>MAX_LINE: raise StdioError('message too large')
         try: message=json.loads(line)
-        except (ValueError,UnicodeError): raise StdioError('invalid JSON') from None
+        except (ValueError,UnicodeError): raise StdioError('invalid JSON')
         if not isinstance(message,dict): raise StdioError('invalid message')
         return message

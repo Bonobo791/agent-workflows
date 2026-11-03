@@ -73,9 +73,6 @@ class ManualLifecycle:
             return {'target':self.target['manual_target'],'incarnation':self.incarnation,'evidence_required':'Operator must stop this exact incarnation and confirm termination and restart fencing; confirmation is operator-attested, not machine-observed.'}
         except Exception: db.execute('ROLLBACK'); raise
     def _require_stopped_resources(self,db,run):
-        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docker_execution_map'").fetchone():
-            unresolved=db.execute("SELECT 1 FROM docker_execution_map m LEFT JOIN docker_assignments a ON a.run=m.assignment LEFT JOIN docker_terminal_evidence e ON e.run=a.run AND e.container_id=a.container_id WHERE m.task_run=? AND (a.run IS NULL OR a.state IS NOT 'terminated' OR e.run IS NULL) LIMIT 1",(run,)).fetchone()
-            if unresolved: raise ManualLifecycleError('Docker termination or launch remains unresolved')
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_scopes'").fetchone():
             from runner.local_scope import unresolved_scope_rows
             columns={row[1] for row in db.execute('PRAGMA table_info(local_scopes)')}

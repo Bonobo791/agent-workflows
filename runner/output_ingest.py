@@ -31,5 +31,5 @@ def collect_outputs(directory, paths, store):
                     finally: os.close(fd)
                 finally: os.close(current)
         finally: os.close(root)
-    except (OSError,TypeError,ValueError): raise OutputError('output collection failed') from None
+    except (OSError,TypeError,ValueError): raise OutputError('output collection failed')
     return refs

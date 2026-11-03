@@ -14,7 +14,7 @@ def refresh(store, post_form, now=None):
         pending=dict(old); pending['refresh_pending']=True
         record.save(pending)
         try: result=post_form(form)
-        except Exception: raise RefreshError('refresh outcome unknown; reauthorization may be required') from None
+        except Exception: raise RefreshError('refresh outcome unknown; reauthorization may be required')
         if not isinstance(result,dict): raise RefreshError('invalid refresh response')
         scope=result.get('scope',old.get('scope',''))
         if (not isinstance(scope,str) or 'chatgpt.tokens.use.direct' not in scope.split()

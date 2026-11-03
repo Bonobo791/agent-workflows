@@ -64,7 +64,7 @@ class CodexAppsPlan:
             data=result.get('structuredContent')
             if result.get('isError') is not False or not isinstance(data,dict) or data.get('ok') is not True or self.verify_policy() is not True: raise ValueError()
             return data
-        except Exception: raise PlanGatewayError('tracker gateway unavailable') from None
+        except Exception: raise PlanGatewayError('tracker gateway unavailable')
         finally:
             try: _stop_gateway(process)
             finally:

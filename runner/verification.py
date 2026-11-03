@@ -7,5 +7,5 @@ def verify_references(store,result,expected_inputs):
     if not isinstance(outputs,list) or not outputs or any(not isinstance(ref,str) for ref in outputs): raise VerificationError('output references missing')
     try:
         for ref in outputs: store.get(ref)
-    except Exception: raise VerificationError('output artifact unavailable or changed') from None
+    except Exception: raise VerificationError('output artifact unavailable or changed')
     return list(outputs)

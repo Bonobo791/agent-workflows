@@ -104,9 +104,6 @@ class WorkerProcessTests(unittest.TestCase):
             self.assertEqual(process.returncode,0)
             self.assertFalse(path.exists())
 
-    def test_sigterm_fences_an_inflight_automatic_assignment(self):
-        self._exercise_interrupted_worker(False)
-
     @unittest.skipUnless(os.environ.get('WORKFLOW_TEST_SYSTEMD')=='1','real user systemd scope not configured')
     def test_sigkill_can_be_fenced_and_scope_stopped_after_restart(self):
         self._exercise_interrupted_worker(True)

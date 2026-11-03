@@ -57,11 +57,16 @@ class LocalPRObserver:
 
 class LocalPRAuthority:
     def __init__(self,service,http):self.service,self.http=service,http
-    def ready(self):
-        try:return self.service.model_supervisor is not None and self.service.model_supervisor.preflight() is True and self.http._digest()==self.http.digest
-        except Exception:return False
+    def ready(self): return self._ready_reason() is None
+    def _ready_reason(self):
+        try:
+            if self.service.model_supervisor is None: return 'model supervisor missing'
+            if self.service.model_supervisor.preflight() is not True: return 'model supervisor preflight failed'
+            if self.http._digest()!=self.http.digest: return 'http digest changed'
+            return None
+        except Exception as exc: return f'{type(exc).__name__}: {exc}'
     def for_claim(self,run,queue_claim,graph_claim):
-        if not self.ready():raise GitHubError('local PR authority unavailable')
+        if not self.ready():raise GitHubError(f"local PR authority unavailable: {self._ready_reason() or 'state changed'}")
         push=LocalPushTransport(self.service,run,queue_claim,graph_claim,self.http);mutation=LocalMutationTransport(self.service,run,queue_claim,graph_claim,self.http);observer=LocalPRObserver(self.service,self.http)
         class Bound:
             http=ReadAndIsolatedPush(self.http,push,mutation)

@@ -25,7 +25,7 @@ class HTTPS:
                 result=json.loads(data)
                 if not isinstance(result,dict): raise TransportError('invalid response')
                 return result
-        except (OSError,ValueError,urllib.error.URLError): raise TransportError('OAuth request failed') from None
+        except (OSError,ValueError,urllib.error.URLError): raise TransportError('OAuth request failed')
 
 class OAuthTransport:
     def __init__(self,http=None): self.http=http or HTTPS()
@@ -38,7 +38,7 @@ class OAuthTransport:
         if metadata.get('issuer')!=ISSUER: raise TransportError('issuer mismatch')
         url=metadata.get('jwks_uri','')
         try: parts=urllib.parse.urlsplit(url)
-        except ValueError: raise TransportError('invalid key URL') from None
+        except ValueError: raise TransportError('invalid key URL')
         if parts.scheme!='https' or parts.netloc!='auth.openai.com' or not parts.path.startswith('/') or parts.query or parts.fragment: raise TransportError('untrusted key URL')
         keys=self.http.request('GET',url,headers={'Accept':'application/json'})
         if not isinstance(keys.get('keys'),list): raise TransportError('invalid key set')

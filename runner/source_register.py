@@ -35,7 +35,7 @@ def validate(store,register_ref,proof_ref):
             seen.add(key)
         if seen!=required: raise ValueError()
         return True
-    except Exception: raise SourceError('source register or independent verification unavailable') from None
+    except Exception: raise SourceError('source register or independent verification unavailable')
 
 def verify(store,register_ref,verifier):
     if not callable(verifier): raise SourceError('trusted source verifier unavailable')
@@ -43,4 +43,4 @@ def verify(store,register_ref,verifier):
         register=json.loads(store.get(register_ref)); result=verifier(register,register_ref)
         encoded=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
         proof_ref=store.put(encoded); validate(store,register_ref,proof_ref); return proof_ref
-    except Exception: raise SourceError('source verification failed') from None
+    except Exception: raise SourceError('source verification failed')

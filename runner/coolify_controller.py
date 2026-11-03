@@ -18,7 +18,7 @@ class HTTPS:
             with self.opener.open(request,timeout=15) as response:
                 if len(response.read(65537))>65536: raise CoolifyError('response too large')
                 return response.status
-        except Exception: raise CoolifyError('lifecycle request outcome uncertain') from None
+        except Exception: raise CoolifyError('lifecycle request outcome uncertain')
 
 class CoolifyController:
     def __init__(self,origin,token,service,application,http=None):
@@ -31,7 +31,7 @@ class CoolifyController:
         if not isinstance(target,dict) or target.get('origin',self.origin).rstrip('/')!=self.origin or target.get('service')!=self.service or target.get('application')!=self.application: raise CoolifyError('target not allowlisted')
         url=self.origin+'/api/v1/services/'+self.service+'/applications/'+self.application+'/'+action
         try: status=self.http.post(url,self.token)
-        except Exception: raise CoolifyError('lifecycle request outcome uncertain') from None
+        except Exception: raise CoolifyError('lifecycle request outcome uncertain')
         if status!=200: raise CoolifyError('lifecycle request outcome uncertain')
     def stop(self,target): self._request(target,'stop')
     def restart(self,target): self._request(target,'restart')

@@ -87,7 +87,7 @@ class VideoSamples:
                 if graph.db.execute("UPDATE local_video_samples SET sample_ref=?,receipt_ref=?,state='complete' WHERE id=? AND run=? AND unit=? AND state='reserved'",(sample_ref,receipt_ref,operation,run,unit)).rowcount!=1: raise VideoSampleError('video receipt unavailable')
                 return receipt_ref
         except VideoSampleError: raise
-        except Exception: raise VideoSampleError('video sampling unavailable') from None
+        except Exception: raise VideoSampleError('video sampling unavailable')
         finally:graph.close()
     def verify(self,run,subject,asset_ref,receipt_ref):
         graph=GraphStore(self.db_path)
