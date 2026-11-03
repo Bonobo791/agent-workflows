@@ -23,6 +23,7 @@ log = logging.getLogger('marketing')
 
 REPO = HERE.parent
 SKILLS_DIR = HERE / 'skills'
+DESIGN_DIR = HERE / 'design-systems'
 CAMPAIGNS_DIR = REPO / 'campaigns'
 # The owner's roles: writer "gpt6 luna max", reviewer "gpt6 sol medium", image and video creator "gpt6 sol high".
 ROLES = {
@@ -42,13 +43,16 @@ X_LINK_LENGTH = 23
 BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Open questions']
 USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 DELIVERABLES = ['article', 'social', 'images', 'reel']
-TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints']
+TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints', 'Design system']
+# Design system names are file names: letters, digits and hyphens. TEMPLATE is uppercase, so NAME_RE would reject it.
+DESIGN_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]*$')
+DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not']
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
 SOCIAL_INPUTS = ['02-brief', '03-article#outline']
 SOCIAL_REVIEW_INPUTS = ['02-brief#Facts', '02-brief#Channel ideas']
-IMAGE_INPUTS = ['02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
-REEL_INPUTS = ['02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
+IMAGE_INPUTS = ['design-system', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
+REEL_INPUTS = ['design-system', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
 STEPS = [
     {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources',
      'inputs': ['00-task'], 'review_inputs': ['00-task']},
@@ -229,16 +233,41 @@ def parse_deliverables(task):
     return set(words)
 
 
-def check_task(task):
+def design_system_errors(task):
+    name = sections(task).get('Design system', '')
+    if name in ('', 'None.'):
+        return ['Deliverables include images or reel, so ## Design system must name a design system file, not None.']
+    if not DESIGN_NAME_RE.match(name):
+        return [f'design system name "{name}" must use letters, digits and hyphens only']
+    path = DESIGN_DIR / f'{name}.md'
+    if not path.is_file():
+        return [f'design system file not found: {path}']
+    return [f'{path.name}: {error}' for error in check_design_system(path.read_text())]
+
+
+def check_task(task, design=True):
     errors = []
     if not (task.splitlines() or [''])[0].startswith('# Task: '):
         errors.append('the first line must start with "# Task: "')
     errors += missing_sections(task, TASK_SECTIONS)
     if 'Deliverables' in sections(task):
         try:
-            parse_deliverables(task)
+            wanted = parse_deliverables(task)
         except WorkflowError as error:
             errors.append(str(error))
+        else:
+            if design and wanted & {'images', 'reel'}:
+                errors += design_system_errors(task)
+    return errors
+
+
+def check_design_system(text):
+    found = sections(text)
+    errors = [f'missing or empty section "## {heading}"' for heading in DESIGN_SECTIONS if not found.get(heading)]
+    colors = found.get('Colors', '')
+    for role in ('background', 'text', 'accent'):
+        if not re.search(rf'^- {role}: #[0-9A-Fa-f]{{6}}$', colors, re.MULTILINE):
+            errors.append(f'## Colors needs a line "- {role}: #RRGGBB" with a six-digit hex colour')
     return errors
 
 
@@ -366,6 +395,9 @@ def outline(md):
 def read_input(campaign, spec):
     """`spec` is a step id or task file ('02-brief'), optionally with '#<Section>' or '#outline'."""
     input_id, _, part = spec.partition('#')
+    if input_id == 'design-system':
+        name = section((campaign / '00-task.md').read_text(), 'Design system', '00-task')
+        return (DESIGN_DIR / f'{name}.md').read_text()
     if input_id == '00-task':
         text = (campaign / '00-task.md').read_text()
     else:
@@ -714,7 +746,7 @@ def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
     check_models(client, roles, [{'role': 'writer'}])
     prompt = '\n\n'.join([load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)])
     written, _ = call_codex(client, roles['writer'], prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer')
-    errors = check_task(written['output'])
+    errors = check_task(written['output'], design=False)  # the owner sets the design system when checking 00-task.md
     log.info('import: task text %d characters; task check %s', len(written['output']), 'passed' if not errors else 'failed: ' + '; '.join(errors))
     log.info('import notes: %s', written['notes'] or 'none')
     if errors:

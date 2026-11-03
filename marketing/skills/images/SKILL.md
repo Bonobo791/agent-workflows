@@ -66,8 +66,7 @@ scenes/card.html:
 Design rules:
 - Text on the image: a headline of eight words or fewer and, optionally, one short line under it.
 - Large text, strong contrast, at least 60 px from every edge. No text may overlap other text or be cut off.
-- Use system fonts and inline CSS only. Do not load anything from the internet.
-- The three images share one look: the same colors and fonts.
+- Inline CSS only. Do not load anything from the internet.
 - Use only facts from the brief's Facts section.
 - One idea per image.
 - At most two fonts in an image.
@@ -76,8 +75,4 @@ Design rules:
 - Follow the constraints the brief gives.
 - No em dashes.
 
-House style (the same for every still and the reel):
-- Background #0F172A. Headline text #FFFFFF. Accent #38BDF8: one accent shape or underline per image.
-- Font: font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif. Headline weight 700; second line weight 400.
-- Headline 72 to 96 px; second line 36 to 44 px.
-- The same layout on all three stills: headline left-aligned, vertically centred, accent bar under it.
+Follow the design system block exactly: use only its colours, its font stack and sizes, its layout and its logo. Use no colour that is not in its Colors section. Follow its Do not list.

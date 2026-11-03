@@ -25,7 +25,7 @@ MODELS = {'w': ['max'], 'r': ['medium', 'high']}
 SAMPLE_TASK = Path(__file__).resolve().parents[1] / 'marketing' / 'examples' / 'sample-task.md'
 
 
-def task_text(deliverables='article', without=None):
+def task_text(deliverables='article', without=None, design_system='None.'):
     parts = [
         ('Deliverables', deliverables),
         ('Goal', 'Get existing users to try the export before the tax season.'),
@@ -34,6 +34,7 @@ def task_text(deliverables='article', without=None):
         ('Sources', 'None.'),
         ('Required headings', 'None.'),
         ('Constraints', 'None.'),
+        ('Design system', design_system),
     ]
     body = ''.join(f'## {name}\n{text}\n\n' for name, text in parts if name != without)
     return '# Task: announce the new export feature\n\n' + body
@@ -322,6 +323,37 @@ class ImagesTest(unittest.TestCase):
         with self.assertRaises(run.WorkflowError) as caught:
             run.materialize_images(self.step_dir, {'projects': projects, 'notes': ''})
         self.assertIn('instagram', str(caught.exception))
+
+
+class DesignSystemTest(unittest.TestCase):
+    def test_design_system_is_required_for_images(self):
+        self.assertTrue(run.check_task(task_text('article, social, images', design_system='None.')))
+
+    def test_design_system_file_must_exist(self):
+        errors = run.check_task(task_text('article, social, images', design_system='nosuchsystem'))
+        self.assertTrue(any('not found' in error for error in errors))
+
+    def test_check_design_system(self):
+        template = (run.DESIGN_DIR / 'TEMPLATE.md').read_text()
+        self.assertEqual(run.check_design_system(template), [])
+        self.assertTrue(run.check_design_system(template.replace('- accent: #3366FF\n', '')))
+
+    def test_images_get_the_design_system_first(self):
+        campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        campaign.mkdir(parents=True)
+        (campaign / '00-task.md').write_text(task_text('article, social, images', design_system='moderaty'))
+        brief = campaign / '02-brief'
+        brief.mkdir()
+        (brief / 'APPROVED').write_text('done\n')
+        (brief / 'output.md').write_text('## Core message\nOne idea.\n\n## Facts\n- Fact https://example.com (checked 2026-11-03)\n\n## Visual ideas\nA card.\n')
+        for step_id in ('04-linkedin', '05-x', '06-instagram'):
+            step_dir = campaign / step_id
+            step_dir.mkdir()
+            (step_dir / 'APPROVED').write_text('done\n')
+            (step_dir / 'output.md').write_text('Text.\n')
+        step = next(s for s in run.STEPS if s['id'] == '07-images')
+        prompt = run.writer_prompt(run.SKILLS_DIR, campaign, step)
+        self.assertLess(prompt.index('--- BEGIN design-system ---'), prompt.index('--- BEGIN 02-brief#Core message ---'))
 
 
 class ImportTest(unittest.TestCase):

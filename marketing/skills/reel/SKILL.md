@@ -37,7 +37,7 @@ How to build it:
 - Every scene must move: text slides or fades in. A video that never changes is not allowed.
 - On-screen text must be large and readable without sound. Keep it at least 120 px from the top and bottom edges and 60 px from the sides.
 - No audio.
-- Use system fonts and inline CSS only. Do not load anything from the internet.
+- Inline CSS only. Do not load anything from the internet.
 - Use only facts from the brief's Facts section.
 - The hook is on screen from the first frame. No intro, no logo, no "hey guys". The hook is true to the scenes that follow.
 - Change what is on screen every 2 to 4 seconds.
@@ -45,7 +45,4 @@ How to build it:
 - Follow the constraints the brief gives.
 - No em dashes.
 
-House style (the same as the stills):
-- Background #0F172A. Headline text #FFFFFF. Accent #38BDF8: one accent shape or underline per scene.
-- Font: font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif. Headline weight 700; second line weight 400.
-- Headline 96 to 120 px; second line 36 to 44 px. The same colors and fonts on every scene.
+Follow the design system block exactly: use only its colours, its font stack and sizes, its layout and its logo. Use no colour that is not in its Colors section. Follow its Do not list.

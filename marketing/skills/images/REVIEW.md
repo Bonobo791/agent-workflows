@@ -6,6 +6,7 @@ Blocking findings:
 - Text that overlaps, is cut off, is too small to read on a phone, or has weak contrast.
 - Text closer than 60 px to an edge (30 px on your half-size copy).
 - More than one idea in an image, or more than two fonts.
+- A colour, font, layout or logo use that breaks the design system block.
 - A line broken inside a word, or broken where the meaning breaks.
 - A claim or a quote that is not in the brief's Facts, or words put in a real person's mouth.
 - An image is missing (the deliverable must list linkedin.png, x.png and instagram.png).

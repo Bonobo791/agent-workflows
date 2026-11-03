@@ -8,6 +8,7 @@ Blocking findings:
 - No hook in the first frame, or an intro or logo before the hook.
 - A hook that the scenes after it do not deliver.
 - A video that does not make sense with the sound off.
+- A colour, font, layout or logo use that breaks the design system block.
 - A claim that is not in the brief's Facts.
 - No call to action at the end.
 - Any em dash.

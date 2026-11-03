@@ -36,6 +36,10 @@ Page URL: <the page the article is for, or None.>
 
 ## Constraints
 <rules the issue sets, one per line, or None.>
+- Design system not set; owner to choose one from marketing/design-systems/.
+
+## Design system
+None.
 ```
 
 Rules:
