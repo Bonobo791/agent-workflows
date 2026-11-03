@@ -34,13 +34,14 @@ DELIVERABLES = ['article', 'social', 'images', 'reel']
 TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints']
 
 STEPS = [
-    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'inputs': ['00-task']},
-    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'inputs': ['00-task', '01-brief']},
-    {'id': '03-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'inputs': ['01-brief', '02-article']},
-    {'id': '04-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'inputs': ['01-brief', '02-article']},
-    {'id': '05-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'inputs': ['01-brief', '02-article']},
-    {'id': '06-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'deliverable': 'images', 'inputs': ['01-brief', '03-linkedin', '04-x', '05-instagram']},
-    {'id': '07-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'inputs': ['01-brief', '02-article', '05-instagram']},
+    {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'inputs': ['00-task']},
+    {'id': '02-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'inputs': ['00-task', '01-sources']},
+    {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'inputs': ['00-task', '02-brief']},
+    {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'inputs': ['02-brief', '03-article']},
+    {'id': '05-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'inputs': ['02-brief', '03-article']},
+    {'id': '06-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'inputs': ['02-brief', '03-article']},
+    {'id': '07-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'deliverable': 'images', 'web': False, 'inputs': ['02-brief', '04-linkedin', '05-x', '06-instagram']},
+    {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'inputs': ['02-brief', '03-article', '06-instagram']},
 ]
 
 
@@ -273,9 +274,10 @@ def data_url(png):
     return 'data:image/png;base64,' + base64.b64encode(png.read_bytes()).decode()
 
 
-def call_codex(client, role, prompt, cwd, schema, save_path, what, images=()):
+def call_codex(client, role, prompt, cwd, schema, save_path, what, images=(), web=False):
     try:
-        result = client.run_turn(prompt, role['model'], role['effort'], str(cwd), output_schema=schema, images=[data_url(p) for p in images])
+        result = client.run_turn(prompt, role['model'], role['effort'], str(cwd), output_schema=schema,
+                                 images=[data_url(p) for p in images], web_search='live' if web else 'disabled')
     except CodexError as error:
         raise WorkflowError(f'{what} failed: {error}') from None
     record_usage(cwd, what, role, result)
@@ -388,14 +390,14 @@ def write(client, roles, skills_dir, campaign, step, step_dir, previous, review,
         (step_dir / stale).unlink(missing_ok=True)
     print(f"[{step['id']}] writer working...")
     prompt = writer_prompt(skills_dir, campaign, step, previous, review, notes)
-    written = call_codex(client, roles[step['role']], prompt, step_dir, WRITER_SCHEMAS[step['kind']], step_dir / 'writer.json', 'writer')
+    written = call_codex(client, roles[step['role']], prompt, step_dir, WRITER_SCHEMAS[step['kind']], step_dir / 'writer.json', 'writer', web=step['web'])
     return written, materialize(step, step_dir, written)
 
 
 def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
     print(f"[{step['id']}] reviewer working...")
     prompt = review_prompt(skills_dir, campaign, step, step_dir)
-    review = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images)
+    review = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images, web=step['web'])
     if any(finding['severity'] == 'blocking' for finding in review['findings']):
         review['verdict'] = 'revise'
     (step_dir / 'review.json').write_text(json.dumps(review, indent=2, ensure_ascii=False))

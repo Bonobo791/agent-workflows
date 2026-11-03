@@ -71,8 +71,9 @@ class CodexClient:
             if cursor is None:
                 return models
 
-    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=()):
-        thread = self._request('thread/start', {'model': model, 'cwd': cwd, 'ephemeral': True, 'sandbox': 'read-only', 'approvalPolicy': 'never'})
+    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=(), web_search='disabled'):
+        thread = self._request('thread/start', {'model': model, 'cwd': cwd, 'ephemeral': True, 'sandbox': 'read-only', 'approvalPolicy': 'never',
+                                                'config': {'web_search': web_search}})
         thread_id = thread['thread']['id']
         content = [{'type': 'text', 'text': prompt}] + [{'type': 'image', 'url': url} for url in images]
         params = {'threadId': thread_id, 'input': content, 'model': model, 'effort': effort, 'cwd': cwd, 'approvalPolicy': 'never'}

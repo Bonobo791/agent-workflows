@@ -13,9 +13,9 @@ ROLES = {
     'creator': {'model': 'r', 'effort': 'high'},
 }
 TEXT_STEPS = [
-    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'inputs': ['00-task']},
-    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'inputs': ['00-task', '01-brief']},
-    {'id': '03-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'inputs': ['01-brief', '02-article']},
+    {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'inputs': ['00-task']},
+    {'id': '02-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'inputs': ['00-task', '01-brief']},
+    {'id': '03-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'inputs': ['01-brief', '02-article']},
 ]
 USAGE = {'inputTokens': 100, 'cachedInputTokens': 40, 'outputTokens': 10, 'reasoningOutputTokens': 5, 'totalTokens': 110}
 MODELS = {'w': ['max'], 'r': ['medium', 'high']}
@@ -45,13 +45,15 @@ class FakeClient:
         self.models_available = models
         self.prompts = []
         self.calls = []
+        self.web_searches = []
 
     def models(self):
         return self.models_available
 
-    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=()):
+    def run_turn(self, prompt, model, effort, cwd, output_schema=None, images=(), web_search='disabled'):
         self.prompts.append(prompt)
         self.calls.append((model, effort))
+        self.web_searches.append(web_search)
         thread_id = f'thread-{len(self.prompts)}'
         if output_schema is run.REVIEW_SCHEMA:
             verdict = self.verdicts.pop(0)
@@ -182,6 +184,10 @@ class TaskFormatTest(unittest.TestCase):
 
     def test_sample_task_is_valid(self):
         self.assertEqual(run.check_task(SAMPLE_TASK.read_text()), [])
+
+    def test_select_steps_keeps_order(self):
+        ids = [step['id'] for step in run.select_steps(task_text('social, article'), run.STEPS)]
+        self.assertEqual(ids, ['01-sources', '02-brief', '03-article', '04-linkedin', '05-x', '06-instagram'])
 
 
 if __name__ == '__main__':
