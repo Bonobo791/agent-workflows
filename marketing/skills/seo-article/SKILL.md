@@ -10,7 +10,7 @@ Format, in this order:
 - One `# ` title line with the primary keyword near the start.
 - The brief's H2 headings as `## ` headings, in the brief's order. Required headings must appear exactly as written.
 - A comparison table, for a comparison article.
-- Where you use a fact, link its source URL from the brief's Facts section.
+- Where you use a fact, link its source URL from the brief's Facts. A fact marked (from task) needs no link.
 - End with one call to action that matches the brief's Goal.
 - Stay within 20% of the brief's target length.
 

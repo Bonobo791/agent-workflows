@@ -46,5 +46,6 @@ Rules:
 - Copy facts, URLs, dates, numbers and required headings exactly as the issue and its documents state them.
 - Deliverables: only what the issue asks for. A website page or blog article is article. Social posts are social. Images and reel only when the issue asks for them. If the issue does not say which deliverables it wants, write article and add this line under Constraints: - Deliverables not stated in the issue; owner to confirm.
 - Start dates, due dates and "do not start before" lines go under Details as "Schedule: ...", never under Constraints.
+- If the issue asks for social, images or reel without an article, include article and add this line under Constraints: - Article added because the social posts link to it; owner to confirm.
 - Use no em dashes. Never invent a fact.
 - If the tracker cannot be reached, return an empty output and say why in notes.

@@ -66,7 +66,12 @@ article, social, images, reel
 
 ## Constraints
 <rules the content must follow, or None.>
+
+## Design system
+<a file name from marketing/design-systems without .md, such as moderaty, or None. when Deliverables have no images or reel>
 ```
+
+Make a new design system by copying `marketing/design-systems/TEMPLATE.md`.
 
 Deliverables is a comma-separated list of `article`, `social`, `images` and `reel`. See `marketing/examples/sample-task.md`.
 

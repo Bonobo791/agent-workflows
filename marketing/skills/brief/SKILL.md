@@ -28,7 +28,7 @@ The primary search phrase for the article, its search intent (informational, com
 If the Deliverables include social: one line each, starting `- LinkedIn:`, `- X:` and `- Instagram:`, with the single idea that post carries. Otherwise: Not needed.
 
 ## Visual ideas
-If the Deliverables include images or reel: what the three images and the reel show. Otherwise: Not needed.
+If the Deliverables include images: what the three images show. If the Deliverables include reel: what the reel shows. Otherwise: Not needed.
 
 ## Facts
 Copy every fact from the sources step's Facts section, word for word, with its source. Add no fact.

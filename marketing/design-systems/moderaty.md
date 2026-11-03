@@ -13,8 +13,10 @@ Colours the images and reel may use. Only these colours may appear.
 - text-3: #5c5c66
 - ok: #3ddc84
 - amber: #f5b84c
+- line: #ffffff at 9% opacity
+- line-strong: #ffffff at 16% opacity
 
-Hairline borders are white at 9% opacity (line) and 16% opacity (line-strong), 1px wide. Text-3 is for non-essential labels only: it is 2.99:1 on the background, below the 4.5:1 target.
+Hairline borders are 1px wide. Text-3 is for non-essential labels only: it is 2.99:1 on the background, below the 4.5:1 target.
 
 ## Typography
 Font stack (system fonts only, nothing loaded from the internet), headline weight, body weight, and sizes for stills and for the reel.
