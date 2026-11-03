@@ -92,7 +92,7 @@ Each step uses one of three roles. The roles are set in `ROLES` at the top of `m
 
 | Role | Used for | Model | Effort |
 | --- | --- | --- | --- |
-| writer | steps 01, 03 to 06, and the import | `gpt-6-luna` | `xhigh` |
+| writer | steps 01, 03 to 06, and the import | `gpt-6.1-sol` | `medium` |
 | strategist | the brief (step 02) | `gpt-6.1-sol` | `high` |
 | reviewer | the review of every step | `gpt-6.1-sol` | `medium` |
 | creator | images and reel | `gpt-6.1-sol` | `high` |

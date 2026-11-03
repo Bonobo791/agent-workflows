@@ -414,7 +414,7 @@ class StepRoleTest(unittest.TestCase):
         brief = next(step for step in run.STEPS if step['id'] == '02-brief')
         self.assertEqual(run.ROLES[brief['role']], {'model': 'gpt-6.1-sol', 'effort': 'high'})
         article = next(step for step in run.STEPS if step['id'] == '03-article')
-        self.assertEqual(run.ROLES[article['role']]['model'], 'gpt-6-luna')
+        self.assertEqual(run.ROLES[article['role']], {'model': 'gpt-6.1-sol', 'effort': 'medium'})
 
     def test_missing_strategist_effort_stops_before_any_turn(self):
         brief = next(step for step in run.STEPS if step['id'] == '02-brief')

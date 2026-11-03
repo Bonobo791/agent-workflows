@@ -28,9 +28,9 @@ SKILLS_DIR = HERE / 'skills'
 DESIGN_DIR = HERE / 'design-systems'
 LIBRARY_DIR = HERE / 'skill-library'
 CAMPAIGNS_DIR = REPO / 'campaigns'
-# The owner's roles: writer "gpt6 luna xhigh", reviewer "gpt6.1 sol medium", image and video creator "gpt6.1 sol high".
+# The owner's roles: writer "gpt6.1 sol medium", reviewer "gpt6.1 sol medium", image and video creator "gpt6.1 sol high".
 ROLES = {
-    'writer': {'model': 'gpt-6-luna', 'effort': 'xhigh'},
+    'writer': {'model': 'gpt-6.1-sol', 'effort': 'medium'},
     'reviewer': {'model': 'gpt-6.1-sol', 'effort': 'medium'},
     'creator': {'model': 'gpt-6.1-sol', 'effort': 'high'},
     'strategist': {'model': 'gpt-6.1-sol', 'effort': 'high'},
