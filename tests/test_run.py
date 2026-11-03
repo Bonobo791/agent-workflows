@@ -31,8 +31,9 @@ SAMPLE_TASK = Path(__file__).resolve().parents[1] / 'marketing' / 'examples' / '
 META_LINE = 'Meta description: ' + 'x' * 155  # a valid meta description length
 
 
-def full_brief(plan):
-    body = ''.join(f'## {name}\nText.\n\n' for name in run.BRIEF_SECTIONS if name not in ('Article plan', 'Facts'))
+def full_brief(plan, channel='Not needed.'):
+    texts = {'Channel ideas': channel, 'Visual ideas': 'Not needed.'}
+    body = ''.join(f"## {name}\n{texts.get(name, 'Text.')}\n\n" for name in run.BRIEF_SECTIONS if name not in ('Article plan', 'Facts'))
     return f'## Article plan\n{plan}\n\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n\n' + body
 
 
@@ -462,9 +463,9 @@ class LibraryTest(unittest.TestCase):
 
 class LengthTest(unittest.TestCase):
     def test_brief_needs_one_target_length(self):
-        self.assertTrue(any('exactly one' in e for e in run.check_brief(full_brief('- Content type: guide.'), '', None)))
-        self.assertTrue(any('exactly one' in e for e in run.check_brief(full_brief('- Target length: 800 words\n- Target length: 900 words'), '', None)))
-        self.assertEqual(run.check_brief(full_brief('- Target length: 800 words'), '', None), [])
+        self.assertTrue(any('exactly one' in e for e in run.check_brief(full_brief('- Content type: guide.'), task_text(), None)))
+        self.assertTrue(any('exactly one' in e for e in run.check_brief(full_brief('- Target length: 800 words\n- Target length: 900 words'), task_text(), None)))
+        self.assertEqual(run.check_brief(full_brief('- Target length: 800 words'), task_text(), None), [])
 
     def test_article_meta_description_length(self):
         brief = full_brief('- Target length: 6 words')
@@ -491,6 +492,36 @@ class LengthTest(unittest.TestCase):
     def test_article_check_without_target_length_raises(self):
         with self.assertRaises(run.WorkflowError):
             run.check_article(article_text(155, 6), task_text(), full_brief('- Content type: guide.'))
+
+
+class ChannelIdeasTest(unittest.TestCase):
+    def test_brief_needs_all_three_channel_ideas(self):
+        social = task_text('article, social')
+        target = '- Target length: 800 words'
+        all_three = '- LinkedIn: one idea.\n- X: one idea.\n- Instagram: one idea.'
+        self.assertEqual(run.check_brief(full_brief(target, all_three), social, None), [])
+        missing = '- LinkedIn: one idea.\n- X: one idea.'
+        self.assertTrue(any('Instagram' in e for e in run.check_brief(full_brief(target, missing), social, None)))
+        self.assertTrue(run.check_brief(full_brief(target, 'Not needed.'), social, None))
+        self.assertTrue(run.check_brief(full_brief(target, all_three), task_text(), None))  # article only: must say Not needed.
+
+
+class StatusTest(unittest.TestCase):
+    def test_status_total_includes_import_usage(self):
+        import contextlib
+        import io
+        tmp = Path(tempfile.mkdtemp())
+        campaign = tmp / 'campaigns' / 'demo'
+        campaign.mkdir(parents=True)
+        (campaign / '00-task.md').write_text(task_text())
+        record = {'time': 'x', 'call': 'importer', 'model': 'm', 'effort': 'e', 'thread': 't1',
+                  'total': {'inputTokens': 100, 'cachedInputTokens': 40, 'outputTokens': 10, 'reasoningOutputTokens': 5}}
+        (campaign / 'usage.jsonl').write_text(json.dumps(record) + '\n')
+        out = io.StringIO()
+        with mock.patch.object(run, 'CAMPAIGNS_DIR', tmp / 'campaigns'), contextlib.redirect_stdout(out):
+            run.cmd_status('demo')
+        total = [line for line in out.getvalue().splitlines() if line.startswith('total')][0]
+        self.assertIn('input 100 (non-cached 60, cached 40), output 10 (reasoning 5)', total)
 
 
 class ImportTest(unittest.TestCase):

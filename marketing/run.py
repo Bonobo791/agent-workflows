@@ -350,6 +350,13 @@ def check_brief(output, task, brief):
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts_of(output) if not has_source(fact)]
     if len(TARGET_RE.findall(sections(output).get('Article plan', ''))) != 1:
         errors.append('Article plan needs exactly one line "- Target length: <N> words"')
+    channel = sections(output).get('Channel ideas', '')
+    if 'social' in parse_deliverables(task):
+        for prefix in ('- LinkedIn:', '- X:', '- Instagram:'):
+            if not any(line.startswith(prefix) for line in channel.splitlines()):
+                errors.append(f'Channel ideas needs a line starting "{prefix}"')
+    elif channel != 'Not needed.':
+        errors.append('Channel ideas must say "Not needed." when Deliverables do not include social')
     return errors
 
 
@@ -412,7 +419,8 @@ def check_x(output, task, brief):
 def check_instagram(output, task, brief):
     errors = missing_sections(output, ['Caption', 'Hashtags', 'Image text'])
     found = sections(output)
-    if 'Link in bio' not in found.get('Caption', ''):
+    caption_lines = [line.strip() for line in found.get('Caption', '').splitlines() if line.strip()]
+    if not caption_lines or not caption_lines[-1].endswith('Link in bio'):
         errors.append('the Caption must end with "Link in bio"')
     hashtags = len(HASHTAG_RE.findall(found.get('Hashtags', '')))
     if not 3 <= hashtags <= 5:
@@ -855,7 +863,7 @@ def cmd_status(name):
     import_totals = usage_totals(campaign)
     if any(import_totals.values()):
         print(f"{'00-import':<14} {'':<26} {usage_line(import_totals)}")
-    total = {key: 0 for key in USAGE_KEYS}
+    total = dict(import_totals)
     for step in steps:
         step_dir = campaign / step['id']
         if (step_dir / 'APPROVED').is_file():

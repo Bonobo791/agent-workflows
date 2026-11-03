@@ -25,7 +25,7 @@ The primary search phrase for the article, its search intent (informational, com
 - H2 list. If the task gives Required headings, include each one exactly as written, in the same order. Other H2s may go around them.
 
 ## Channel ideas
-If the Deliverables include social: one line each for LinkedIn, X and Instagram, with the single idea that post carries. Otherwise: Not needed.
+If the Deliverables include social: one line each, starting `- LinkedIn:`, `- X:` and `- Instagram:`, with the single idea that post carries. Otherwise: Not needed.
 
 ## Visual ideas
 If the Deliverables include images or reel: what the three images and the reel show. Otherwise: Not needed.
