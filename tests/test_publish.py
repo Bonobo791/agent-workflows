@@ -517,5 +517,103 @@ class QueueTest(unittest.TestCase):
         self.assertEqual([event['event'] for event in publish.read_events(self.step)], ['attempt', 'attempt', 'posted'])
 
 
+LINKEDIN_CONFIG = {'organization_id': '12345678', 'access_token': 'tok', 'version': '202611'}
+
+
+class AdapterTest(unittest.TestCase):
+    """Calls one real adapter through a FakeHttp. The clock stands still at the approval time."""
+
+    def setUp(self):
+        self.campaign = Path(tempfile.mkdtemp()) / 'demo'
+        self.step = self.campaign / '09-publish'
+        (self.step / 'media').mkdir(parents=True)
+        self.epoch = publish.parse_time(APPROVED_AT)
+        self.sleeps = []
+
+    def ctx(self, it, http, config=None, states=None, attempt=1):
+        return publish.ItemContext(self.campaign, self.step, it, states or {}, config or {}, http,
+                                   lambda: self.epoch, self.sleeps.append, {}, attempt)
+
+
+class LinkedInTest(AdapterTest):
+    def image_answers(self):
+        return [(200, {}, json.dumps({'value': {'uploadUrl': 'https://upload.example/1', 'image': 'urn:li:image:1'}}).encode()),
+                (201, {}, b''), (201, {'x-restli-id': 'urn:li:share:9'}, b'')]
+
+    def with_image(self, text):
+        (self.step / 'media' / 'linkedin.png').write_bytes(b'png')
+        return item('linkedin-post', platform='linkedin', text=text, media=[{'path': 'media/linkedin.png', 'sha256': 'unused'}])
+
+    def test_linkedin_text_escapes_reserved_characters(self):
+        self.assertEqual(publish.linkedin_text('Try it (free) at moderaty.com #Moderaty #creators ~ now @you'),
+                         r'Try it \(free\) at moderaty.com {hashtag|\#|Moderaty} {hashtag|\#|creators} \~ now \@you')
+
+    def test_post_with_image_initializes_uploads_then_posts(self):
+        http = FakeHttp(self.image_answers())
+        publish.linkedin_item(self.ctx(self.with_image('Hi'), http, {'linkedin': LINKEDIN_CONFIG}))
+        self.assertEqual([(method, url) for method, url, _, _ in http.requests], [
+            ('POST', 'https://api.linkedin.com/rest/images?action=initializeUpload'),
+            ('PUT', 'https://upload.example/1'),
+            ('POST', 'https://api.linkedin.com/rest/posts')])
+
+    def test_post_body(self):
+        http = FakeHttp(self.image_answers())
+        publish.linkedin_item(self.ctx(self.with_image('Try (free)'), http, {'linkedin': LINKEDIN_CONFIG}))
+        _, _, headers, body = http.requests[2]
+        self.assertEqual(headers['Authorization'], 'Bearer tok')
+        self.assertEqual(headers['Linkedin-Version'], '202611')
+        self.assertEqual(headers['X-Restli-Protocol-Version'], '2.0.0')
+        data = json.loads(body)
+        self.assertEqual(data['author'], 'urn:li:organization:12345678')
+        self.assertEqual(data['commentary'], r'Try \(free\)')
+        self.assertEqual(data['visibility'], 'PUBLIC')
+        self.assertEqual(data['content'], {'media': {'id': 'urn:li:image:1'}})
+
+    def test_post_without_image_has_no_content(self):
+        http = FakeHttp([(201, {'x-restli-id': 'urn:li:share:9'}, b'')])
+        publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi'), http, {'linkedin': LINKEDIN_CONFIG}))
+        self.assertNotIn('content', json.loads(http.requests[0][3]))
+
+    def test_post_id_comes_from_x_restli_id(self):
+        http = FakeHttp([(201, {'x-restli-id': 'urn:li:share:9'}, b'')])
+        result = publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi'), http, {'linkedin': LINKEDIN_CONFIG}))
+        self.assertEqual(result, ('urn:li:share:9', 'https://www.linkedin.com/feed/update/urn:li:share:9/'))
+
+    def test_comment_url_encodes_the_post_urn(self):
+        states = {'linkedin-post': {'post_id': 'urn:li:share:9', 'url': 'https://www.linkedin.com/feed/update/urn:li:share:9/'}}
+        http = FakeHttp([(201, {'x-restli-id': 'urn:li:comment:7'}, b'')])
+        result = publish.linkedin_item(self.ctx(item('linkedin-comment', platform='linkedin', action='comment', text='Read it'),
+                                                http, {'linkedin': LINKEDIN_CONFIG}, states))
+        self.assertEqual(http.requests[0][1], 'https://api.linkedin.com/rest/socialActions/urn%3Ali%3Ashare%3A9/comments')
+        self.assertEqual(json.loads(http.requests[0][3]), {'actor': 'urn:li:organization:12345678', 'object': 'urn:li:share:9',
+                                                           'message': {'text': 'Read it'}})
+        self.assertEqual(result, ('urn:li:comment:7', 'https://www.linkedin.com/feed/update/urn:li:share:9/'))
+
+    def test_upload_500_retries(self):
+        with self.assertRaises(publish.RetryLater):
+            publish.linkedin_item(self.ctx(self.with_image('Hi'), FakeHttp([(500, {}, b'')]), {'linkedin': LINKEDIN_CONFIG}))
+
+    def test_post_401_stops(self):
+        with self.assertRaises(publish.StopItem):
+            publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi'), FakeHttp([(401, {}, b'expired')]),
+                                           {'linkedin': LINKEDIN_CONFIG}))
+
+    def test_post_timeout_is_unknown(self):
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi'), FakeHttp([publish.NetworkError('timed out')]),
+                                           {'linkedin': LINKEDIN_CONFIG}))
+
+    def test_missing_post_id_is_unknown(self):
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi'), FakeHttp([(201, {}, b'')]),
+                                           {'linkedin': LINKEDIN_CONFIG}))
+
+    def test_missing_version_stops(self):
+        without = {key: value for key, value in LINKEDIN_CONFIG.items() if key != 'version'}
+        for settings in (without, {**LINKEDIN_CONFIG, 'version': '2611'}):
+            with self.subTest(settings=settings), self.assertRaises(publish.StopItem):
+                publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi'), FakeHttp([]), {'linkedin': settings}))
+
+
 if __name__ == '__main__':
     unittest.main()

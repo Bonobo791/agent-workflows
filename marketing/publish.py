@@ -9,9 +9,11 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 RETRY_MINUTES = [5, 10, 20, 40]
@@ -349,4 +351,104 @@ def check_article(ctx):
     return '', url
 
 
-ADAPTERS = {'website': check_article}
+LITTLE_TEXT_RESERVED = set('\\|{}@[]()<>#*_~')
+
+
+def little_escape(part):
+    return ''.join('\\' + char if char in LITTLE_TEXT_RESERVED else char for char in part)
+
+
+def linkedin_text(text):
+    """Escape for LinkedIn's little-text format. A hashtag becomes {hashtag|\\#|Tag}."""
+    pieces, position = [], 0
+    for match in re.finditer(r'(?<!\w)#(\w+)', text):
+        pieces.append(little_escape(text[position:match.start()]))
+        pieces.append('{hashtag|\\#|' + little_escape(match.group(1)) + '}')
+        position = match.end()
+    pieces.append(little_escape(text[position:]))
+    return ''.join(pieces)
+
+
+def platform_settings(ctx, platform, keys):
+    settings = ctx.config.get(platform)
+    if not isinstance(settings, dict):
+        raise StopItem(f"publish.json has no '{platform}' section")
+    for key in keys:
+        if key not in settings:
+            raise StopItem(f"publish.json '{platform}' section has no '{key}'")
+    return settings
+
+
+def answer_json(response, what):
+    try:
+        return json.loads(response.body)
+    except ValueError:
+        raise StopItem(f'{what}: the answer is not JSON') from None
+
+
+def dig(data, what, *keys):
+    for key in keys:
+        if not isinstance(data, dict) or key not in data:
+            raise StopItem(f'{what}: the answer has no "{key}"')
+        data = data[key]
+    return data
+
+
+def linkedin_item(ctx):
+    settings = platform_settings(ctx, 'linkedin', ['organization_id', 'access_token', 'version'])
+    version = str(settings['version'])
+    if not re.fullmatch(r'\d{6}', version):
+        raise StopItem(f'publish.json linkedin "version" must be six digits such as 202611, not {version!r}')
+    headers = {'Authorization': f"Bearer {settings['access_token']}", 'Linkedin-Version': version, 'X-Restli-Protocol-Version': '2.0.0'}
+    org = f"urn:li:organization:{settings['organization_id']}"
+    if ctx.item['action'] == 'comment':
+        return linkedin_comment(ctx, org, headers)
+    return linkedin_post(ctx, org, headers)
+
+
+def linkedin_post(ctx, org, headers):
+    image = upload_linkedin_image(ctx, org, headers, ctx.step_dir / ctx.item['media'][0]['path']) if ctx.item.get('media') else None
+    body = {'author': org, 'commentary': linkedin_text(ctx.item['text']), 'visibility': 'PUBLIC',
+            'distribution': {'feedDistribution': 'MAIN_FEED', 'targetEntities': [], 'thirdPartyDistributionChannels': []},
+            'lifecycleState': 'PUBLISHED', 'isReshareDisabledByAuthor': False}
+    if image is not None:
+        body['content'] = {'media': {'id': image}}
+    ctx.sent()
+    answer = check(send(ctx.http, 'LinkedIn post', True, ctx.clock(), 'POST', 'https://api.linkedin.com/rest/posts',
+                        headers={**headers, 'Content-Type': 'application/json'}, body=json.dumps(body).encode()),
+                   {201}, 'LinkedIn post', True, ctx.clock())
+    post_id = answer.headers.get('x-restli-id')
+    if not post_id:
+        raise OutcomeUnknown('LinkedIn answered 201 without x-restli-id; check the page')
+    return post_id, f'https://www.linkedin.com/feed/update/{post_id}/'
+
+
+def upload_linkedin_image(ctx, org, headers, path):
+    what = 'LinkedIn image init'
+    init = check(send(ctx.http, what, False, ctx.clock(), 'POST', 'https://api.linkedin.com/rest/images?action=initializeUpload',
+                      headers={**headers, 'Content-Type': 'application/json'},
+                      body=json.dumps({'initializeUploadRequest': {'owner': org}}).encode()),
+                 {200}, what, False, ctx.clock())
+    answer = answer_json(init, what)
+    upload_url, image = dig(answer, what, 'value', 'uploadUrl'), dig(answer, what, 'value', 'image')
+    check(send(ctx.http, 'LinkedIn image upload', False, ctx.clock(), 'PUT', upload_url,
+               headers={'Authorization': headers['Authorization'], 'Content-Type': 'application/octet-stream'}, body=path.read_bytes()),
+          {200, 201}, 'LinkedIn image upload', False, ctx.clock())
+    return image
+
+
+def linkedin_comment(ctx, org, headers):
+    parent = ctx.states['linkedin-post']['post_id']
+    ctx.sent()
+    answer = check(send(ctx.http, 'LinkedIn comment', True, ctx.clock(), 'POST',
+                        f'https://api.linkedin.com/rest/socialActions/{urllib.parse.quote(parent, safe="")}/comments',
+                        headers={**headers, 'Content-Type': 'application/json'},
+                        body=json.dumps({'actor': org, 'object': parent, 'message': {'text': ctx.item['text']}}).encode()),
+                   {201}, 'LinkedIn comment', True, ctx.clock())
+    comment_id = answer.headers.get('x-restli-id')
+    if not comment_id:
+        raise OutcomeUnknown('LinkedIn answered 201 without x-restli-id; check the comment')
+    return comment_id, ctx.states['linkedin-post']['url']
+
+
+ADAPTERS = {'website': check_article, 'linkedin': linkedin_item}
