@@ -545,11 +545,14 @@ def instagram_item(ctx):
 
 
 def instagram_public_url(ctx, settings):
-    name = f"{ctx.item['media'][0]['sha256'][:16]}.jpg"
+    media = ctx.item['media'][0]
+    name = f"{media['sha256'][:16]}.jpg"
     dest = Path(settings['media_dir']) / ctx.campaign.name / name
-    if not dest.is_file():
+    if not dest.is_file() or file_hash(dest) != media['sha256']:  # a stale copy is replaced
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ctx.step_dir / ctx.item['media'][0]['path'], dest)
+        tmp = dest.with_name(name + '.tmp')
+        shutil.copyfile(ctx.step_dir / media['path'], tmp)
+        os.replace(tmp, dest)
     url = settings['media_base_url'].rstrip('/') + f'/{ctx.campaign.name}/{name}'
     response = send(ctx.http, 'Instagram image URL', False, ctx.clock(), 'GET', url)
     if response.status != 200 or not response.headers.get('content-type', '').startswith('image/jpeg'):

@@ -847,6 +847,17 @@ class InstagramTest(AdapterTest):
         self.assertEqual((self.public / 'demo' / 'aaaaaaaaaaaaaaaa.jpg').read_bytes(), b'jpeg')
         self.assertEqual(http.requests[0][:2], ('GET', 'https://media.moderaty.com/social/demo/aaaaaaaaaaaaaaaa.jpg'))
 
+    def test_a_stale_public_copy_is_replaced(self):
+        good = hashlib.sha256(b'jpeg').hexdigest()
+        it = item('instagram-post', platform='instagram', text='A caption', media=[{'path': 'media/instagram.jpg', 'sha256': good}])
+        stale = self.public / 'demo' / f'{good[:16]}.jpg'
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b'old copy')
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), self.published(), self.permalink()])
+        publish.instagram_item(self.ctx(it, http, self.config))
+        self.assertEqual(stale.read_bytes(), b'jpeg')
+        self.assertFalse(stale.with_name(stale.name + '.tmp').exists())
+
     def test_png_content_type_waits(self):
         http = FakeHttp([(200, {'content-type': 'image/png'}, b'png')])
         with self.assertRaises(publish.RetryLater):
