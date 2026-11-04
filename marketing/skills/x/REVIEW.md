@@ -26,6 +26,7 @@ Blocking findings:
 - The thread is mainly a feature list with no example or scene.
 - A banned hedge word in the hook (may, might, describes, positions, offers, various).
 - Copy that mentions the brief, supplied facts or supplied evidence.
+- A hook or opening built on a problem that is not in Reader problems.
 - A "not X, it's Y" or "X, not Y" contrast.
 - Meta talk about sources or the comparison, such as "based on the facts" or "in this comparison".
 - An instruction to the writer in the copy, such as "Give the native workflow a clear recommendation".

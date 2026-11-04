@@ -32,8 +32,15 @@ SAMPLE_TASK = Path(__file__).resolve().parents[1] / 'marketing' / 'examples' / '
 META_LINE = 'Meta description: ' + 'x' * 155  # a valid meta description length
 
 
+PROBLEMS = ['Scam comments impersonate the creator under new uploads within minutes.',
+            'Spam links in replies go unnoticed for days.',
+            'Held comments pile up with no clear review step.']
+PROBLEMS_TEXT = '\n'.join(f'- {problem} https://example.com/problem{n} (checked 2026-11-04)' for n, problem in enumerate(PROBLEMS))
+ANGLE_TEXT = f'- Reader problem: {PROBLEMS[0]}\n- Tension: Text.\n- Payoff: Text.\n- Voice: Text.'
+
+
 def full_brief(plan, channel='Not needed.'):
-    texts = {'Channel ideas': channel, 'Visual ideas': 'Not needed.'}
+    texts = {'Channel ideas': channel, 'Visual ideas': 'Not needed.', 'Angle': ANGLE_TEXT, 'Reader problems': PROBLEMS_TEXT}
     body = ''.join(f"## {name}\n{texts.get(name, 'Text.')}\n\n" for name in run.BRIEF_SECTIONS if name not in ('Article plan', 'Facts'))
     return f'## Article plan\n{plan}\n\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n\n' + body
 
@@ -332,7 +339,8 @@ def sources_text(urls=5, sites=3, task_fact=True):
     lines = [f'- Fact {n} https://site{n % sites}.example.com/page{n} (checked 2026-11-03)' for n in range(urls)]
     if task_fact:
         lines.append('- Plans start in December (from task)')
-    return '## Facts\n' + '\n'.join(lines) + '\n\n## Not found\nNone.\n'
+    problems = [f'- Problem {n} https://site{n % sites}.example.com/problem{n} (checked 2026-11-03)' for n in range(6)]
+    return '## Facts\n' + '\n'.join(lines) + '\n\n## Not found\nNone.\n\n## Reader problems\n' + '\n'.join(problems) + '\n'
 
 
 class SourcesTest(unittest.TestCase):
@@ -385,7 +393,7 @@ class WebSearchItemTest(unittest.TestCase):
 
 class VoiceAndAngleTest(unittest.TestCase):
     def test_brief_needs_an_angle(self):
-        brief = full_brief('- Target length: 800 words').replace('## Angle\nText.\n\n', '')
+        brief = full_brief('- Target length: 800 words').replace('## Angle\n' + ANGLE_TEXT + '\n\n', '')
         self.assertTrue(any('Angle' in error for error in run.check_brief(brief, task_text(), None)))
 
     def test_hook_with_a_hedge_word_fails(self):
@@ -573,6 +581,32 @@ class MinorFindingsTest(unittest.TestCase):
         self.assertEqual([model for model, _ in client.calls], ['w', 'r', 'w', 'r'])
 
 
+class ReaderProblemsTest(unittest.TestCase):
+    def test_sources_needs_six_reader_problems_from_three_sites(self):
+        self.assertEqual(run.check_sources(sources_text(), '', None, ['q'] * 5), [])
+        five = ('## Facts\n- Fact https://a.example.com (checked 2026-11-03)\n- Fact https://b.example.com/x (checked 2026-11-03)\n'
+                '- Fact https://c.example.com (checked 2026-11-03)\n- Fact https://a.example.com/y (checked 2026-11-03)\n'
+                '- Fact https://b.example.com/z (checked 2026-11-03)\n\n## Not found\nNone.\n\n## Reader problems\n'
+                + '\n'.join(f'- Problem {n} https://site{n % 3}.example.com/p{n} (checked 2026-11-03)' for n in range(5)) + '\n')
+        self.assertIn('the Reader problems need at least 6 lines with a URL; found 5', run.check_sources(five, '', None, ['q'] * 5))
+        self.assertIn('the Reader problems cite 2 different sites; they need at least 3',
+                      run.check_sources(sources_text(sites=2), '', None, ['q'] * 5))
+
+    def test_brief_angle_problem_must_be_in_list(self):
+        brief = full_brief('- Target length: 800 words').replace(f'- Reader problem: {PROBLEMS[0]}', '- Reader problem: Something else entirely.')
+        self.assertTrue(any('must be one line from the Reader problems section' in e for e in run.check_brief(brief, task_text(), None)))
+        self.assertFalse(any('Reader problem' in e for e in run.check_brief(full_brief('- Target length: 800 words'), task_text(), None)))
+
+    def test_brief_channel_ideas_use_different_problems(self):
+        social = task_text('article, social')
+        target = '- Target length: 800 words'
+        same = f'- LinkedIn: {PROBLEMS[0]} Relief: x.\n- X: {PROBLEMS[0]} Relief: y.\n- Instagram: {PROBLEMS[2]} Relief: z.'
+        self.assertIn('the Channel ideas must use different Reader problems', run.check_brief(full_brief(target, same), social, None))
+        unlisted = f'- LinkedIn: {PROBLEMS[0]} Relief: x.\n- X: Nothing from the list. Relief: y.\n- Instagram: {PROBLEMS[2]} Relief: z.'
+        self.assertIn('the X Channel idea must start with one Reader problem from the Reader problems section',
+                      run.check_brief(full_brief(target, unlisted), social, None))
+
+
 class SearchLogTest(unittest.TestCase):
     def test_each_web_search_is_logged_and_returned(self):
         client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])
@@ -624,7 +658,7 @@ class DesignSystemTest(unittest.TestCase):
         brief = campaign / '02-brief'
         brief.mkdir()
         (brief / 'APPROVED').write_text('done\n')
-        (brief / 'output.md').write_text('## Core message\nOne idea.\n\n## Angle\nA reader problem.\n\n## Facts\n- Fact https://example.com (checked 2026-11-03)\n\n## Visual ideas\nA card.\n')
+        (brief / 'output.md').write_text('## Core message\nOne idea.\n\n## Angle\nA reader problem.\n\n## Reader problems\n- A problem https://example.com (checked 2026-11-04)\n\n## Facts\n- Fact https://example.com (checked 2026-11-03)\n\n## Visual ideas\nA card.\n')
         for step_id in ('04-linkedin', '05-x', '06-instagram'):
             step_dir = campaign / step_id
             step_dir.mkdir()
@@ -712,7 +746,7 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(client.prompts, [])
 
     def test_social_steps_share_the_longest_prefix(self):
-        for step_id, text in (('02-brief', '## Angle\nA reader problem.\n## Keywords\nkeyword\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n## Channel ideas\nIdea.\n'),
+        for step_id, text in (('02-brief', '## Angle\nA reader problem.\n## Keywords\nkeyword\n## Reader problems\n- A problem https://example.com (checked 2026-11-04)\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n## Channel ideas\nIdea.\n'),
                               ('03-article', '# Title\n## One\nBody.\n')):
             folder = self.campaign / step_id
             folder.mkdir()
@@ -760,9 +794,9 @@ class ChannelIdeasTest(unittest.TestCase):
     def test_brief_needs_all_three_channel_ideas(self):
         social = task_text('article, social')
         target = '- Target length: 800 words'
-        all_three = '- LinkedIn: one idea.\n- X: one idea.\n- Instagram: one idea.'
+        all_three = f'- LinkedIn: {PROBLEMS[0]} Relief: one idea.\n- X: {PROBLEMS[1]} Relief: one idea.\n- Instagram: {PROBLEMS[2]} Relief: one idea.'
         self.assertEqual(run.check_brief(full_brief(target, all_three), social, None), [])
-        missing = '- LinkedIn: one idea.\n- X: one idea.'
+        missing = f'- LinkedIn: {PROBLEMS[0]} Relief: one idea.\n- X: {PROBLEMS[1]} Relief: one idea.'
         self.assertTrue(any('Instagram' in e for e in run.check_brief(full_brief(target, missing), social, None)))
         self.assertTrue(run.check_brief(full_brief(target, 'Not needed.'), social, None))
         self.assertTrue(run.check_brief(full_brief(target, all_three), task_text(), None))  # article only: must say Not needed.

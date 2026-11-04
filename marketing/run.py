@@ -45,11 +45,12 @@ RECHECK_RE = re.compile(r're-?check after', re.IGNORECASE)
 MIN_SEARCHES = 5  # the sources step
 MIN_URL_FACTS = 5
 MIN_SITES = 3
+MIN_PROBLEMS = 6  # reader problems with a URL, from the sources step
 HASHTAG_RE = re.compile(r'(?<!\w)#\w+')
 X_POST_START_RE = re.compile(r'^\d+/', re.MULTILINE)
 LINK = '[ARTICLE LINK]'
 X_LINK_LENGTH = 23
-BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Angle', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Open questions']
+BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Angle', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Reader problems', 'Open questions']
 TARGET_RE = re.compile(r'^- Target length: (\d+) words$', re.MULTILINE)
 META_MIN = 150
 META_MAX = 160
@@ -80,10 +81,12 @@ CONTRAST_RE = re.compile(r"\b(?:is|are|was|were|isn't|aren't)?\s*\w[\w\s']{0,40}
 NOT_IT_RE = re.compile(r"\bnot (?:just |only )?\w[\w\s']{0,30}[,;]\s+(?:it[’']s|it is|but)\b", re.I)  # "not X, it's Y"
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
-SOCIAL_INPUTS = ['voice', '02-brief#Angle', '02-brief#Keywords', '02-brief#Channel ideas', '02-brief#Facts']
+SOCIAL_INPUTS = ['voice', '02-brief#Angle', '02-brief#Keywords', '02-brief#Channel ideas', '02-brief#Facts', '02-brief#Reader problems']
 SOCIAL_REVIEW_INPUTS = SOCIAL_INPUTS  # one list, so the writer and reviewer prompts share a prefix
-IMAGE_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
-REEL_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
+IMAGE_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram',
+                '02-brief#Reader problems']
+REEL_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram',
+               '02-brief#Reader problems']
 STEPS = [
     {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources',
      'inputs': ['00-task'], 'review_inputs': ['00-task'],
@@ -92,7 +95,7 @@ STEPS = [
      'inputs': ['voice', '00-task', '01-sources'], 'review_inputs': ['voice', '00-task', '01-sources'],
      'writer_skills': ['content-brief'], 'review_skills': ['content-brief']},
     {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'article',
-     'inputs': ['voice', '00-task', '02-brief'], 'review_inputs': ['voice', '00-task', '02-brief'],
+     'inputs': ['voice', '00-task', '02-brief', '02-brief#Reader problems'], 'review_inputs': ['voice', '00-task', '02-brief', '02-brief#Reader problems'],
      'writer_skills': ['stop-slop', 'on-page-seo', 'internal-linking', 'educational-content-and-how-to'],
      'review_skills': ['stop-slop', 'on-page-seo']},
     {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'linkedin',
@@ -360,7 +363,7 @@ def site_of(fact):
 
 
 def check_sources(output, task, brief, searches=()):
-    errors = missing_sections(output, ['Facts', 'Not found'])
+    errors = missing_sections(output, ['Facts', 'Not found', 'Reader problems'])
     facts = facts_of(output)
     if not facts:
         errors.append('the Facts section needs at least one "- " line')
@@ -373,7 +376,18 @@ def check_sources(output, task, brief, searches=()):
     sites = {site_of(fact) for fact in url_facts}
     if len(sites) < MIN_SITES:
         errors.append(f'the URL facts cite {len(sites)} different sites; they need at least {MIN_SITES}')
+    problems = [line for line in bullets(sections(output).get('Reader problems', '')) if URL_RE.search(line)]
+    if len(problems) < MIN_PROBLEMS:
+        errors.append(f'the Reader problems need at least {MIN_PROBLEMS} lines with a URL; found {len(problems)}')
+    problem_sites = {site_of(line) for line in problems}
+    if len(problem_sites) < MIN_SITES:
+        errors.append(f'the Reader problems cite {len(problem_sites)} different sites; they need at least {MIN_SITES}')
     return errors
+
+
+def problem_text(line):
+    """A Reader problems line without its source."""
+    return re.split(r'\s+https?://', line, maxsplit=1)[0].strip()
 
 
 def target_words(brief):
@@ -390,11 +404,26 @@ def check_brief(output, task, brief):
     if len(TARGET_RE.findall(sections(output).get('Article plan', ''))) != 1:
         errors.append('Article plan needs one line like "- Target length: 2000 words" with a whole number.')
     errors += adds_errors(sections(output).get('Article plan', ''))
+    problems = [problem_text(line) for line in bullets(sections(output).get('Reader problems', ''))]
+    angle_line = next((line.strip() for line in sections(output).get('Angle', '').splitlines() if line.strip().startswith('- Reader problem:')), '')
+    if angle_line[len('- Reader problem:'):].strip() not in problems:
+        errors.append("the Angle's Reader problem must be one line from the Reader problems section, quoted exactly")
     channel = sections(output).get('Channel ideas', '')
     if 'social' in parse_deliverables(task):
+        used = []
         for prefix in ('- LinkedIn:', '- X:', '- Instagram:'):
-            if not any(line.startswith(prefix) for line in channel.splitlines()):
+            lines = [line for line in channel.splitlines() if line.startswith(prefix)]
+            if not lines:
                 errors.append(f'Channel ideas needs a line starting "{prefix}"')
+            for line in lines:
+                text = line[len(prefix):].strip()
+                match = next((problem for problem in problems if problem and text.startswith(problem)), None)
+                if match is None:
+                    errors.append(f'the {prefix[2:-1]} Channel idea must start with one Reader problem from the Reader problems section')
+                else:
+                    used.append(match)
+        if len(set(used)) != len(used):
+            errors.append('the Channel ideas must use different Reader problems')
         for line in channel.splitlines():
             if len(line) > CHANNEL_LIMIT:
                 errors.append(f'the {line[2:line.index(":")]} Channel idea is {len(line)} characters; the limit is {CHANNEL_LIMIT}')

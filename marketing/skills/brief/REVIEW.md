@@ -3,7 +3,7 @@
 The program has already checked the items listed under Checked. Do not report those.
 
 Checked:
-- The ten brief sections exist and are not empty.
+- The eleven brief sections exist and are not empty.
 - Every fact under Facts has a URL or ends with "(from task)".
 - The Article plan has exactly one "- Target length: 2000 words" line, with a whole number.
 - Channel ideas has the three channel lines when Deliverables include social, or "Not needed." when they do not.
@@ -13,6 +13,7 @@ Checked:
 Check the brief against the task and the sources step.
 
 Blocking findings:
+- Reader problems that differ from the sources step's Reader problems, word for word.
 - Facts that differ from the sources step's Facts, or that are missing or added.
 - A fact the sources step did not confirm.
 - A working title over 60 characters or without the primary keyword.
