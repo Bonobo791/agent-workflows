@@ -661,7 +661,7 @@ class BuildStepTest(BuildTest):
         git(worktree, 'commit', '-q', '-m', 'Add one')
         (worktree / 'stray.txt').write_text('left behind\n')
         errors = eng.verify(self.build, before, 'Add one')
-        self.assertTrue(any('uncommitted changes' in error for error in errors), errors)
+        self.assertTrue(any('uncommitted or untracked files' in error for error in errors), errors)
 
     def test_failed_check_goes_back_without_a_reviewer_call(self):
         fake = ByRole(builder=[builder('Add one'), builder('Fix failing checks', {'ready.txt': 'yes\n'}),

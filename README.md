@@ -140,7 +140,7 @@ Start from `engineering/examples/sample-task.md`. Its sections, in this order:
 - `## Check commands`: one `- ` line per command. Python runs them from the repository root after every phase.
 - `## Constraints`: the rules the change must follow, or `None.`
 
-The target repository must ignore the files its checks create (for example `__pycache__/`). Otherwise the build stops at the uncommitted-changes check.
+The target repository must ignore the files its check commands create (for example `__pycache__/` in its `.gitignore`), because step 03 stops on any uncommitted or untracked file.
 
 ### Use
 
@@ -170,6 +170,8 @@ Each build has three Claude Code sessions: `planner` (steps 01 and 02), `builder
 
 Models, effort and the budget per call are in `ROLES` in `engineering/run.py`. Defaults: planner Opus (high), builder Haiku (high), reviewer Opus (medium); budgets $5, $5 and $3 per call.
 
+Each agent may run only the Bash commands its rules list, one command per call. A refused call is listed at the owner gate of its step.
+
 The only outward action is `git push` plus a draft pull request, and it runs only after you approve step 04.
 
 ## Tests
@@ -178,4 +180,4 @@ The only outward action is `git push` plus a draft pull request, and it runs onl
 python3 -m unittest discover -s tests
 ```
 
-The old runner, including the engineering workflow, is kept under the Git tag `legacy-2026-11`.
+The old runner, including the old engineering runner under runner/, is kept under the Git tag legacy-2026-11. engineering/run.py replaces it; the tag stays as it is.

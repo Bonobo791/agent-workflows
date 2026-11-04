@@ -813,7 +813,8 @@ def verify(build, head_before, expected_message):
         errors.append(f'the worktree is on branch {current}, not {branch_of(build)}')
     dirty = git_out(worktree, 'status', '--porcelain')
     if dirty:
-        errors.append('uncommitted changes remain; commit the phase work and nothing else:\n' + dirty)
+        errors.append("uncommitted or untracked files remain; commit the phase work and nothing else "
+                      "(files your check commands create belong in the target's .gitignore):\n" + dirty)
     if head_sha(build) == head_before:
         errors.append('no new commit was made')
     if expected_message is not None:
