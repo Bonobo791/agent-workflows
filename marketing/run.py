@@ -1868,8 +1868,9 @@ def build_publish_plan(campaign):
                       'media': [copy_media(media_dir, campaign / '08-reel' / 'reel.mp4', 'reel.mp4')],
                       'depends_on': ['article'], 'not_before': times.get('youtube')})
     plan = {'campaign': campaign.name, 'article_url': article_url, 'items': items}
-    (step_dir / 'plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False) + '\n')
-    return plan
+    plan_bytes = (json.dumps(plan, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+    (step_dir / 'plan.json').write_bytes(plan_bytes)
+    return plan_bytes  # the exact bytes written; the gate approves these
 
 
 def plan_preview(plan, step_dir):
@@ -1905,7 +1906,9 @@ def publish_gate(campaign, ask, http=publish.http_request):
         raise WorkflowError(f'could not reach the article at {url}: {error}. Make sure it is live, then run the same command again.') from None
     if response.status != 200:
         raise WorkflowError(f'the article is not live yet: {url} answered HTTP {response.status}. Publish it, then run the same command again.')
-    plan = build_publish_plan(campaign)
+    plan_bytes = build_publish_plan(campaign)
+    plan = json.loads(plan_bytes)
+    plan_sha = hashlib.sha256(plan_bytes).hexdigest()
     print('\n' + '=' * 70)
     print(f'Step {PUBLISH_STEP} is ready for your decision. Folder: {step_dir}')
     print('-' * 70)
@@ -1914,7 +1917,9 @@ def publish_gate(campaign, ask, http=publish.http_request):
     while True:
         answer = ask('[a]pprove and queue for posting, [q]uit: ').strip().lower()
         if answer == 'a':
-            approval = {'approved_at': now(), 'plan_sha256': file_sha256(step_dir / 'plan.json')}
+            if file_sha256(step_dir / 'plan.json') != plan_sha:  # the file must still hold the plan that was previewed
+                raise WorkflowError('plan.json changed while you were reading it; run again')
+            approval = {'approved_at': now(), 'plan_sha256': plan_sha}
             (step_dir / 'APPROVED.tmp').write_text(json.dumps(approval) + '\n')
             os.replace(step_dir / 'APPROVED.tmp', step_dir / 'APPROVED')  # a --due run never reads half a file
             log.info('[%s] approved by the owner; %d items queued', PUBLISH_STEP, len(plan['items']))

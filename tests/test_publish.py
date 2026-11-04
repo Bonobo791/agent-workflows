@@ -130,7 +130,7 @@ class PlanMixin:
         (self.campaign / '00-task.md').write_text(publish_task(extra=extra))
 
     def plan(self):
-        return run.build_publish_plan(self.campaign)
+        return json.loads(run.build_publish_plan(self.campaign))
 
     def item(self, plan, item_id):
         return next(item for item in plan['items'] if item['id'] == item_id)
@@ -273,6 +273,15 @@ class GateTest(PlanMixin, unittest.TestCase):
         source, target = replace.call_args.args
         self.assertEqual((Path(source).name, Path(target).name), ('APPROVED.tmp', 'APPROVED'))
         self.assertFalse((self.campaign / '09-publish' / 'APPROVED.tmp').exists())
+
+    def test_a_plan_changed_during_review_is_not_approved(self):
+        def edit_then_approve(prompt):
+            (self.campaign / '09-publish' / 'plan.json').write_text('{"changed": true}\n')
+            return 'a'
+
+        with self.assertRaisesRegex(run.WorkflowError, 'plan.json changed while you were reading it; run again'):
+            run.publish_gate(self.campaign, edit_then_approve, FakeHttp([(200, {}, b'')]))
+        self.assertFalse((self.campaign / '09-publish' / 'APPROVED').exists())
 
     def test_campaign_without_publish_to_has_no_gate(self):
         root = Path(tempfile.mkdtemp())
