@@ -34,4 +34,6 @@ One line for each claim you could not confirm, or "None.".
 - Facts copied from the task are marked "(from task)". They do not count toward the 3 URL facts.
 - Never state a performance claim (a percentage, a result, "studies show") unless a primary source states it.
 - Never invent a study, figure, date, quote or URL.
+- One fact per line, in one sentence. No opinion words: should, therefore, can support, recommend.
+- A forum is a lead, not a source: never cite Reddit or another forum for a fact.
 - Write plainly. No em dashes.

@@ -683,7 +683,8 @@ class ProcessLinesTest(unittest.TestCase):
         samples = ['Issue MC-15 is tracked here.', 'Due 2026-11-11 for review.', 'Do not start before the pilot.',
                    'Check shared capacity first.', 'Check the prerequisite.', 'Publication requires approval.',
                    'Parent C01 covers it.', 'Accountable lead: Ada.', 'Tracker owner: Ada.', 'Canonical placement: the blog.',
-                   'Recheck after launch.', 'Re-check after launch.']
+                   'Recheck after launch.', 'Re-check after launch.', 'Due date for the review is Monday.',
+                   'Start date is November 4.', 'Earliest start is Monday.', 'Follow the step contract.', 'Research is permitted on this page.']
         for line in samples:
             with self.subTest(line=line):
                 errors = run.check_task(task_text().replace('## Constraints\nNone.', f'## Constraints\n{line}'))
@@ -734,6 +735,40 @@ class ApprovalTest(unittest.TestCase):
         (self.campaign / '01-brief' / 'APPROVED').write_text('2026-11-03 10:00\n')
         with self.assertRaisesRegex(run.WorkflowError, 'approved under older rules: 01-brief'):
             self.run_one(FakeClient([]), answers())
+
+
+def facts_output(lines):
+    return '## Facts\n' + '\n'.join(lines) + '\n\n## Not found\nNone.\n'
+
+
+class SourceFactRulesTest(unittest.TestCase):
+    def fact_errors(self, lines):
+        return run.check_sources(facts_output(lines), '', None, ['q'] * 5)
+
+    def test_fact_with_two_sentences_fails(self):
+        errors = self.fact_errors(['- Ledgerly exports CSV files. It is free https://example.com/export (checked 2026-11-03)'])
+        self.assertTrue(any('this fact has more than one sentence' in e for e in errors))
+
+    def test_one_sentence_with_url_and_checked_date_passes(self):
+        errors = self.fact_errors(['- Ledgerly exports CSV files https://example.com/v1.2.3/export (checked 2026-11-03)'])
+        self.assertFalse(any('more than one sentence' in e for e in errors))
+
+    def test_opinion_words_fail(self):
+        for word in ['should', 'therefore', 'can support', 'recommend']:
+            with self.subTest(word=word):
+                fact = f'Moderaty {word} hold comments https://example.com/help (checked 2026-11-03)'
+                errors = self.fact_errors([f'- {fact}'])
+                self.assertIn(f'this fact uses "{word}", which is an opinion, not a fact: "{fact}"', errors)
+
+    def test_forum_citations_fail(self):
+        for url in ['https://www.reddit.com/r/NewTubers/comments/abc', 'https://forums.example.com/t/1', 'https://example.com/forum/topic']:
+            with self.subTest(url=url):
+                errors = self.fact_errors([f'- Creators complain about spam {url} (checked 2026-11-03)'])
+                self.assertTrue(any('this fact cites a forum' in e for e in errors))
+
+    def test_primary_source_passes(self):
+        errors = self.fact_errors(['- Moderaty holds comments for review https://example.com/help/review (checked 2026-11-03)'])
+        self.assertFalse(any(word in ' '.join(errors) for word in ['opinion', 'forum', 'more than one sentence']))
 
 
 class SearchLogTest(unittest.TestCase):

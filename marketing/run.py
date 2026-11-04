@@ -47,7 +47,9 @@ NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
 URL_RE = re.compile(r'https?://\S+')
 RECHECK_RE = re.compile(r're-?check after', re.IGNORECASE)
-PROCESS_RE = re.compile(r"\b(?:issue\s+[A-Z]+-\d+|due\s+\d{4}-\d{2}-\d{2}|do not start before|shared capacity|prerequisites?|publication requires approval|parent\s+[A-Z]+\d+|accountable|tracker owner|canonical placement|recheck after|re-check after)\b", re.I)
+PROCESS_RE = re.compile(r"\b(?:issue\s+[A-Z]+-\d+|due\s+\d{4}-\d{2}-\d{2}|due date|start date|earliest start|do not start before|shared capacity|prerequisites?|publication requires approval|parent\s+[A-Z]+\d+|accountable|tracker owner|canonical placement|recheck after|re-check after|step contract|research is permitted)\b", re.I)
+OPINION_RE = re.compile(r'\b(?:should|therefore|can support|recommend)', re.I)
+FORUM_HOST_RE = re.compile(r'(?:^|\.)(?:reddit\.com|quora\.com|stackexchange\.com|stackoverflow\.com|news\.ycombinator\.com)$|forum', re.I)
 MIN_SEARCHES = 3  # the sources step
 MIN_URL_FACTS = 3
 MIN_SITES = 3
@@ -379,6 +381,20 @@ def site_of(fact):
     return (urlparse(URL_RE.search(fact).group(0)).hostname or '').removeprefix('www.')
 
 
+def fact_sentences(fact):
+    """The sentences of a fact, ignoring its URL and its checked date."""
+    text = re.sub(r'\(checked [^)]*\)', '', URL_RE.sub('', fact))
+    return [part for part in re.split(r'(?<=[.!?])\s+', text.strip()) if part.strip()]
+
+
+def cites_forum(fact):
+    for url in URL_RE.findall(fact):
+        parsed = urlparse(url)
+        if FORUM_HOST_RE.search(parsed.hostname or '') or '/forum' in parsed.path.lower():
+            return True
+    return False
+
+
 def check_sources(output, task, brief, searches=()):
     errors = missing_sections(output, ['Facts', 'Not found'])
     facts = facts_of(output)
@@ -386,6 +402,14 @@ def check_sources(output, task, brief, searches=()):
         errors.append('the Facts section needs at least one "- " line')
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts if not has_source(fact)]
     errors += [f'this is a process note, not a fact; remove it: "{fact}"' for fact in facts if PROCESS_RE.search(fact)]
+    for fact in facts:
+        if len(fact_sentences(fact)) > 1:
+            errors.append(f'this fact has more than one sentence; keep one fact per line: "{fact}"')
+        opinion = OPINION_RE.search(URL_RE.sub('', fact))
+        if opinion:
+            errors.append(f'this fact uses "{opinion.group(0)}", which is an opinion, not a fact: "{fact}"')
+        if cites_forum(fact):
+            errors.append(f'this fact cites a forum; cite a primary source instead: "{fact}"')
     if len(searches) < MIN_SEARCHES:
         errors.append(f'the sources step ran {len(searches)} web searches; it needs at least {MIN_SEARCHES}')
     url_facts = [fact for fact in facts if URL_RE.search(fact)]
