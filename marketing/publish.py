@@ -668,10 +668,12 @@ def youtube_session_position(ctx, session, headers, size):
 def youtube_new_session(ctx, headers, size, settings):
     body = {'snippet': {'title': ctx.item['title'], 'description': ctx.item['text'], 'categoryId': settings['category_id']},
             'status': {'privacyStatus': 'public', 'selfDeclaredMadeForKids': False}}
-    response = check(send(ctx.http, 'YouTube session', False, ctx.clock(), 'POST', YOUTUBE_UPLOAD_URL,
-                          headers={**headers, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'video/mp4',
-                                   'X-Upload-Content-Length': str(size)},
-                          body=json.dumps(body).encode()), {200}, 'YouTube session', False, ctx.clock())
+    response = send(ctx.http, 'YouTube session', False, ctx.clock(), 'POST', YOUTUBE_UPLOAD_URL,
+                    headers={**headers, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'video/mp4',
+                             'X-Upload-Content-Length': str(size)},
+                    body=json.dumps(body).encode())
+    youtube_quota_refusal(response)
+    response = check(response, {200}, 'YouTube session', False, ctx.clock())
     location = response.headers.get('location')
     if not location:
         raise StopItem('YouTube answered the session request without a Location header')
@@ -687,6 +689,12 @@ def youtube_quota_reason(response):
     return reason in ('quotaExceeded', 'uploadLimitExceeded')
 
 
+def youtube_quota_refusal(response):
+    """A quota or daily-cap refusal (400 or 403 with reason quotaExceeded or uploadLimitExceeded) waits; any other answer goes on to check()."""
+    if response.status in (400, 403) and youtube_quota_reason(response):
+        raise RetryLater('the YouTube quota or the channel daily upload cap is used up; it will be retried')
+
+
 def youtube_upload(ctx, session, headers, path, start, size):
     what = 'YouTube upload'
     data = path.read_bytes()[start:]
@@ -700,8 +708,7 @@ def youtube_upload(ctx, session, headers, path, start, size):
     if response.status == 404:
         ctx.save({'session_url': None})
         raise RetryLater('upload session expired')
-    if response.status == 403 and youtube_quota_reason(response):
-        raise RetryLater('the YouTube channel reached its daily upload limit; it will be retried')
+    youtube_quota_refusal(response)
     check(response, (), what, False, ctx.clock())  # 429 and 5xx wait; any other status stops the item
 
 

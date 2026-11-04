@@ -1059,6 +1059,18 @@ class YouTubeTest(AdapterTest):
         with self.assertRaises(publish.OutcomeUnknown):
             publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
 
+    def test_quota_403_on_the_session_request_waits(self):
+        quota = (403, {}, json.dumps({'error': {'errors': [{'reason': 'quotaExceeded'}]}}).encode())
+        http = FakeHttp([self.token(), quota])
+        with self.assertRaises(publish.RetryLater):
+            publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
+
+    def test_upload_limit_400_on_the_upload_waits(self):
+        limit = (400, {}, json.dumps({'error': {'errors': [{'reason': 'uploadLimitExceeded'}]}}).encode())
+        http = FakeHttp([self.token(), self.session(), limit])
+        with self.assertRaises(publish.RetryLater):
+            publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
+
     def test_refused_refresh_token_stops(self):
         for status in (400, 401):
             with self.subTest(status=status), self.assertRaises(publish.StopItem):
