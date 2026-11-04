@@ -596,6 +596,8 @@ def instagram_daily_cap(response):
         error = json.loads(response.body).get('error', {})
     except (ValueError, AttributeError):
         return False
+    if not isinstance(error, dict):  # a string or list error is not the daily cap
+        return False
     return error.get('code') == 9 and error.get('error_subcode') == 2207042
 
 

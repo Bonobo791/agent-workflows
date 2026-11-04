@@ -937,6 +937,12 @@ class InstagramTest(AdapterTest):
         http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), self.published(), (200, {}, b'<html>')])
         self.assertEqual(publish.instagram_item(self.ctx(self.insta_item(), http, self.config)), ('m1', ''))
 
+    def test_an_error_that_is_not_an_object_follows_the_status_table(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'),
+                         (400, {}, json.dumps({'error': 'rate limited'}).encode())])
+        with self.assertRaises(publish.StopItem):
+            publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+
     def test_error_body_that_is_not_json_follows_the_status_table(self):
         http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), (400, {}, b'<html>')])
         with self.assertRaises(publish.StopItem):
