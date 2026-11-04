@@ -222,8 +222,17 @@ def read_task(build):
     return (build / '00-task.md').read_text()
 
 
+SESSION_KEYS = ('id', 'started', 'attempted')
+
+
 def load_sessions(build):
-    return json.loads((build / 'sessions.json').read_text())
+    sessions = json.loads((build / 'sessions.json').read_text())
+    for name in SESSIONS:
+        missing = [key for key in SESSION_KEYS if key not in sessions.get(name, {})]
+        if missing:
+            raise WorkflowError(f'sessions.json has no {", ".join(missing)} for the {name} session; '
+                                'this build was made by an older version, so start it again with new')
+    return sessions
 
 
 def save_sessions(build, sessions):
@@ -266,7 +275,7 @@ def cmd_new(name, task_file):
         if head.returncode != 0:
             raise WorkflowError(f'git rev-parse failed in {worktree}: {head.stderr.strip()}')
         (build / 'base.txt').write_text(head.stdout.strip() + '\n')
-        save_sessions(build, {name: {'id': str(uuid.uuid4()), 'started': False} for name in SESSIONS})
+        save_sessions(build, {name: {'id': str(uuid.uuid4()), 'started': False, 'attempted': False} for name in SESSIONS})
     print(f'Build folder: {build}')
     print(f'Next: python3 engineering/run.py run {name}')
 
@@ -365,19 +374,16 @@ def usage_line(totals):
             f"cache read {read} ({hit}% of input), output {totals['output']}, cost ${totals['cost_usd']:.4f}")
 
 
-def session_attempted(build, session_name):
-    """True when a call of this session was recorded, so its first call ran and did not succeed."""
-    paths = [build / step / 'usage.jsonl' for step in STEP_IDS]
-    return any(record['session'] == session_name for record in read_usage(paths))
-
-
 def call_claude(build, session_name, prompt, step_dir, what):
     sessions = load_sessions(build)
     entry = sessions[session_name]
-    if not entry['started'] and session_attempted(build, session_name):
-        entry['id'] = str(uuid.uuid4())
+    if not entry['started']:
+        # Written before the call, so a first call that times out or prints no JSON still leaves the mark.
+        if entry['attempted']:
+            entry['id'] = str(uuid.uuid4())
+            log.info('starting a new %s session because the first call never finished', session_name)
+        entry['attempted'] = True
         save_sessions(build, sessions)
-        log.info('starting a new %s session because the first call never finished', session_name)
     calls = step_dir / 'calls'
     calls.mkdir(parents=True, exist_ok=True)
     stem = f'{len(list(calls.glob("*-prompt.txt"))) + 1:02d}-{what}'
@@ -450,6 +456,7 @@ PLAN_FORMAT = 'Write the plan in Markdown with exactly these ## sections, in thi
 INSTRUCTIONS_REQUEST = 'The owner approved the last version of your plan above. Write the implementation instructions for it now.'
 PHASE_REQUEST = 'Do Phase {n} of the instructions now, and only Phase {n}. When it is done, commit it once with exactly this message: {message}'
 FIX_RULE = 'The checks below failed after your last commit. Fix the cause, run the same check, and commit the fix once with exactly this message: Fix failing checks. Do not change, skip or disable a test to make it pass.'
+PHASE_FIX_RULE = 'The checks below failed and Phase {n} is not committed yet. Fix the cause, run the check commands, then commit all the phase work once with exactly this message: {message}. Do not change, skip or disable a test to make it pass.'
 REVIEW_FIX_RULE = 'The reviewer found the problems below. Fix every blocking finding, then commit once with exactly this message: Fix review findings, round {round}'
 PR_REQUEST = 'Write the pull request for all the work in this session. The first line of output is "# " and the title (at most 72 characters). The rest is the body, in Markdown, with ## Summary and ## Testing sections, and every ## heading of the pull request template if one is given.'
 REVIEW_RULE = 'Review the deliverable against the task and the skill above. Return verdict, summary and findings.'
@@ -515,8 +522,8 @@ def phase_prompt(n, message):
     return PHASE_REQUEST.format(n=n, message=message)
 
 
-def fix_prompt(failures):
-    return '\n\n'.join([FIX_RULE, block('check output', failures)])
+def fix_prompt(failures, rule=FIX_RULE):
+    return '\n\n'.join([rule, block('check output', failures)])
 
 
 def review_fix_prompt(review, notes, round_number):
@@ -729,8 +736,14 @@ def run_text_step(build, step_id, ask):
         output = (step_dir / 'output.md').read_text()
         review = json.loads((step_dir / 'review.json').read_text())
         show_gate(step_id, step_dir, output, review)
+        errors = text_check(step_id, output)
+        for error in errors:
+            print(f'Check failed: {error}')
         notes = decide(step_id, ask)
         if not notes:
+            if errors:
+                print('Cannot approve while the checks above fail. Reject with notes, or quit.')
+                continue
             if step_id == '02-instructions':
                 phases = parse_phases(output)
                 (step_dir / 'phases.json').write_text(json.dumps(phases, indent=2) + '\n')
@@ -812,13 +825,27 @@ def verify(build, head_before, expected_message):
     return errors + run_checks(build)
 
 
-def fix_until_clean(build, step_dir, label, errors):
+def phase_committed(build, start_head, message):
+    """True when a commit made since the phase started carries the phase's message."""
+    subjects = git_out(build / 'worktree', 'log', '--format=%s', f'{start_head}..HEAD')
+    return message in subjects.splitlines()
+
+
+def fix_until_clean(build, step_dir, label, errors, phase=None, start_head=None):
+    """Send check failures to the builder until they pass or the fixes run out.
+    While a phase has no commit with its message yet, the fix must commit the phase with that message."""
     fixes = 0
     while errors and fixes < MAX_FIX_ATTEMPTS:
         before = head_sha(build)
         fixes += 1
-        call_claude(build, 'builder', fix_prompt('\n\n'.join(errors)), step_dir, f'{label}-fix-{fixes}')
-        errors = verify(build, before, None)
+        failures = '\n\n'.join(errors)
+        if phase is not None and not phase_committed(build, start_head, phase['message']):
+            rule = PHASE_FIX_RULE.format(n=phase['n'], message=phase['message'])
+            call_claude(build, 'builder', fix_prompt(failures, rule), step_dir, f'{label}-fix-{fixes}')
+            errors = verify(build, before, phase['message'])
+        else:
+            call_claude(build, 'builder', fix_prompt(failures), step_dir, f'{label}-fix-{fixes}')
+            errors = verify(build, before, None)
     return errors
 
 
@@ -847,9 +874,12 @@ def run_phase(build, phase):
         prompt = phase_prompt(n, phase['message']) if started else first_phase_prompt(build)
         report_file.write_text(call_claude(build, 'builder', prompt, step_dir, f'phase-{n}')['output'])
         errors = verify(build, start_head, phase['message'])
-    errors = fix_until_clean(build, step_dir, f'phase-{n}', errors)
+    errors = fix_until_clean(build, step_dir, f'phase-{n}', errors, phase, start_head)
     if errors:
         raise stop_after_fixes(build, f'phase {n}')
+    if not phase_committed(build, start_head, phase['message']):
+        raise WorkflowError(f"phase {n} has no commit with the message {phase['message']!r}; "
+                            f"commit the phase work in {build / 'worktree'} with exactly that message, then run again")
     done_file.write_text(head_sha(build) + '\n')
 
 
@@ -1002,7 +1032,10 @@ def publish(build, title, body_file):
                            '--title', title, '--body-file', str(body_file)], cwd=worktree)
     if created.returncode != 0:
         raise WorkflowError(f'gh pr create failed: {created.stderr.strip()}')
-    return created.stdout.strip().splitlines()[-1]
+    url = created.stdout.strip()
+    if not url:
+        raise WorkflowError('gh pr create printed no pull request URL')
+    return url.splitlines()[-1]
 
 
 def run_pr_step(build, ask):

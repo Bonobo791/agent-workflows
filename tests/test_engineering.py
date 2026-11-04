@@ -324,6 +324,35 @@ class CallTest(BuildTest):
         self.assertIn('--session-id', second_argv)
         self.assertNotEqual(session_of(second_argv), first_id)
 
+    def test_first_call_that_timed_out_gets_a_new_session_id(self):
+        def timed_out(argv, prompt, cwd):
+            raise eng.WorkflowError('claude did not finish within 3600 s')
+
+        fake = FakeClaude(timed_out, echo_ok)
+        with mock.patch.object(eng, 'claude_process', fake):
+            with self.assertRaisesRegex(eng.WorkflowError, 'did not finish'):
+                eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan')
+            first_id = eng.load_sessions(self.build)['planner']['id']
+            with self.assertLogs('engineering', level='INFO') as logs:
+                eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan-again')
+        second_argv = fake.calls[1][0]
+        self.assertIn('--session-id', second_argv)
+        self.assertNotEqual(session_of(second_argv), first_id)
+        self.assertTrue(any('starting a new planner session' in line for line in logs.output))
+
+    def test_first_call_with_non_json_gets_a_new_session_id(self):
+        # The session already exists in Claude Code, so the second run must not reuse its id.
+        fake = FakeClaude((1, 'Error: Session ID x is already in use.\n'), echo_ok)
+        with mock.patch.object(eng, 'claude_process', fake):
+            with self.assertRaisesRegex(eng.WorkflowError, 'did not return JSON'):
+                eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan')
+            first_id = eng.load_sessions(self.build)['planner']['id']
+            self.assertTrue(eng.load_sessions(self.build)['planner']['attempted'])
+            eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan-again')
+        second_argv = fake.calls[1][0]
+        self.assertIn('--session-id', second_argv)
+        self.assertNotEqual(session_of(second_argv), first_id)
+
 
 class UsageTest(BuildTest):
     def test_usage_line_shows_non_cached_and_hit_rate(self):
@@ -523,6 +552,17 @@ class TextStepTest(BuildTest):
         phases = json.loads((step / 'phases.json').read_text())
         self.assertEqual([phase['message'] for phase in phases], ['Add the first thing', 'Add the second thing'])
 
+    def test_text_gate_refuses_approval_while_checks_fail(self):
+        fake = ByRole(planner=[writer(BAD_PLAN), writer(BAD_PLAN), writer(BAD_PLAN), writer(GOOD_PLAN)],
+                      reviewer=[reviewer()])
+        out = io.StringIO()
+        with mock.patch.object(eng, 'claude_process', fake), contextlib.redirect_stdout(out):
+            eng.run_text_step(self.build, '01-plan', answers('a', 'r', 'Add the risks section.', 'a'))
+        self.assertIn('Check failed: missing section "## Risks"', out.getvalue())
+        self.assertIn('Cannot approve while the checks above fail', out.getvalue())
+        self.assertEqual(self.calls_by_role(fake), ['planner', 'planner', 'planner', 'planner', 'reviewer'])
+        self.assertTrue((self.step / 'APPROVED').exists())
+
     def test_owner_reject_sends_the_notes(self):
         fake = ByRole(planner=[writer(GOOD_PLAN), writer(GOOD_PLAN)], reviewer=[reviewer(), reviewer()])
         with mock.patch.object(eng, 'claude_process', fake):
@@ -554,6 +594,15 @@ def builder(message, files=None):
     return reply
 
 
+def builder_without_commit(files):
+    """A builder reply that writes its files and reports, without committing."""
+    def reply(argv, prompt, cwd):
+        for name, text in files.items():
+            (Path(cwd) / name).write_text(text)
+        return claude_reply(session_of(argv), output='Written, not committed.')
+    return reply
+
+
 class BuildStepTest(BuildTest):
     CHECKS = ('python3 check.py',)
     REPO_FILES = {'check.py': CHECK_SCRIPT}
@@ -569,14 +618,37 @@ class BuildStepTest(BuildTest):
             eng.run_build_step(self.build, answers(*(gate_answers or ('a',))))
 
     def test_phase_without_the_expected_commit_goes_back_to_the_builder(self):
-        fake = ByRole(builder=[builder('Add other', {'ready.txt': 'yes\n'}), builder('Fix failing checks'),
+        fake = ByRole(builder=[builder('Add other', {'ready.txt': 'yes\n'}), builder('Add one'),
                                builder('Add two')],
                       reviewer=[reviewer()])
         self.run_build(fake)
         self.assertEqual(self.calls_by_role(fake), ['builder', 'builder', 'builder', 'reviewer'])
-        self.assertIn(eng.FIX_RULE, fake.calls[1][2])
+        self.assertIn(eng.PHASE_FIX_RULE.format(n=1, message='Add one'), fake.calls[1][2])
         self.assertEqual(fake.calls[2][2], eng.phase_prompt(2, 'Add two'))
         self.assertTrue((self.build / '03-build' / 'APPROVED').exists())
+
+    def test_check_fix_before_the_phase_commit_asks_for_the_phase_message(self):
+        fake = ByRole(builder=[builder_without_commit({'work.txt': 'half done\n'}),
+                               builder('Add one', {'ready.txt': 'yes\n'}), builder('Add two')],
+                      reviewer=[reviewer()])
+        self.run_build(fake)
+        self.assertEqual(self.calls_by_role(fake), ['builder', 'builder', 'builder', 'reviewer'])
+        self.assertIn(eng.PHASE_FIX_RULE.format(n=1, message='Add one'), fake.calls[1][2])
+        self.assertNotIn(eng.FIX_RULE, fake.calls[1][2])
+
+    def test_phase_is_not_done_without_its_commit_message(self):
+        worktree = self.build / 'worktree'
+        phase_dir = self.build / '03-build' / 'phase-1'
+        phase_dir.mkdir(parents=True)
+        (phase_dir / 'start-head.txt').write_text(git(worktree, 'rev-parse', 'HEAD') + '\n')
+        (phase_dir / 'report.md').write_text('Done.\n')
+        (worktree / 'ready.txt').write_text('yes\n')
+        git(worktree, 'add', 'ready.txt')
+        git(worktree, 'commit', '-q', '-m', 'Add other')
+        fake = ByRole(builder=[], reviewer=[])
+        with self.assertRaisesRegex(eng.WorkflowError, "has no commit with the message 'Add one'"):
+            self.run_build(fake)
+        self.assertEqual(fake.calls, [])
 
     def calls_by_role(self, fake):
         return [role for role, _, _ in fake.calls]
@@ -719,6 +791,21 @@ class SkillFileTest(unittest.TestCase):
             with mock.patch.object(eng, 'SKILLS_DIR', skills):
                 with self.assertRaisesRegex(eng.WorkflowError, 'missing skill file'):
                     eng.check_skills()
+
+
+REAL_PUBLISH = eng.publish  # PrStepTest replaces eng.publish; this keeps the real one for the test below
+
+
+class PublishTest(BuildTest):
+    def test_publish_without_a_url_is_a_workflow_error(self):
+        (self.build / '04-pr').mkdir()
+        body = self.build / '04-pr' / 'body.md'
+        body.write_text('Body.\n')
+        pushed = subprocess.CompletedProcess([], 0, '', '')
+        created = subprocess.CompletedProcess([], 0, '\n', '')
+        with mock.patch.object(eng, 'run_command', side_effect=[pushed, created]):
+            with self.assertRaisesRegex(eng.WorkflowError, 'printed no pull request URL'):
+                REAL_PUBLISH(self.build, 'Add one', body)
 
 
 class RulesTest(unittest.TestCase):
