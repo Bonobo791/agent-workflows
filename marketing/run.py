@@ -15,6 +15,9 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import Counter
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -31,7 +34,7 @@ REPO = HERE.parent
 SKILLS_DIR = HERE / 'skills'
 BRANDS_DIR = HERE / 'brands'
 BRAND_FILES = ['design-system.md', 'voice.md', 'positioning.md', 'pages.md']
-BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'positioning': 'positioning.md', 'pages': 'pages.md'}
+BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'positioning': 'positioning.md', 'pages': 'pages.md', 'character': 'character.md'}
 LIBRARY_DIR = HERE / 'skill-library'
 CAMPAIGNS_DIR = REPO / 'campaigns'
 # The owner's roles: writer "gpt6.1 sol medium", reviewer "gpt6.1 sol high", image and video creator "gpt6.1 sol high".
@@ -43,6 +46,14 @@ ROLES = {
 }
 MAX_AUTO_REVISIONS = 1  # one automatic rewrite, shared by a failed check, a revise and a minor-findings pass
 MAX_REVIEW_FRAMES = 10
+LINE_WORD_LIMIT = 25  # words in one presenter line
+WORDS_PER_SECOND = 2.5  # the whole script, against the reel length in the reel skill
+PRESENTER_ON_SCREEN_SECONDS = 2
+HEYGEN_BASE = 'https://api.heygen.com'
+HEYGEN_POLL_SECONDS = 10
+HEYGEN_MAX_POLLS = 180
+HEYGEN_TIMEOUT = 120
+CHARACTER_SECTIONS = ['Name', 'Personality', 'Avatar id', 'Voice id', 'Do', "Don't", 'Disclosure']
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
 URL_RE = re.compile(r'https?://\S+')
@@ -95,8 +106,10 @@ SOCIAL_INPUTS = ['voice', 'positioning#Reader problems', 'positioning#Value', 'p
 SOCIAL_REVIEW_INPUTS = SOCIAL_INPUTS  # one list, so the writer and reviewer prompts share a prefix
 IMAGE_INPUTS = ['design-system', 'voice', 'positioning#Value', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts',
                 '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
-REEL_INPUTS = ['design-system', 'voice', 'positioning#Value', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts',
-              '02-brief#Visual ideas', '06-instagram']
+REEL_INPUTS = ['design-system', 'voice', 'positioning#Value', 'character', 'presenter', '08-reel-script', '02-brief#Angle',
+               '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
+REEL_SCRIPT_INPUTS = ['voice', 'character', 'positioning#Reader problems', 'positioning#Value', 'positioning#Claims we never make',
+                      '02-brief#Angle', '02-brief#Facts', '02-brief#Visual ideas']
 STEPS = [
     {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources',
      'inputs': ['00-task', 'positioning#Proof', 'positioning#Alternatives'], 'review_inputs': ['00-task', 'positioning#Proof', 'positioning#Alternatives'],
@@ -125,6 +138,9 @@ STEPS = [
      'inputs': IMAGE_INPUTS, 'review_inputs': IMAGE_INPUTS,
      'writer_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'platform-specs-and-validation'],
      'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'accessibility-review']},
+    {'id': '08-reel-script', 'skill': 'reel-script', 'kind': 'script', 'role': 'writer', 'deliverable': 'reel', 'web': False, 'check': 'reel-script',
+     'inputs': REEL_SCRIPT_INPUTS, 'review_inputs': REEL_SCRIPT_INPUTS,
+     'writer_skills': ['short-form-video-script', 'hook-writer', 'reels-script'], 'review_skills': ['short-form-video-script', 'reels-script', 'accessibility-review']},
     {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'check': None,
      'inputs': REEL_INPUTS, 'review_inputs': REEL_INPUTS,
      'writer_skills': ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'],
@@ -166,6 +182,8 @@ WRITER_SCHEMAS = {
     'text': _obj({'output': {'type': 'string'}, 'notes': {'type': 'string'}}),
     'images': _obj({'projects': {'type': 'array', 'items': PROJECT_SCHEMA}, 'notes': {'type': 'string'}}),
     'video': _obj({'files': {'type': 'array', 'items': FILE_SCHEMA}, 'notes': {'type': 'string'}}),
+    'script': _obj({'presenter': {'type': 'string'}, 'lines': {'type': 'array', 'items': _obj({'id': {'type': 'string'}, 'text': {'type': 'string'}})},
+                    'notes': {'type': 'string'}}),
 }
 REVIEW_SCHEMA = _obj({
     'verdict': {'type': 'string', 'enum': ['pass', 'revise']},
@@ -181,6 +199,7 @@ FORMAT_RULES = {
     'text': 'Return JSON with "output": the complete deliverable as Markdown, and "notes": anything the reviewer or owner should know (empty string if nothing).',
     'images': 'Return JSON with "projects" and "notes". Make one OpenFilm project per image. Each project has "name" (lowercase letters, digits and hyphens, for example "linkedin"), "look_time" (the second at which the still image is captured) and "files": every file of the project, each with "path" relative to the project folder and its full "content". Every project must contain film.html.',
     'video': 'Return JSON with "files" and "notes". "files" is every file of one OpenFilm project, each with "path" relative to the project folder and its full "content". It must contain film.html.',
+    'script': 'Return JSON with "presenter" (the presenter\'s name), "lines" (the spoken lines in order, each with "id" p1, p2, p3 and so on, and "text") and "notes". Each line is spoken as written, by the presenter alone.',
 }
 REVIEW_RULES = 'Review the deliverable against the inputs. Return JSON with "verdict" ("pass" only when there are no blocking findings, otherwise "revise"), "summary" (two or three sentences) and "findings" (each with "severity" "blocking" or "minor", "issue" and "fix"). Do not rewrite the deliverable yourself.'
 
@@ -882,6 +901,8 @@ def read_input(campaign, spec):
         brand = brand_of((campaign / '00-task.md').read_text())
         text = brand_file(brand, BRAND_INPUTS[input_id]).read_text()
         return section(text, part, input_id) if part else text
+    if input_id == 'presenter':
+        return (campaign / '08-reel' / 'presenter.json').read_text()
     if input_id == '00-task':
         text = (campaign / '00-task.md').read_text()
     else:
@@ -1086,14 +1107,220 @@ def sample_frames(mp4, frames_dir):
     return frames, seconds
 
 
-def materialize(step, step_dir, written):
+def check_character(brand):
+    errors = brand_name_errors(brand)
+    if errors:
+        return errors
+    path = brand_file(brand, 'character.md')
+    if not path.is_file():
+        return [f'{brand}/character.md is missing']
+    found = sections(path.read_text())
+    for heading in CHARACTER_SECTIONS:
+        body = found.get(heading, '')
+        if not body:
+            errors.append(f'character.md: section "## {heading}" is missing or empty')
+        elif has_template_note(body):
+            errors.append(f'character.md: section "## {heading}" still has its template note')
+    return errors
+
+
+def read_character(campaign):
+    brand = brand_of((campaign / '00-task.md').read_text())
+    found = sections(brand_file(brand, 'character.md').read_text())
+    return {'name': first_line(found.get('Name', '')), 'avatar_id': first_line(found.get('Avatar id', '')),
+            'voice_id': first_line(found.get('Voice id', '')), 'disclosure': found.get('Disclosure', '').strip()}
+
+
+def reel_seconds():
+    match = re.search(r'^Length: (\d+) seconds\.$', (SKILLS_DIR / 'reel' / 'SKILL.md').read_text(), re.MULTILINE)
+    if not match:
+        raise WorkflowError('marketing/skills/reel/SKILL.md has no "Length: <N> seconds." line')
+    return int(match.group(1))
+
+
+def check_reel_script(output, task, brief):
+    body = output.split('\n## Notes')[0]
+    lines = re.findall(r'^- (p\d+): (.*)$', body, re.MULTILINE)
+    errors = []
+    if not lines:
+        errors.append('the script has no presenter lines; write each one as "- p1: <text>"')
+    total = 0
+    for line_id, text in lines:
+        words = len(re.findall(r"\b[\w'-]+\b", text))
+        total += words
+        if words > LINE_WORD_LIMIT:
+            errors.append(f'line {line_id} has {words} words; the limit is {LINE_WORD_LIMIT}')
+        if PROCESS_RE.search(text):
+            errors.append(f'remove this internal process line from the script: "{text}"')
+        hedge = next((word for word in HEDGE_WORDS if re.search(rf'\b{word}\b', text, re.IGNORECASE)), None)
+        if hedge:
+            errors.append(f'line {line_id} uses "{hedge}"; open on the reader\'s problem instead')
+        errors += wording_errors(text)
+    seconds = reel_seconds()
+    limit = int(WORDS_PER_SECOND * seconds)
+    if total > limit:
+        errors.append(f'the script has {total} words; the limit for a {seconds} s reel is {limit}')
+    return errors
+
+
+CHECKS['reel-script'] = check_reel_script
+
+
+def materialize_script(step_dir, written):
+    lines = written['lines']
+    if not lines:
+        raise WorkflowError(f"writer returned no presenter lines. Writer notes: {written['notes'] or 'none'}")
+    if len({line['id'] for line in lines}) != len(lines):
+        raise WorkflowError(f"duplicate script line ids: {[line['id'] for line in lines]}")
+    (step_dir / 'script.json').write_text(json.dumps(written, indent=2, ensure_ascii=False) + '\n')
+    text = ['# Reel script', '', f"Presenter: {written['presenter']}", '']
+    text += [f"- {line['id']}: {line['text']}" for line in lines]
+    text += ['', '## Notes', '', written['notes'] or 'None.']
+    (step_dir / 'output.md').write_text('\n'.join(text) + '\n')
+    return []
+
+
+class HeyGenError(WorkflowError):
+    pass
+
+
+def heygen_request(method, path, body=None, query=None):
+    key = os.environ.get('HEYGEN_API_KEY')
+    if not key:
+        raise WorkflowError('HEYGEN_API_KEY is not set; set it in the environment before a reel run')
+    url = HEYGEN_BASE + path + (f"?{urllib.parse.urlencode(query)}" if query else '')
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(url, data=data, method=method, headers={'x-api-key': key, 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(request, timeout=HEYGEN_TIMEOUT) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as error:
+        raise HeyGenError(f"HeyGen {method} {path} returned HTTP {error.code}: {error.read().decode(errors='replace')}") from None
+
+
+def heygen_download(url):
+    with urllib.request.urlopen(url, timeout=HEYGEN_TIMEOUT) as response:
+        return response.read()
+
+
+def heygen_list(path, query):
+    items, token = [], None
+    while True:
+        page = heygen_request('GET', path, query=dict(query, **({'token': token} if token else {})))
+        items += page['data']
+        if not page.get('has_more'):
+            return items
+        token = page.get('next_token')
+
+
+def srt_to_vtt(srt):
+    raw = srt.replace('\r\n', '\n').replace('\r', '\n').lstrip('﻿').split('\n')
+    lines = ['WEBVTT', '']
+    for index, line in enumerate(raw):
+        stripped = line.strip()
+        if '-->' in stripped:
+            start, end = (part.strip().replace(',', '.') for part in stripped.split('-->', 1))
+            lines.append(f'{start} --> {end}')
+        elif stripped.isdigit() and index + 1 < len(raw) and '-->' in raw[index + 1]:
+            continue  # the SRT cue number
+        else:
+            lines.append(line.rstrip())
+    return '\n'.join(lines).rstrip() + '\n'
+
+
+def render_one(line, character):
+    created = heygen_request('POST', '/v3/videos', body={
+        'type': 'avatar', 'avatar_id': character['avatar_id'], 'voice_id': character['voice_id'], 'script': line['text'],
+        'aspect_ratio': '9:16', 'resolution': '1080p', 'output_format': 'mp4', 'caption': {'file_format': 'srt'}})
+    video_id = created['data']['video_id']
+    for _ in range(HEYGEN_MAX_POLLS):
+        status = heygen_request('GET', f'/v3/videos/{video_id}')
+        data = status['data']
+        if data.get('status') == 'completed':
+            break
+        if data.get('status') == 'failed':
+            raise HeyGenError(f"HeyGen render of {line['id']} failed. Full response: {json.dumps(status)}")
+        time.sleep(HEYGEN_POLL_SECONDS)
+    else:
+        raise HeyGenError(f"HeyGen render of {line['id']} did not finish. Last response: {json.dumps(status)}")
+    if not data.get('subtitle_url'):
+        raise WorkflowError(f"HeyGen finished clip {line['id']} without a subtitle_url; the run stops at clip {line['id']}")
+    if not data.get('video_url') or data.get('duration') is None:
+        raise HeyGenError(f"HeyGen finished clip {line['id']} without a video_url or duration. Full response: {json.dumps(status)}")
+    subtitles = heygen_download(data['subtitle_url']).decode('utf-8-sig')
+    return float(data['duration']), heygen_download(data['video_url']), srt_to_vtt(subtitles)
+
+
+def render_presenter(campaign, step_dir, character):
+    """Render each presenter line once, cache it by its text and the character, and write presenter.json."""
+    script = json.loads((campaign / '08-reel-script' / 'script.json').read_text())
+    cache = step_dir / 'heygen-cache'
+    cache.mkdir(parents=True, exist_ok=True)
+    assets = step_dir / 'assets'
+    assets.mkdir(exist_ok=True)
+    clips, at = [], 0.0
+    for line in script['lines']:
+        key = hashlib.sha256('\n'.join([line['text'], character['avatar_id'], character['voice_id']]).encode()).hexdigest()
+        video, subtitles, meta = cache / f'{key}.mp4', cache / f'{key}.vtt', cache / f'{key}.json'
+        if video.is_file() and subtitles.is_file() and meta.is_file():
+            duration = json.loads(meta.read_text())['duration']
+            log.info('[08-reel] %s reused its earlier render: %.1f s of video', line['id'], duration)
+        else:
+            started = time.monotonic()
+            duration, mp4_bytes, vtt_text = render_one(line, character)
+            video.write_bytes(mp4_bytes)
+            subtitles.write_text(vtt_text)
+            meta.write_text(json.dumps({'duration': duration}))
+            log.info('[08-reel] rendered %s: %.1f s of video in %.0f s', line['id'], duration, time.monotonic() - started)
+        shutil.copyfile(video, assets / f"{line['id']}.mp4")
+        shutil.copyfile(subtitles, assets / f"{line['id']}.vtt")
+        clips.append({'id': line['id'], 'text': line['text'], 'duration': duration, 'at': round(at, 2)})
+        at += duration
+    (step_dir / 'presenter.json').write_text(json.dumps(clips, indent=2, ensure_ascii=False) + '\n')
+    return clips
+
+
+def presenter_film_errors(files, presenter):
+    text = '\n'.join(item['content'] for item in files)
+    tags = re.findall(r'<video\b[^>]*>', text)
+    errors = []
+    for number, clip in enumerate(presenter):
+        asset = f"assets/{clip['id']}.mp4"
+        found = [tag for tag in tags if f'src="{asset}"' in tag]
+        if not found:
+            errors.append(f'the film does not show the presenter clip {asset}; add <video src="{asset}" at="{clip["at"]}">')
+            continue
+        for tag in found:
+            match = re.search(r'\sat="([\d.]+)"', tag)
+            start = float(match.group(1)) if match else 0.0
+            if abs(start - clip['at']) > 0.05:
+                errors.append(f'{asset} must start at {clip["at"]} s, as presenter.json says; the film has {start} s')
+            if number == 0 and start > PRESENTER_ON_SCREEN_SECONDS:
+                errors.append(f'the presenter must be on screen in the first {PRESENTER_ON_SCREEN_SECONDS} seconds; {asset} starts at {start} s')
+    return errors
+
+
+def cmd_heygen(what):
+    if what == 'avatars':
+        for item in heygen_list('/v3/avatars/looks', {'limit': 50}):
+            print(f"{item['id']}\t{item.get('name', '')}")
+    else:
+        for item in heygen_list('/v3/voices', {'limit': 100}):
+            print(f"{item['voice_id']}\t{item.get('name', '')}")
+
+
+def materialize(step, step_dir, written, campaign):
     """Turn the writer's JSON into files. Returns the images the reviewer must see."""
     if step['kind'] == 'text':
         (step_dir / 'output.md').write_text(written['output'].rstrip() + '\n')
         return []
+    if step['kind'] == 'script':
+        return materialize_script(step_dir, written)
     if step['kind'] == 'images':
         return materialize_images(step_dir, written)
-    return materialize_video(step_dir, written)
+    character = read_character(campaign)
+    presenter = json.loads((step_dir / 'presenter.json').read_text())
+    return materialize_video(step_dir, written, character, presenter)
 
 
 def materialize_images(step_dir, written):
@@ -1129,11 +1356,15 @@ def materialize_images(step_dir, written):
     return reviews
 
 
-def materialize_video(step_dir, written):
+def materialize_video(step_dir, written, character, presenter):
     if not written['files']:
         raise WorkflowError(f"writer returned no reel files. Writer notes: {written['notes'] or 'none'}")
     project_dir = step_dir / 'project'
     write_project(project_dir, written['files'])
+    errors = presenter_film_errors(written['files'], presenter)
+    if errors:
+        raise FilmProblems(errors, '; '.join(errors))
+    shutil.copytree(step_dir / 'assets', project_dir / 'assets', dirs_exist_ok=True)
     mp4 = step_dir / 'reel.mp4'
     if mp4.exists():
         mp4.unlink()
@@ -1142,10 +1373,12 @@ def materialize_video(step_dir, written):
         raise WorkflowError(f'openfilm render did not create {mp4}')
     frames, seconds = sample_frames(mp4, step_dir / 'frames')
     (step_dir / 'frame-seconds.txt').write_text(' '.join(str(second) for second in seconds) + '\n')
-    lines = ['# Reel', '', '- reel.mp4 (OpenFilm project: project/)', '', '## Notes', '', written['notes'] or 'None.']
+    notes = written['notes'] or 'None.'
+    if character['disclosure']:
+        notes += '\n\n' + character['disclosure']
+    lines = ['# Reel', '', '- reel.mp4 (OpenFilm project: project/)', '', '## Notes', '', notes]
     (step_dir / 'output.md').write_text('\n'.join(lines) + '\n')
     return frames
-
 
 def read_writer_thread(step_dir):
     path = step_dir / 'writer-thread.txt'
@@ -1160,6 +1393,8 @@ def write(client, roles, skills_dir, campaign, step, step_dir, revision):
     if revision is None:
         (step_dir / 'searches.txt').unlink(missing_ok=True)
     print(f"[{step['id']}] writer working...")
+    if step['id'] == '08-reel':
+        render_presenter(campaign, step_dir, read_character(campaign))  # before the film, so presenter.json exists for it
     if revision is None:
         log.info('[%s] first draft', step['id'])
         prompt, thread_id = writer_prompt(skills_dir, campaign, step), None
@@ -1172,7 +1407,7 @@ def write(client, roles, skills_dir, campaign, step, step_dir, revision):
     (step_dir / 'writer-thread.txt').write_text(thread_id + '\n')
     with (step_dir / 'searches.txt').open('a') as file:  # every web search the writer ran in this step, across revisions
         file.write(''.join(query + '\n' for query in searches))
-    return written, materialize(step, step_dir, written)
+    return written, materialize(step, step_dir, written, campaign)
 
 
 def without_hooks(text):
@@ -1380,6 +1615,8 @@ def build_final(campaign, steps):
             shutil.copyfile(asset, final / name)
             lines.append(f'- [{name}]({name})')
         lines.append('')
+    if any(step['id'] == '08-reel' for step in steps):
+        lines += ['Before posting the reel, turn on "Label as made with AI" in Instagram.', '']
     (final / 'index.md').write_text('\n'.join(lines))
     return final
 
@@ -1401,6 +1638,12 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
         if errors:
             raise WorkflowError('; '.join(errors))
         warn_if_old(brand)
+    if any(step['id'] in ('08-reel-script', '08-reel') for step in steps):
+        errors = check_character(brand_of((campaign / '00-task.md').read_text()))
+        if errors:
+            raise WorkflowError('; '.join(errors))
+        if not os.environ.get('HEYGEN_API_KEY'):
+            raise WorkflowError('HEYGEN_API_KEY is not set; set it in the environment before a reel run')
     recheck_approved(campaign, steps)  # before any Codex call
     check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
     for step in steps:
@@ -1516,6 +1759,8 @@ def main():
     brand = sub.add_parser('brand', help="draft and approve a brand's positioning.md from its One line")
     brand.add_argument('name')
     brand.add_argument('--refresh', action='store_true', help='research again and show the differences from the approved file')
+    heygen = sub.add_parser('heygen', help='list HeyGen avatars or voices to fill in character.md')
+    heygen.add_argument('what', choices=['avatars', 'voices'])
     args = parser.parse_args()
     try:
         if args.command == 'new':
@@ -1524,6 +1769,8 @@ def main():
             cmd_run(args.name)
         elif args.command == 'brand':
             cmd_brand(args.name, args.refresh)
+        elif args.command == 'heygen':
+            cmd_heygen(args.what)
         else:
             cmd_status(args.name)
     except WorkflowError as error:

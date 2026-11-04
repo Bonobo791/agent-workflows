@@ -19,7 +19,7 @@ Nothing is published. The approved files end up in `campaigns/<name>/final/`.
 3. `03-article`: the SEO article. Each H2 delivers only its Adds line from the brief. It links only to the pages listed in `pages.md`
 4. `04-linkedin`, `05-x`, `06-instagram`: the social posts (if Deliverables has `social`). Each draft has a `## Hooks` section with three hooks from three different reader problems. The checks and the final package leave `## Hooks` out
 5. `07-images`: three still images (if Deliverables has `images`)
-6. `08-reel`: a vertical video of 15 to 30 seconds (if Deliverables has `reel`)
+6. `08-reel-script` and `08-reel`: a 30-second vertical video with a HeyGen presenter (if Deliverables has `reel`). You approve the script first; only then are the presenter clips rendered and the film made
 
 `article` is always made. `images` and `reel` need `social` in Deliverables.
 
@@ -95,6 +95,7 @@ Each brand has a folder, `marketing/brands/<brand>/`, with four files that every
 - `voice.md`: how the brand sounds.
 - `positioning.md`: what the product sells, to whom, the reader problems, the proof and the alternatives.
 - `pages.md`: the pages the article may link to.
+- `character.md`: the reel presenter's name, personality, HeyGen avatar and voice ids, what they do and don't do on camera, and the disclosure line. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
 
 Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. Replace each `Template note:` line with your text. A run stops before any Codex call if a file is missing or still has a template note.
 

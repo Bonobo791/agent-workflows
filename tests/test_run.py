@@ -58,10 +58,16 @@ run.BRANDS_DIR = BRANDS_TMP
 run.CAMPAIGNS_DIR = Path(tempfile.mkdtemp()) / 'campaigns'
 
 
+CHARACTER_TEXT = '# Character: demo\n\n' + '\n'.join(f'## {heading}\n{body}\n' for heading, body in [
+    ('Name', 'Ada'), ('Personality', 'Calm.\nDirect.\nNever preachy.'), ('Avatar id', 'avatar-1'), ('Voice id', 'voice-1'),
+    ('Do', 'Speak to the viewer.'), ("Don't", 'Never joke about threats.'), ('Disclosure', 'The presenter is an AI avatar.')])
+
+
 def write_brand(name, **files):
     folder = BRANDS_TMP / name
     folder.mkdir(parents=True, exist_ok=True)
-    texts = {'design-system.md': DESIGN_TEXT, 'voice.md': VOICE_TEXT, 'positioning.md': POSITIONING_TEXT, 'pages.md': PAGES_TEXT}
+    texts = {'design-system.md': DESIGN_TEXT, 'voice.md': VOICE_TEXT, 'positioning.md': POSITIONING_TEXT, 'pages.md': PAGES_TEXT,
+             'character.md': CHARACTER_TEXT}
     texts.update(files)
     for file_name, text in texts.items():
         (folder / file_name).write_text(text)
@@ -946,6 +952,198 @@ class ReviewRulesInPromptTest(unittest.TestCase):
         review = {'verdict': 'revise', 'summary': 'Checked.', 'findings': []}
         notes = run.decide({'id': '01-x'}, step_dir, review, answers('r', '', 'first note', 'second note', ''))
         self.assertEqual(notes, 'first note\nsecond note')
+
+
+CHARACTER = {'name': 'Ada', 'avatar_id': 'avatar-1', 'voice_id': 'voice-1', 'disclosure': 'The presenter is an AI avatar.'}
+SCRIPT_LINES = ['First line.', 'Second line.', 'Third line.']
+
+
+class FakeHeyGen:
+    SRT = '1\n00:00:01,200 --> 00:00:03,400\nHello, there.\n\n2\n00:00:03,500 --> 00:00:05,000\nBye.\n'
+
+    def __init__(self, durations=(2.0, 2.0, 2.0, 2.0), failing=None, missing_subtitle=None):
+        self.durations, self.failing, self.missing_subtitle = list(durations), failing, missing_subtitle
+        self.created, self.videos = [], {}
+
+    def request(self, method, path, body=None, query=None):
+        if method == 'POST' and path == '/v3/videos':
+            self.created.append(body)
+            video_id = f'v{len(self.created)}'
+            duration = self.durations[len(self.created) - 1] if len(self.created) <= len(self.durations) else 2.0
+            self.videos[video_id] = (body['script'], duration)
+            return {'data': {'video_id': video_id, 'status': 'waiting'}}
+        if method == 'GET' and path.startswith('/v3/videos/'):
+            video_id = path.rsplit('/', 1)[1]
+            text, duration = self.videos[video_id]
+            if text == self.failing:
+                return {'data': {'video_id': video_id, 'status': 'failed', 'failure_message': 'avatar unavailable'}}
+            subtitle = None if text == self.missing_subtitle else f'https://cdn.example/{video_id}.srt'
+            return {'data': {'video_id': video_id, 'status': 'completed', 'video_url': f'https://cdn.example/{video_id}.mp4',
+                             'duration': duration, 'subtitle_url': subtitle}}
+        raise AssertionError((method, path))
+
+    def download(self, url):
+        return b'mp4 bytes' if url.endswith('.mp4') else self.SRT.encode()
+
+
+class HeyGenReelTest(unittest.TestCase):
+    def make_campaign(self, lines=SCRIPT_LINES, brand='demo'):
+        campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        (campaign / '08-reel-script').mkdir(parents=True)
+        (campaign / '08-reel-script' / 'script.json').write_text(json.dumps(
+            {'presenter': 'Ada', 'lines': [{'id': f'p{n}', 'text': text} for n, text in enumerate(lines, 1)], 'notes': ''}))
+        (campaign / '00-task.md').write_text(task_text('article, social, images, reel', brand=brand))
+        step_dir = campaign / '08-reel'
+        step_dir.mkdir()
+        return campaign, step_dir
+
+    def heygen(self, fake):
+        return mock.patch.multiple(run, heygen_request=fake.request, heygen_download=fake.download, HEYGEN_POLL_SECONDS=0)
+
+    def test_reel_needs_character_and_key(self):
+        write_brand('nochar')
+        (BRANDS_TMP / 'nochar' / 'character.md').unlink()
+        write_brand('noavatar', **{'character.md': CHARACTER_TEXT.replace('## Avatar id\navatar-1\n', '## Avatar id\n\n')})
+        script = dict(next(step for step in run.STEPS if step['id'] == '08-reel-script'), inputs=[], review_inputs=[])
+        reel = dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
+        cases = [('nochar', 'nochar/character.md is missing'),
+                 ('noavatar', 'character.md: section "## Avatar id" is missing or empty'),
+                 ('demo', 'HEYGEN_API_KEY is not set')]
+        for brand, expected in cases:
+            with self.subTest(brand=brand):
+                campaign, _ = self.make_campaign(brand=brand)
+                env = {'HEYGEN_API_KEY': 'test-key'} if brand != 'demo' else {}
+                with mock.patch.dict(os.environ, env, clear=False):
+                    os.environ.pop('HEYGEN_API_KEY', None) if brand == 'demo' else None
+                    with self.assertRaisesRegex(run.WorkflowError, expected):
+                        run.run_campaign(campaign, FakeClient([]), ask=answers(), steps=[script, reel], skills_dir=run.SKILLS_DIR, roles=ROLES)
+
+    def test_script_checks_line_length_and_total(self):
+        def script(*lines):
+            return '# Reel script\n\nPresenter: Ada\n\n' + '\n'.join(f'- p{n}: {text}' for n, text in enumerate(lines, 1)) + '\n\n## Notes\n\nNone.\n'
+        long_line = script(' '.join(['word'] * 26))
+        self.assertIn('line p1 has 26 words; the limit is 25', run.check_reel_script(long_line, '', None))
+        twenty = ' '.join(['word'] * 20)
+        self.assertIn('the script has 80 words; the limit for a 30 s reel is 75', run.check_reel_script(script(twenty, twenty, twenty, twenty), '', None))
+        self.assertEqual(run.check_reel_script(script(' '.join(['word'] * 25), twenty, twenty), '', None), [])
+
+    def test_no_render_before_script_approval(self):
+        campaign, _ = self.make_campaign()
+        script_text = json.dumps({'presenter': 'Ada', 'lines': [{'id': 'p1', 'text': 'First line.'}], 'notes': ''})
+        script = dict(next(step for step in run.STEPS if step['id'] == '08-reel-script'), inputs=[], review_inputs=[])
+        reel = dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
+        fake = FakeHeyGen()
+        with mock.patch.dict(os.environ, {'HEYGEN_API_KEY': 'test-key'}), mock.patch.object(run, 'render_presenter') as render, self.heygen(fake):
+            with self.assertRaises(SystemExit):
+                run.run_campaign(campaign, FakeClient(['pass'], writer_outputs=[script_text]), ask=answers('q'),
+                                 steps=[script, reel], skills_dir=run.SKILLS_DIR, roles=ROLES)
+        self.assertEqual(render.call_count, 0)
+        self.assertEqual(fake.created, [])
+
+    def test_render_cache_skips_unchanged_lines(self):
+        campaign, step_dir = self.make_campaign()
+        fake = FakeHeyGen()
+        with self.heygen(fake):
+            run.render_presenter(campaign, step_dir, CHARACTER)
+            self.assertEqual(len(fake.created), 3)
+            run.render_presenter(campaign, step_dir, CHARACTER)
+        self.assertEqual(len(fake.created), 3)  # the second pass reuses every render
+
+    def test_presenter_at_values_are_cumulative(self):
+        campaign, step_dir = self.make_campaign()
+        with self.heygen(FakeHeyGen(durations=(3.0, 4.5, 2.0))):
+            run.render_presenter(campaign, step_dir, CHARACTER)
+        presenter = json.loads((step_dir / 'presenter.json').read_text())
+        self.assertEqual([clip['at'] for clip in presenter], [0.0, 3.0, 7.5])
+        self.assertEqual([clip['id'] for clip in presenter], ['p1', 'p2', 'p3'])
+        self.assertTrue((step_dir / 'assets' / 'p2.mp4').is_file())
+        self.assertTrue((step_dir / 'assets' / 'p2.vtt').is_file())
+
+    def test_failed_render_stops_with_response(self):
+        campaign, step_dir = self.make_campaign()
+        with self.heygen(FakeHeyGen(failing='Second line.')):
+            with self.assertRaisesRegex(run.HeyGenError, 'HeyGen render of p2 failed') as caught:
+                run.render_presenter(campaign, step_dir, CHARACTER)
+        self.assertIn('avatar unavailable', str(caught.exception))
+
+    def test_missing_subtitle_names_the_clip(self):
+        campaign, step_dir = self.make_campaign()
+        with self.heygen(FakeHeyGen(missing_subtitle='Second line.')):
+            with self.assertRaisesRegex(run.WorkflowError, 'clip p2'):
+                run.render_presenter(campaign, step_dir, CHARACTER)
+
+    def test_srt_becomes_webvtt_with_dots(self):
+        vtt = run.srt_to_vtt(FakeHeyGen.SRT)
+        self.assertTrue(vtt.startswith('WEBVTT\n\n'))
+        self.assertIn('00:00:01.200 --> 00:00:03.400\nHello, there.', vtt)
+        self.assertNotIn(',', vtt.split('\n')[2])
+        self.assertNotIn('\n1\n', vtt)
+
+    def test_presenter_on_screen_in_first_two_seconds(self):
+        presenter = [{'id': 'p1', 'at': 0.0}]
+        late = [{'path': 'film.html', 'content': '<video src="assets/p1.mp4" at="3">'}]
+        self.assertTrue(any('must be on screen in the first 2 seconds' in e for e in run.presenter_film_errors(late, presenter)))
+        early = [{'path': 'film.html', 'content': '<video src="assets/p1.mp4" at="0">'}]
+        self.assertEqual(run.presenter_film_errors(early, presenter), [])
+
+    def film_tool(self):
+        def fake(args, cwd):
+            if args[:2] == ['openfilm', 'render']:
+                Path(args[args.index('--out') + 1]).write_bytes(b'mp4')
+                return
+            if args[0] == 'ffmpeg':
+                target = Path(args[-1])
+                if target.name.endswith('%03d.png'):
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    for number in range(1, 4):
+                        (target.parent / f'{number:03d}.png').write_bytes(b'png')
+                    return
+                target.write_bytes(b'png')
+                return
+            raise AssertionError(f'unexpected tool: {args}')
+        return fake
+
+    def film(self, at_values):
+        clips = ''.join(f'<video src="assets/p{n}.mp4" at="{at}"></video>' for n, at in enumerate(at_values, 1))
+        html = f'<!doctype html><html><head><meta name="viewport" content="width=1080, height=1920"></head><body><section>{clips}</section></body></html>'
+        return json.dumps({'files': [{'path': 'film.html', 'content': html}], 'notes': 'Film notes.'})
+
+    def reel_step(self):
+        return dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
+
+    def test_reel_film_flow_reaches_the_owner(self):
+        campaign, step_dir = self.make_campaign()
+        fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
+        client = FakeClient(['pass'], writer_outputs=[self.film((0.0, 2.0, 4.0))])
+        with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
+            run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
+        self.assertTrue((step_dir / 'APPROVED').is_file())
+        self.assertTrue((step_dir / 'reel.mp4').is_file())
+        self.assertIn('The presenter is an AI avatar.', (step_dir / 'output.md').read_text())
+
+    def test_film_with_the_wrong_presenter_time_goes_back_once(self):
+        campaign, step_dir = self.make_campaign()
+        fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
+        client = FakeClient(['pass'], writer_outputs=[self.film((0.0, 3.0, 4.0)), self.film((0.0, 2.0, 4.0))])
+        with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
+            run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
+        self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with the timing problem, reviewer
+        self.assertIn('[blocking] assets/p2.mp4 must start at 2.0 s', client.prompts[1])
+        self.assertEqual(len(fake.created), 3)  # the rewrite reused every render
+
+    def test_final_package_has_the_ai_label_line(self):
+        campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        (campaign / '08-reel').mkdir(parents=True)
+        (campaign / '08-reel' / 'output.md').write_text('# Reel\n')
+        final = run.build_final(campaign, [{'id': '08-reel'}])
+        self.assertIn('Before posting the reel, turn on "Label as made with AI" in Instagram.', (final / 'index.md').read_text())
+
+    def test_heygen_lists_page_through_items(self):
+        pages = [{'data': [{'id': 'a'}], 'has_more': True, 'next_token': 't1'}, {'data': [{'id': 'b'}], 'has_more': False}]
+        with mock.patch.object(run, 'heygen_request', side_effect=pages) as request:
+            items = run.heygen_list('/v3/avatars/looks', {'limit': 50})
+        self.assertEqual([item['id'] for item in items], ['a', 'b'])
+        self.assertEqual(request.call_args_list[1].kwargs['query'], {'limit': 50, 'token': 't1'})
 
 
 class SearchLogTest(unittest.TestCase):

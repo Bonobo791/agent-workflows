@@ -31,7 +31,7 @@ Content-Type `application/json`. Fields we send:
 
 Response (HTTP 200): `data.video_id` (string) and `data.status`, which starts as `"waiting"`.
 
-We do not send `caption`, `background`, `watermark`, `callback_url` or any other field.
+We send `caption` as `{"file_format": "srt"}`, so that `subtitle_url` is returned. We do not set its `style`, so no captions are burned in. We send no other optional field.
 
 ## Status: GET /v3/videos/{video_id}
 

@@ -6,6 +6,7 @@ The program has already checked the items listed under Checked. Do not report th
 
 Checked:
 - openfilm render makes the reel. A failed render stops the run before the reviewer sees the frames.
+- The presenter clips sit at the at values in presenter.json, p1 is on screen in the first 2 seconds, and every presenter line is in the film.
 
 Blocking findings:
 - Headline text that names a product or feature instead of the reader's problem.
@@ -13,7 +14,7 @@ Blocking findings:
 - Two frames more than 4 seconds apart that show the same screen.
 - No hook in the first frame, or an intro or logo before the hook.
 - A hook that the scenes after it do not deliver.
-- A video that does not make sense with the sound off.
+- A presenter clip that does not match the approved script.
 - A colour, font, layout or logo use that breaks the design system block.
 - A claim that is not in the brief's Facts.
 - No call to action at the end.
