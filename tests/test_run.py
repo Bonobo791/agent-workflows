@@ -194,7 +194,7 @@ class RunTest(unittest.TestCase):
 
     def test_owner_reject_resets_the_loop(self):
         client = FakeClient(['pass', 'revise', 'revise', 'revise', 'pass'])
-        self.go(client, answers('r', 'shorter', 'a', 'a'))
+        self.go(client, answers('r', 'shorter', '', 'a', 'a'))
         self.assertEqual(len(client.prompts), 10)
 
     def test_failed_checks_count_as_a_round(self):
@@ -206,9 +206,14 @@ class RunTest(unittest.TestCase):
         self.assertIn('write x', client.prompts[4])
         self.assertIn('the limit is 280', client.prompts[5])  # the one automatic rewrite
 
+    def test_owner_notes_take_several_lines_until_an_empty_line(self):
+        client = FakeClient(['pass'] * 4)
+        self.go(client, answers('r', 'first note', 'second note', '', 'a', 'a'))
+        self.assertIn('first note\nsecond note', client.prompts[2])
+
     def test_owner_notes_reach_the_writer(self):
         client = FakeClient(['pass', 'pass', 'pass'])
-        self.go(client, answers('r', 'add the price', 'a', 'a'))
+        self.go(client, answers('r', 'add the price', '', 'a', 'a'))
         self.assertIn('add the price', client.prompts[2])
 
     def test_reviewer_revise_continues_the_writer_thread(self):
@@ -221,7 +226,7 @@ class RunTest(unittest.TestCase):
 
     def test_owner_notes_reach_the_writer_thread(self):
         client = FakeClient(['pass', 'pass', 'pass'])
-        self.go(client, answers('r', 'add the price', 'a', 'a'))
+        self.go(client, answers('r', 'add the price', '', 'a', 'a'))
         self.assertIn('add the price', client.prompts[2])
         self.assertEqual(client.thread_params[2], 'thread-1')
 
@@ -229,7 +234,7 @@ class RunTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.go(FakeClient(['pass']), answers('q'))
         client = FakeClient(['pass', 'pass'])
-        self.go(client, answers('r', 'shorter', 'a', 'a'))
+        self.go(client, answers('r', 'shorter', '', 'a', 'a'))
         self.assertEqual(client.thread_params[0], 'thread-1')
         self.assertIn('shorter', client.prompts[0])
 
@@ -613,7 +618,7 @@ class MinorFindingsTest(unittest.TestCase):
 class BrandKitTest(unittest.TestCase):
     def test_brief_angle_problem_must_be_in_list(self):
         brief = full_brief('- Target length: 800 words').replace(f'- Reader problem: {PROBLEMS[0]}', '- Reader problem: Something else entirely.')
-        self.assertTrue(any('must be one line from the Reader problems in positioning.md' in e for e in run.check_brief(brief, task_text(), None)))
+        self.assertTrue(any('must be one of these lines, quoted exactly' in e for e in run.check_brief(brief, task_text(), None)))
         self.assertFalse(any('Reader problem' in e for e in run.check_brief(full_brief('- Target length: 800 words'), task_text(), None)))
 
     def test_brief_channel_ideas_use_different_problems(self):
@@ -622,8 +627,8 @@ class BrandKitTest(unittest.TestCase):
         same = f'- LinkedIn: {PROBLEMS[0]} Relief: x.\n- X: {PROBLEMS[0]} Relief: y.\n- Instagram: {PROBLEMS[2]} Relief: z.'
         self.assertIn('the Channel ideas must use different Value problems', run.check_brief(full_brief(target, same), social, None))
         unlisted = f'- LinkedIn: {PROBLEMS[0]} Relief: x.\n- X: Nothing from the list. Relief: y.\n- Instagram: {PROBLEMS[2]} Relief: z.'
-        self.assertIn('the X Channel idea must start with one Value problem from positioning.md',
-                      run.check_brief(full_brief(target, unlisted), social, None))
+        self.assertTrue(any(e.startswith('the X Channel idea must start with one of these Value lines')
+                            for e in run.check_brief(full_brief(target, unlisted), social, None)))
 
     def test_task_needs_brand(self):
         self.assertTrue(any('Brand' in error for error in run.check_task(task_text(without='Brand'))))
@@ -652,6 +657,13 @@ class BrandKitTest(unittest.TestCase):
         saved = (BRANDS_TMP / 'kitbrand' / 'positioning.md').read_text()
         self.assertTrue(saved.startswith(f'Approved: {date.today().isoformat()}\n'))
         self.assertIn('## Reader problems', saved)
+
+    def test_approved_brand_is_not_redrafted_without_refresh(self):
+        write_brand('approvedbrand', **{'positioning.md': 'Approved: 2026-11-04\n\n' + POSITIONING_TEXT})
+        client = FakeClient([])
+        with self.assertRaisesRegex(run.WorkflowError, 'approved on 2026-11-04; run brand approvedbrand --refresh'):
+            run.brand_kit(client, 'approvedbrand', False, answers())
+        self.assertEqual(client.prompts, [])
 
     def test_social_inputs_use_positioning_value(self):
         for spec in ['positioning#Reader problems', 'positioning#Value', 'positioning#Claims we never make']:

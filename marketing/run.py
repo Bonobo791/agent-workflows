@@ -32,10 +32,10 @@ BRAND_FILES = ['design-system.md', 'voice.md', 'positioning.md', 'pages.md']
 BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'positioning': 'positioning.md', 'pages': 'pages.md'}
 LIBRARY_DIR = HERE / 'skill-library'
 CAMPAIGNS_DIR = REPO / 'campaigns'
-# The owner's roles: writer "gpt6.1 sol medium", reviewer "gpt6.1 sol medium", image and video creator "gpt6.1 sol high".
+# The owner's roles: writer "gpt6.1 sol medium", reviewer "gpt6.1 sol high", image and video creator "gpt6.1 sol high".
 ROLES = {
     'writer': {'model': 'gpt-6.1-sol', 'effort': 'medium'},
-    'reviewer': {'model': 'gpt-6.1-sol', 'effort': 'medium'},
+    'reviewer': {'model': 'gpt-6.1-sol', 'effort': 'high'},
     'creator': {'model': 'gpt-6.1-sol', 'effort': 'high'},
     'strategist': {'model': 'gpt-6.1-sol', 'effort': 'high'},
 }
@@ -53,7 +53,7 @@ HASHTAG_RE = re.compile(r'(?<!\w)#\w+')
 X_POST_START_RE = re.compile(r'^\d+/', re.MULTILINE)
 LINK = '[ARTICLE LINK]'
 X_LINK_LENGTH = 23
-BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Angle', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Open questions']
+BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Angle', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Reader problems', 'Open questions']
 TARGET_RE = re.compile(r'^- Target length: (\d+) words$', re.MULTILINE)
 META_MIN = 150
 META_MAX = 160
@@ -404,6 +404,10 @@ def target_words(brief):
     return int(found[0])
 
 
+def quoted(lines):
+    return '; '.join(f'"{line}"' for line in lines)
+
+
 def check_brief(output, task, brief):
     errors = missing_sections(output, BRIEF_SECTIONS)
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts_of(output) if not has_source(fact)]
@@ -415,7 +419,11 @@ def check_brief(output, task, brief):
     values = [line.split('→')[0].strip() for line in bullets(found.get('Value', ''))]
     angle_line = next((line.strip() for line in sections(output).get('Angle', '').splitlines() if line.strip().startswith('- Reader problem:')), '')
     if angle_line[len('- Reader problem:'):].strip() not in problems:
-        errors.append("the Angle's Reader problem must be one line from the Reader problems in positioning.md, quoted exactly")
+        errors.append(f"the Angle's Reader problem must be one of these lines, quoted exactly: {quoted(problems)}")
+    copied = [problem_text(line) for line in bullets(sections(output).get('Reader problems', ''))]
+    if [line.strip() for line in bullets(sections(output).get('Reader problems', ''))] != \
+            [line.strip() for line in bullets(found.get('Reader problems', ''))]:
+        errors.append("the brief's Reader problems must copy positioning.md's Reader problems word for word")
     channel = sections(output).get('Channel ideas', '')
     if 'social' in parse_deliverables(task):
         used = []
@@ -427,7 +435,7 @@ def check_brief(output, task, brief):
                 text = line[len(prefix):].strip()
                 match = next((value for value in values if value and text.startswith(value)), None)
                 if match is None:
-                    errors.append(f'the {prefix[2:-1]} Channel idea must start with one Value problem from positioning.md')
+                    errors.append(f'the {prefix[2:-1]} Channel idea must start with one of these Value lines: {quoted(values)}')
                 else:
                     used.append(match)
         if len(set(used)) != len(used):
@@ -765,6 +773,9 @@ def brand_kit(client, brand, refresh, ask):
     errors = brand_name_errors(brand) or check_brand(brand, for_brand_run=True)
     if errors:
         raise WorkflowError('; '.join(errors))
+    stamp = re.match(r'Approved: (\S+)', brand_file(brand, 'positioning.md').read_text())
+    if stamp and not refresh:  # an approved brand stays as it is until the owner asks for new research
+        raise WorkflowError(f'positioning.md was approved on {stamp.group(1)}; run brand {brand} --refresh to research again and see the differences')
     campaign = CAMPAIGNS_DIR / f'brand-{brand}'
     campaign.mkdir(parents=True, exist_ok=True)
     (campaign / '00-task.md').write_text(
@@ -1153,7 +1164,14 @@ def decide(step, step_dir, review, ask):
         if answer == 'a':
             return ''
         if answer == 'r':
-            notes = ask('What should change? ').strip()
+            print('What should change? One or more lines; finish with an empty line.')
+            lines = []
+            while True:
+                line = ask('')
+                if not line.strip():
+                    break
+                lines.append(line.rstrip())
+            notes = '\n'.join(lines).strip()
             if notes:
                 return notes
             print('Notes cannot be empty.')

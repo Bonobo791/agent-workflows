@@ -4,7 +4,7 @@
 
 Turn the task and the sources step into one campaign brief that every later step follows.
 
-Write Markdown with exactly these ten sections, in this order:
+Write Markdown with exactly these eleven sections, in this order:
 
 ## Goal
 One sentence: what this campaign must achieve, as the task states it.
@@ -41,6 +41,9 @@ If the Deliverables include images: what the three images show. If the Deliverab
 
 ## Facts
 Copy every fact from the sources step's Facts section, word for word, with its source. Add no fact.
+
+## Reader problems
+Copy every line of positioning.md's Reader problems word for word, with its URL. Add none.
 
 ## Open questions
 What the task does not say and the owner must decide, or None.
