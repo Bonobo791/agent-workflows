@@ -1312,7 +1312,7 @@ def render_presenter(campaign, step_dir, character):
         if not re.fullmatch(r'p\d+', line['id']):
             raise WorkflowError(f"presenter line id {line['id']!r} is not p1, p2, p3 ...; fix the reel script first")
     seconds = reel_seconds()
-    cache = step_dir / 'heygen-cache'
+    cache = campaign.parent / '.heygen-cache'  # campaigns/.heygen-cache: shared by every campaign, and kept when a step is deleted
     cache.mkdir(parents=True, exist_ok=True)
     assets = step_dir / 'assets'
     assets.mkdir(exist_ok=True)
@@ -1593,9 +1593,12 @@ def fingerprint(step, skills_dir, campaign):
     parts.append(inspect.getsource(CHECKS[step['check']]) if step.get('check') else '')
     for spec in dict.fromkeys(step['inputs'] + step['review_inputs']):
         try:
-            parts.append(spec + '\n' + read_input(campaign, spec))
+            block = read_input(campaign, spec)
         except (WorkflowError, OSError):
             parts.append(spec + '\nmissing: not approved or not written yet')  # the approval stays stale until the input exists
+            continue
+        block = re.sub(r'^Approved: .*\n?', '', block, flags=re.MULTILINE)  # the approval date is not content, so changing it keeps approvals valid
+        parts.append(spec + '\n' + block)
     for part in parts:
         digest.update(part.encode() + b'\0')
     return digest.hexdigest()
