@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -850,6 +851,44 @@ class FilmLookTest(unittest.TestCase):
                 self.assertIn('## film.html rules', text)
                 self.assertIn('<meta name="viewport" content="width=1080, height=1080">', text)
                 self.assertIn('Never use position, display, inset', text)
+
+
+class RecheckTest(unittest.TestCase):
+    def setUp(self):
+        self.campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        self.campaign.mkdir(parents=True)
+        (self.campaign / '00-task.md').write_text(task_text('article'))
+        sources = self.campaign / '01-sources'
+        sources.mkdir()
+        (sources / 'APPROVED').write_text('done\n')
+        (sources / 'output.md').write_text(sources_text())
+        (sources / 'searches.txt').write_text('query\n' * 5)
+        self.brief_step = dict(next(step for step in run.STEPS if step['id'] == '02-brief'), role='writer')
+
+    def run_brief(self, client, ask):
+        return run.run_campaign(self.campaign, client, ask=ask, steps=[self.brief_step], skills_dir=run.SKILLS_DIR, roles=ROLES)
+
+    def approve_brief(self):
+        client = FakeClient(['pass'], writer_outputs=[json.dumps({'output': full_brief('- Target length: 800 words'), 'notes': ''})])
+        self.run_brief(client, answers('a'))
+
+    def test_run_rechecks_approved_steps(self):
+        self.approve_brief()
+        with mock.patch.object(run, 'PROCESS_RE', re.compile(r'\ba fact\b', re.I)):
+            with self.assertRaises(run.WorkflowError) as caught:
+                self.run_brief(FakeClient([]), answers())
+        message = str(caught.exception)
+        self.assertIn('these approved steps fail the current rules: 02-brief: '
+                      'this is a process note, not a fact; remove it: "A fact https://example.com (checked 2026-11-03)"', message)
+        self.assertIn('rm -r campaigns/demo/02-brief campaigns/demo/final', message)
+
+    def test_recheck_passes_unaffected_steps(self):
+        self.approve_brief()
+        client = FakeClient([])
+        with mock.patch.object(run, 'PROCESS_RE', re.compile(r'\bzzz\b')):
+            final = self.run_brief(client, answers())
+        self.assertTrue((final / 'index.md').is_file())
+        self.assertEqual(client.prompts, [])  # nothing was run again, so no Codex call
 
 
 class SearchLogTest(unittest.TestCase):

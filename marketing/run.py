@@ -1171,15 +1171,40 @@ def without_hooks(text):
     return '\n'.join(kept).strip() + '\n'
 
 
+def run_checks(step, step_dir, campaign):
+    """The step's Python check on its saved output, with the brief for the steps that write from it."""
+    output, task = without_hooks((step_dir / 'output.md').read_text()), (campaign / '00-task.md').read_text()
+    brief = (campaign / '02-brief' / 'output.md').read_text() if step['id'] in ('03-article', '04-linkedin', '05-x', '06-instagram') else None
+    if step['check'] == 'sources':
+        return check_sources(output, task, brief, read_searches(step_dir))
+    return CHECKS[step['check']](output, task, brief)
+
+
+def recheck_approved(campaign, steps):
+    """Approved steps are checked again against the current Python rules, so a rule change cannot leave a broken approval."""
+    failures = []
+    for step in steps:
+        step_dir = campaign / step['id']
+        if not (step_dir / 'APPROVED').is_file() or step['check'] is None:
+            continue
+        try:
+            errors = run_checks(step, step_dir, campaign)
+        except WorkflowError as error:
+            errors = [str(error)]
+        if errors:
+            failures.append((step, errors))
+    if failures:
+        first = steps.index(failures[0][0])
+        listed = ' | '.join(f"{step['id']}: {'; '.join(errors)}" for step, errors in failures)
+        redo = [f'campaigns/{campaign.name}/{step["id"]}' for step in steps[first:]] + [f'campaigns/{campaign.name}/final']
+        raise WorkflowError(f"these approved steps fail the current rules: {listed}. "
+                            f"Delete them and every later step to redo them: rm -r {' '.join(redo)}")
+
+
 def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
     errors = []
     if step['check'] is not None:
-        brief = (campaign / '02-brief' / 'output.md').read_text() if step['id'] in ('03-article', '04-linkedin', '05-x', '06-instagram') else None
-        output, task = without_hooks((step_dir / 'output.md').read_text()), (campaign / '00-task.md').read_text()
-        if step['check'] == 'sources':
-            errors = check_sources(output, task, brief, read_searches(step_dir))
-        else:
-            errors = CHECKS[step['check']](output, task, brief)
+        errors = run_checks(step, step_dir, campaign)
     if errors:
         print(f"[{step['id']}] automatic checks failed; skipping the reviewer")
         log.info('[%s] automatic checks failed (%d): %s', step['id'], len(errors), '; '.join(errors))
@@ -1359,6 +1384,7 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
         if errors:
             raise WorkflowError('; '.join(errors))
         warn_if_old(brand)
+    recheck_approved(campaign, steps)  # before any Codex call
     check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
     for step in steps:
         if (campaign / step['id'] / 'APPROVED').is_file():
