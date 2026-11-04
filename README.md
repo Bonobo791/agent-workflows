@@ -113,6 +113,65 @@ Campaigns made before the sources step was added use the old folder numbers and 
 - Skills: `marketing/skills/<step>/SKILL.md` (writer) and `REVIEW.md` (reviewer). Replace them with your own.
 - Steps, their order, what each one needs and its automatic checks: the `STEPS` list and the `CHECKS` table in `marketing/run.py`.
 
+## Engineering workflow
+
+Builds a change in a git repository, step by step. You write a task file. The workflow plans it, writes phased instructions, builds them one phase at a time with the check commands run after every phase, reviews the code, and opens a **draft** pull request.
+Every step is written by Claude Code, checked by Python, reviewed by a second session, and then waits for your approval. Nothing is merged, released or deployed.
+
+```
+task file -> 01-plan -> 02-instructions -> 03-build -> 04-pr -> draft pull request
+```
+
+### Requirements
+
+- Python 3.10 or newer
+- Claude Code 2.1.318 or newer, installed and signed in
+- `git`
+- `gh`, signed in with `gh auth login`. It is used only to open the draft pull request.
+
+### Task file
+
+Start from `engineering/examples/sample-task.md`. Its sections, in this order:
+
+- `## Repository`: the absolute path of a local git checkout
+- `## Base branch`: an existing branch, for example `main`
+- `## Branch`: the new branch the build creates
+- `## Goal`, `## Details`, `## Done when` (one `- ` line per criterion)
+- `## Check commands`: one `- ` line per command. Python runs them from the repository root after every phase.
+- `## Constraints`: the rules the change must follow, or `None.`
+
+The target repository must ignore the files its checks create (for example `__pycache__/`). Otherwise the build stops at the uncommitted-changes check.
+
+### Use
+
+```sh
+python3 engineering/run.py new status-cost engineering/examples/sample-task.md
+python3 engineering/run.py run status-cost     # runs; stops at every step for your decision
+python3 engineering/run.py status status-cost  # where the build is, and its token usage
+```
+
+At each step: `a` approves, `r` rejects with notes, `q` quits. Run the same `run` command later to come back to the same decision.
+
+### Files of a build
+
+`builds/<name>/` (gitignored):
+
+- `00-task.md`: the task. `base.txt`: the base commit. `sessions.json`: the ids of the three sessions.
+- `worktree/`: a git worktree of the target repository, on the new branch. Every agent works here.
+- `run.log` (the log) and `claude-stderr.log`.
+- `01-plan/`, `02-instructions/`, `03-build/`, `04-pr/`: `output.md`, `review.md`, `calls/` (each prompt and reply), `usage.jsonl`, `history/` (earlier versions), and `APPROVED` once you approve.
+- `02-instructions/phases.json`, `03-build/phase-N.done`, `03-build/checks-N.txt` (the output of each check run).
+
+### Sessions and caching
+
+Each build has three Claude Code sessions: `planner` (steps 01 and 02), `builder` (phases, fixes and the pull request) and `reviewer` (every review). Each one is resumed with `--resume`, so it keeps the files it has read. A session's calls all use the same flags and the same JSON schema, and the stable part of each prompt comes first, so the cache is reused.
+
+`status` shows, for each step and each session: the non-cached input, the cache reads and their share of the input, the output and the cost. It also shows the size of the context on each session's last call, so you can see a session grow.
+
+Models, effort and the budget per call are in `ROLES` in `engineering/run.py`. Defaults: planner Opus (high), builder Haiku (high), reviewer Opus (medium); budgets $5, $5 and $3 per call.
+
+The only outward action is `git push` plus a draft pull request, and it runs only after you approve step 04.
+
 ## Tests
 
 ```sh
