@@ -165,8 +165,19 @@ class NewTest(unittest.TestCase):
         self.assertFalse((self.builds / 'status-cost').exists())
 
 
+STEP_SKILLS = {'01-plan': ['SKILL.md', 'REVIEW.md'], '02-instructions': ['SKILL.md', 'REVIEW.md'],
+               '03-build': ['SKILL.md', 'REVIEW.md'], '04-pr': ['SKILL.md']}
+
+
+def write_skill_files(root):
+    for step, files in STEP_SKILLS.items():
+        (root / step).mkdir(parents=True)
+        for name in files:
+            (root / step / name).write_text(f'Skill text for {step} {name}.\n')
+
+
 class BuildTest(unittest.TestCase):
-    """A real build (worktree included) made by `new` in a temporary target repository."""
+    """A real build (worktree included) made by `new` in a temporary target repository, with stub skill files."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -174,9 +185,11 @@ class BuildTest(unittest.TestCase):
         root = Path(self.tmp.name).resolve()
         repo = make_repo(root / 'repo')
         self.builds = root / 'builds'
-        patch = mock.patch.object(eng, 'BUILDS_DIR', self.builds)
-        patch.start()
-        self.addCleanup(patch.stop)
+        write_skill_files(root / 'skills')
+        for name, value in (('BUILDS_DIR', self.builds), ('SKILLS_DIR', root / 'skills')):
+            patch = mock.patch.object(eng, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
         task = root / 'task.md'
         task.write_text(task_text(repo))
         with contextlib.redirect_stdout(io.StringIO()):
@@ -327,6 +340,59 @@ class UsageTest(BuildTest):
         self.assertIn('cost $0.5000', rows['total'])
         self.assertIn('non-cached input 4716', rows['planner'])
         self.assertIn('non-cached input 4716', rows['builder'])
+
+
+REVIEW = {'verdict': 'revise', 'summary': 'Two things.',
+          'findings': [{'severity': 'blocking', 'file': 'a.py', 'issue': 'Missing check.', 'fix': 'Add it.'}]}
+
+
+class PromptTest(BuildTest):
+    def write_phases(self):
+        (self.build / '02-instructions').mkdir()
+        (self.build / '02-instructions' / 'output.md').write_text('## Phase 1: First\nCommit message: Add first\n')
+        (self.build / '02-instructions' / 'phases.json').write_text(
+            json.dumps([{'n': 1, 'title': 'First', 'message': 'Add first'}]))
+
+    def test_phase_prompt_is_short(self):
+        prompt = eng.phase_prompt(2, 'Add the second thing')
+        self.assertEqual(prompt, eng.PHASE_REQUEST.format(n=2, message='Add the second thing'))
+        self.assertNotIn('Skill text', prompt)
+
+    def test_prompts_start_with_the_skill(self):
+        self.write_phases()
+        for prompt in (eng.plan_prompt(self.build), eng.first_phase_prompt(self.build),
+                       eng.review_text_prompt(self.build, '01-plan', 'the plan')):
+            self.assertTrue(prompt.startswith('<skill>'), prompt[:60])
+
+    def test_reviewer_gets_the_task_only_once(self):
+        self.assertIn('<task>', eng.review_text_prompt(self.build, '01-plan', 'the plan'))
+        sessions = eng.load_sessions(self.build)
+        sessions['reviewer']['started'] = True
+        eng.save_sessions(self.build, sessions)
+        self.assertNotIn('<task>', eng.review_text_prompt(self.build, '02-instructions', 'the instructions'))
+
+    def test_prompts_hold_no_build_folder_path(self):
+        self.write_phases()
+        prompts = [
+            eng.plan_prompt(self.build), eng.instructions_prompt(self.build), eng.first_phase_prompt(self.build),
+            eng.phase_prompt(1, 'Add first'), eng.fix_prompt('check failed'), eng.review_fix_prompt(REVIEW, '', 1),
+            eng.pr_prompt(None), eng.review_text_prompt(self.build, '01-plan', 'plan'),
+            eng.rereview_text_prompt('plan'), eng.review_code_prompt(self.build, 'abc', 'def', 'ok'),
+            eng.rereview_code_prompt('abc', 'def', 'ok'), eng.revision_prompt(None, '', ['missing']),
+        ]
+        for prompt in prompts:
+            self.assertNotIn(str(self.build), prompt)
+
+    def test_revision_prompt_includes_only_given_parts(self):
+        self.assertEqual(eng.revision_prompt(None, '', []), eng.REVISION_RULE)
+        both = eng.revision_prompt(REVIEW, 'Make it shorter.', [])
+        self.assertIn('<review>', both)
+        self.assertIn('<owner notes>', both)
+        self.assertNotIn('<python checks>', both)
+        checks = eng.revision_prompt(None, '', ['missing section'])
+        self.assertIn('<python checks>', checks)
+        self.assertNotIn('<review>', checks)
+        self.assertNotIn('<owner notes>', checks)
 
 
 if __name__ == '__main__':

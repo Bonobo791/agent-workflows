@@ -445,6 +445,117 @@ def cmd_status(name):
         print(f"  {session}: {last['input'] + last['cache_write'] + last['cache_read']} tokens")
 
 
+REVISION_RULE = 'This is a revision of your last answer in this session. Fix every item below. Return the complete new version in the output field, not a list of changes.'
+PLAN_FORMAT = 'Write the plan in Markdown with exactly these ## sections, in this order: Summary, Approach, Files to change, Tests, Risks, Open questions. Read the code in the working directory before you write it.'
+INSTRUCTIONS_REQUEST = 'The owner approved the last version of your plan above. Write the implementation instructions for it now.'
+PHASE_REQUEST = 'Do Phase {n} of the instructions now, and only Phase {n}. When it is done, commit it once with exactly this message: {message}'
+FIX_RULE = 'The checks below failed after your last commit. Fix the cause, run the same check, and commit the fix once with exactly this message: Fix failing checks. Do not change, skip or disable a test to make it pass.'
+REVIEW_FIX_RULE = 'The reviewer found the problems below. Fix every blocking finding, then commit once with exactly this message: Fix review findings, round {round}'
+PR_REQUEST = 'Write the pull request for all the work in this session. The first line of output is "# " and the title (at most 72 characters). The rest is the body, in Markdown, with ## Summary and ## Testing sections, and every ## heading of the pull request template if one is given.'
+REVIEW_RULE = 'Review the deliverable against the task and the skill above. Return verdict, summary and findings.'
+REREVIEW_RULE = 'This is the revised version of the deliverable you reviewed last. Check that every blocking finding from your last review is fixed, then review it again in full.'
+CODE_REVIEW_REQUEST = 'Review the code change. Run git diff {base}...{head} and read the files you need. The plan and the instructions are the ones you reviewed earlier in this session.'
+CODE_REREVIEW_REQUEST = 'New commits were added to fix your last review. Run git diff {previous}..{head}. Check every blocking finding from your last review is fixed and that nothing else broke.'
+
+
+def block(name, content):
+    return f'<{name}>\n{content.strip()}\n</{name}>'
+
+
+def read_skill(step_id, filename):
+    path = SKILLS_DIR / step_id / filename
+    if not path.is_file():
+        raise WorkflowError(f'missing skill file: {path}')
+    return path.read_text()
+
+
+def review_markdown(review):
+    lines = [f"Verdict: {review['verdict']}", '', review['summary'], '']
+    for number, finding in enumerate(review['findings'], 1):
+        location = f"{finding['file']}: " if finding['file'] else ''
+        lines.append(f"{number}. [{finding['severity']}] {location}{finding['issue']} Fix: {finding['fix']}")
+    return '\n'.join(lines).rstrip() + '\n'
+
+
+def phase_message(build, n):
+    for phase in json.loads((build / '02-instructions' / 'phases.json').read_text()):
+        if phase['n'] == n:
+            return phase['message']
+    raise WorkflowError(f'phase {n} is not in phases.json')
+
+
+# Planner prompts. The planner session keeps the task and the plan it wrote.
+def plan_prompt(build):
+    return '\n\n'.join([block('skill', read_skill('01-plan', 'SKILL.md')), block('task', read_task(build)), PLAN_FORMAT])
+
+
+def instructions_prompt(build):
+    return '\n\n'.join([block('skill', read_skill('02-instructions', 'SKILL.md')), INSTRUCTIONS_REQUEST])
+
+
+def revision_prompt(review, notes, errors):
+    parts = [REVISION_RULE]
+    if errors:
+        parts.append(block('python checks', '\n'.join(errors)))
+    if review is not None:
+        parts.append(block('review', review_markdown(review)))
+    if notes:
+        parts.append(block('owner notes', notes))
+    return '\n\n'.join(parts)
+
+
+# Builder prompts. The first prompt carries the skill, the task and the instructions; later ones only name the phase.
+def first_phase_prompt(build):
+    return '\n\n'.join([block('skill', read_skill('03-build', 'SKILL.md')), block('task', read_task(build)),
+                        block('instructions', (build / '02-instructions' / 'output.md').read_text()),
+                        PHASE_REQUEST.format(n=1, message=phase_message(build, 1))])
+
+
+def phase_prompt(n, message):
+    return PHASE_REQUEST.format(n=n, message=message)
+
+
+def fix_prompt(failures):
+    return '\n\n'.join([FIX_RULE, block('check output', failures)])
+
+
+def review_fix_prompt(review, notes, round_number):
+    parts = [REVIEW_FIX_RULE.format(round=round_number), block('review', review_markdown(review))]
+    if notes:
+        parts.append(block('owner notes', notes))
+    return '\n\n'.join(parts)
+
+
+def pr_prompt(template):
+    parts = [block('skill', read_skill('04-pr', 'SKILL.md'))]
+    if template is not None:
+        parts.append(block('pull request template', template))
+    parts.append(PR_REQUEST)
+    return '\n\n'.join(parts)
+
+
+# Reviewer prompts. The reviewer gets the task once, with its first review.
+def review_text_prompt(build, step_id, output):
+    parts = [block('skill', read_skill(step_id, 'REVIEW.md'))]
+    if not load_sessions(build)['reviewer']['started']:
+        parts.append(block('task', read_task(build)))
+    parts += [block('deliverable', output), REVIEW_RULE]
+    return '\n\n'.join(parts)
+
+
+def rereview_text_prompt(output):
+    return '\n\n'.join([REREVIEW_RULE, block('deliverable', output)])
+
+
+def review_code_prompt(build, base, head, checks):
+    return '\n\n'.join([block('skill', read_skill('03-build', 'REVIEW.md')),
+                        CODE_REVIEW_REQUEST.format(base=base, head=head), block('check output', checks)])
+
+
+def rereview_code_prompt(previous, head, checks):
+    return '\n\n'.join([CODE_REREVIEW_REQUEST.format(previous=previous, head=head), block('check output', checks)])
+
+
 def main():
     parser = argparse.ArgumentParser(description='Engineering workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)
