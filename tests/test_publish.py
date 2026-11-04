@@ -615,5 +615,71 @@ class LinkedInTest(AdapterTest):
                 publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi'), FakeHttp([]), {'linkedin': settings}))
 
 
+X_CONFIG = {'username': 'moderaty', 'api_key': 'ck-123', 'api_secret': 'cs secret', 'access_token': 'tk-456', 'access_token_secret': 'ts/secret'}
+OAUTH_ARGS = ('POST', 'https://api.x.com/2/tweets', 'ck-123', 'cs secret', 'tk-456', 'ts/secret', 'abc123', '1700000000')
+
+
+class XTest(AdapterTest):
+    def test_oauth1_vector(self):
+        method, url, key, secret, token, token_secret, nonce, timestamp = OAUTH_ARGS
+        base = publish.oauth1_base_string(method, url, [('oauth_consumer_key', key), ('oauth_nonce', nonce),
+                                                        ('oauth_signature_method', 'HMAC-SHA1'), ('oauth_timestamp', timestamp),
+                                                        ('oauth_token', token), ('oauth_version', '1.0')])
+        self.assertEqual(base, 'POST&https%3A%2F%2Fapi.x.com%2F2%2Ftweets&oauth_consumer_key%3Dck-123%26oauth_nonce%3Dabc123'
+                               '%26oauth_signature_method%3DHMAC-SHA1%26oauth_timestamp%3D1700000000%26oauth_token%3Dtk-456%26oauth_version%3D1.0')
+        self.assertEqual(publish.oauth1_header(*OAUTH_ARGS),
+                         'OAuth oauth_consumer_key="ck-123", oauth_nonce="abc123", oauth_signature="DmDSBbC3iarel7UmSlOA%2FM8Wc1Y%3D", '
+                         'oauth_signature_method="HMAC-SHA1", oauth_timestamp="1700000000", oauth_token="tk-456", oauth_version="1.0"')
+
+    def test_query_parameters_are_signed(self):
+        plain = publish.oauth1_header(*OAUTH_ARGS)
+        with_query = publish.oauth1_header('POST', 'https://api.x.com/2/tweets?ids=1', *OAUTH_ARGS[2:])
+        self.assertNotEqual(plain, with_query)
+        base = publish.oauth1_base_string('GET', 'https://api.x.com/2/tweets?ids=1', [('oauth_consumer_key', 'ck-123'), ('ids', '1')])
+        self.assertTrue(base.startswith('GET&https%3A%2F%2Fapi.x.com%2F2%2Ftweets&'))
+        self.assertIn('ids%3D1', base)
+
+    def test_first_post_uploads_the_image_first(self):
+        (self.step / 'media' / 'x.png').write_bytes(b'png')
+        it = item('x-1', platform='x', text='First', media=[{'path': 'media/x.png', 'sha256': 'unused'}])
+        http = FakeHttp([(200, {}, json.dumps({'data': {'id': '555'}}).encode()), (201, {}, json.dumps({'data': {'id': '777'}}).encode())])
+        publish.x_item(self.ctx(it, http, {'x': X_CONFIG}))
+        self.assertEqual(http.requests[0][1], 'https://api.x.com/2/media/upload')
+        self.assertIn(b'name="media_category"', http.requests[0][3])
+        self.assertIn(b'tweet_image', http.requests[0][3])
+        self.assertEqual(json.loads(http.requests[1][3]), {'text': 'First', 'media': {'media_ids': ['555']}})
+
+    def test_reply_uses_the_previous_post_id(self):
+        it = item('x-2', platform='x', text='Second', depends=['x-1'], reply_to='x-1')
+        http = FakeHttp([(201, {}, json.dumps({'data': {'id': '888'}}).encode())])
+        result = publish.x_item(self.ctx(it, http, {'x': X_CONFIG}, {'x-1': {'post_id': '777', 'url': 'https://x.com/moderaty/status/777'}}))
+        self.assertEqual(json.loads(http.requests[0][3]), {'text': 'Second', 'reply': {'in_reply_to_tweet_id': '777'}})
+        self.assertEqual(result, ('888', 'https://x.com/moderaty/status/888'))
+
+    def test_429_waits_until_rate_limit_reset(self):
+        http = FakeHttp([(429, {'x-rate-limit-reset': str(self.epoch + 900)}, b'')])
+        with self.assertRaises(publish.RetryLater) as raised:
+            publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), http, {'x': X_CONFIG}))
+        self.assertEqual(raised.exception.wait_seconds, 900)
+
+    def test_403_duplicate_stops(self):
+        with self.assertRaises(publish.StopItem):
+            publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), FakeHttp([(403, {}, b'duplicate content')]), {'x': X_CONFIG}))
+
+    def test_post_url_uses_username(self):
+        http = FakeHttp([(201, {}, json.dumps({'data': {'id': '9'}}).encode())])
+        self.assertEqual(publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), http, {'x': X_CONFIG}))[1], 'https://x.com/moderaty/status/9')
+
+    def test_answer_without_an_id_after_posting_is_unknown(self):
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), FakeHttp([(201, {}, b'{}')]), {'x': X_CONFIG}))
+
+    def test_multipart_body_has_the_fields_and_the_file(self):
+        content_type, body = publish.multipart([('media_category', 'tweet_image')], [('media', 'x.png', 'image/png', b'png-bytes')])
+        self.assertTrue(content_type.startswith('multipart/form-data; boundary='))
+        self.assertIn(b'name="media"; filename="x.png"', body)
+        self.assertIn(b'png-bytes', body)
+
+
 if __name__ == '__main__':
     unittest.main()
