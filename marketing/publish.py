@@ -369,6 +369,16 @@ def publish_due(campaigns_dir, config_path, http=http_request, clock=time.time, 
 
 
 def reset_item(campaign, item_id, clock=time.time):
+    # The lock publish --due takes: a reset never reads a state while a send is in flight.
+    with (campaign.parent / '.publish.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise PublishError('a publish run is active; try --retry again when it ends') from None
+        _reset_item(campaign, item_id, clock)
+
+
+def _reset_item(campaign, item_id, clock=time.time):
     step_dir = campaign / '09-publish'
     if not (step_dir / 'plan.json').is_file():
         raise PublishError(f'{campaign.name}: nothing is approved for posting')

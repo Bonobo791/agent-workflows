@@ -627,6 +627,17 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(ran, ['fails', 'sends'])
         self.assertIn('RuntimeError: boom', err.getvalue())
 
+    def test_reset_is_refused_while_a_publish_run_holds_the_lock(self):
+        self.approve([item('a')])
+        self.script['a'] = [publish.StopItem('bad token')]
+        self.run_once()
+        lock = (self.root / '.publish.lock').open('a')
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with self.assertRaisesRegex(publish.PublishError, 'a publish run is active; try --retry again when it ends'):
+            publish.reset_item(self.campaign, 'a', clock=self.clock)
+        self.assertEqual(self.state('a')['state'], 'failed')
+
     def test_http_error_becomes_a_response_and_url_error_a_network_error(self):
         error = urllib.error.HTTPError('https://x.example', 404, 'Not Found', {}, io.BytesIO(b'missing'))
         with mock.patch.object(publish.OPENER, 'open', side_effect=error):
