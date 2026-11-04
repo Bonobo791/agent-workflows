@@ -13,11 +13,13 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 RETRY_MINUTES = [5, 10, 20, 40]
 MAX_ATTEMPTS = 5
@@ -523,4 +525,98 @@ def x_item(ctx):
     return tweet_id, f"https://x.com/{settings['username']}/status/{tweet_id}"
 
 
-ADAPTERS = {'website': check_article, 'linkedin': linkedin_item, 'x': x_item}
+FORM_HEADERS = {'Content-Type': 'application/x-www-form-urlencoded'}
+DAY_SECONDS = 24 * 60 * 60
+
+
+def instagram_item(ctx):
+    settings = platform_settings(ctx, 'instagram', ['user_id', 'access_token', 'api_version', 'media_dir', 'media_base_url'])
+    version = str(settings['api_version'])
+    if not re.fullmatch(r'v\d+\.\d+', version):
+        raise StopItem(f'publish.json instagram "api_version" must look like v26.0, not {version!r}')
+    base = f'https://graph.instagram.com/{version}'
+    image_url = instagram_public_url(ctx, settings)
+    container_id = instagram_container(ctx, base, settings, image_url)
+    instagram_wait_for_container(ctx, base, settings['access_token'], container_id)
+    media_id = instagram_publish(ctx, base, settings, container_id)
+    return media_id, instagram_permalink(ctx, base, settings['access_token'], media_id)
+
+
+def instagram_public_url(ctx, settings):
+    name = f"{ctx.item['media'][0]['sha256'][:16]}.jpg"
+    dest = Path(settings['media_dir']) / ctx.campaign.name / name
+    if not dest.is_file():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ctx.step_dir / ctx.item['media'][0]['path'], dest)
+    url = settings['media_base_url'].rstrip('/') + f'/{ctx.campaign.name}/{name}'
+    response = send(ctx.http, 'Instagram image URL', False, ctx.clock(), 'GET', url)
+    if response.status != 200 or not response.headers.get('content-type', '').startswith('image/jpeg'):
+        raise RetryLater(f'{url} does not serve the JPEG yet (HTTP {response.status}); the web folder may still be syncing')
+    return url
+
+
+def instagram_container(ctx, base, settings, image_url):
+    created = ctx.data.get('container_created_at')
+    if ctx.data.get('container_id') and created and ctx.clock() - parse_time(created) < DAY_SECONDS:
+        return ctx.data['container_id']
+    what = 'Instagram container'
+    body = urllib.parse.urlencode({'image_url': image_url, 'caption': ctx.item['text'], 'access_token': settings['access_token']})
+    answer = check(send(ctx.http, what, False, ctx.clock(), 'POST', f"{base}/{settings['user_id']}/media",
+                        headers=FORM_HEADERS, body=body.encode()), {200}, what, False, ctx.clock())
+    container_id = dig(answer_json(answer, what), what, 'id')
+    ctx.save({'container_id': container_id, 'container_created_at': now_text(ctx.clock())})
+    return container_id
+
+
+def instagram_wait_for_container(ctx, base, token, container_id):
+    what = 'Instagram container status'
+    for number in range(1, 6):
+        if number > 1:
+            ctx.sleep(60)
+        query = urllib.parse.urlencode({'fields': 'status_code', 'access_token': token})
+        answer = check(send(ctx.http, what, False, ctx.clock(), 'GET', f'{base}/{container_id}?{query}'), {200}, what, False, ctx.clock())
+        status = dig(answer_json(answer, what), what, 'status_code')
+        if status == 'FINISHED':
+            return
+        if status == 'EXPIRED':
+            ctx.save({'container_id': None, 'container_created_at': None})
+            raise RetryLater('the Instagram container expired; it will be created again')
+        if status != 'IN_PROGRESS':
+            raise StopItem(f'Instagram rejected the media: container status {status}')
+    raise RetryLater('the Instagram container is still IN_PROGRESS after 5 checks')
+
+
+def instagram_daily_cap(response):
+    try:
+        error = json.loads(response.body).get('error', {})
+    except (ValueError, AttributeError):
+        return False
+    return error.get('code') == 9 and error.get('error_subcode') == 2207042
+
+
+def instagram_publish(ctx, base, settings, container_id):
+    what = 'Instagram publish'
+    body = urllib.parse.urlencode({'creation_id': container_id, 'access_token': settings['access_token']})
+    ctx.sent()
+    response = send(ctx.http, what, True, ctx.clock(), 'POST', f"{base}/{settings['user_id']}/media_publish",
+                    headers=FORM_HEADERS, body=body.encode())
+    if response.status != 200 and instagram_daily_cap(response):  # read before check: this answer is a 400, not a status to stop on
+        raise RetryLater('Instagram allows 100 published posts per 24 hours and that limit is reached; it will be retried')
+    return published_field(check(response, {200}, what, True, ctx.clock()), what, 'id')
+
+
+def instagram_permalink(ctx, base, token, media_id):
+    query = urllib.parse.urlencode({'fields': 'permalink', 'access_token': token})
+    try:  # the post is live already, so no failure here may change the item's result
+        response = ctx.http('GET', f'{base}/{media_id}?{query}')
+    except NetworkError:
+        return ''
+    if response.status != 200:
+        return ''
+    try:
+        return json.loads(response.body)['permalink']
+    except (ValueError, KeyError, TypeError):
+        return ''
+
+
+ADAPTERS = {'website': check_article, 'linkedin': linkedin_item, 'x': x_item, 'instagram': instagram_item}

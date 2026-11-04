@@ -681,5 +681,103 @@ class XTest(AdapterTest):
         self.assertIn(b'png-bytes', body)
 
 
+class InstagramTest(AdapterTest):
+    def setUp(self):
+        super().setUp()
+        self.public = Path(tempfile.mkdtemp()) / 'public'
+        self.config = {'instagram': {'user_id': '17841', 'access_token': 'igtok', 'api_version': 'v26.0',
+                                     'media_dir': str(self.public), 'media_base_url': 'https://media.moderaty.com/social'}}
+        (self.step / 'media' / 'instagram.jpg').write_bytes(b'jpeg')
+
+    def insta_item(self):
+        return item('instagram-post', platform='instagram', text='A caption\n\n#a #b #c', media=[{'path': 'media/instagram.jpg', 'sha256': 'a' * 64}])
+
+    def image_ok(self):
+        return (200, {'content-type': 'image/jpeg'}, b'jpeg')
+
+    def container(self, container_id='c1'):
+        return (200, {}, json.dumps({'id': container_id}).encode())
+
+    def status(self, value):
+        return (200, {}, json.dumps({'status_code': value}).encode())
+
+    def published(self, media_id='m1'):
+        return (200, {}, json.dumps({'id': media_id}).encode())
+
+    def permalink(self):
+        return (200, {}, json.dumps({'permalink': 'https://www.instagram.com/p/abc/'}).encode())
+
+    def test_image_is_copied_and_its_public_url_checked(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), self.published(), self.permalink()])
+        result = publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+        self.assertEqual(result, ('m1', 'https://www.instagram.com/p/abc/'))
+        self.assertEqual((self.public / 'demo' / 'aaaaaaaaaaaaaaaa.jpg').read_bytes(), b'jpeg')
+        self.assertEqual(http.requests[0][:2], ('GET', 'https://media.moderaty.com/social/demo/aaaaaaaaaaaaaaaa.jpg'))
+
+    def test_png_content_type_waits(self):
+        http = FakeHttp([(200, {'content-type': 'image/png'}, b'png')])
+        with self.assertRaises(publish.RetryLater):
+            publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+
+    def test_container_status_then_publish(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), self.published(), self.permalink()])
+        publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+        sequence = [(method, url.split('?')[0]) for method, url, _, _ in http.requests[1:]]
+        self.assertEqual(sequence, [('POST', 'https://graph.instagram.com/v26.0/17841/media'),
+                                    ('GET', 'https://graph.instagram.com/v26.0/c1'),
+                                    ('POST', 'https://graph.instagram.com/v26.0/17841/media_publish'),
+                                    ('GET', 'https://graph.instagram.com/v26.0/m1')])
+        self.assertIn(b'creation_id=c1', http.requests[3][3])
+
+    def test_fresh_container_is_reused(self):
+        http = FakeHttp([self.image_ok(), self.status('FINISHED'), self.published(), self.permalink()])
+        ctx = self.ctx(self.insta_item(), http, self.config)
+        ctx.data.update({'container_id': 'c-old', 'container_created_at': publish.now_text(self.epoch - 3600)})
+        publish.instagram_item(ctx)
+        self.assertIn('/c-old?', http.requests[1][1])
+        self.assertFalse(any(method == 'POST' and url.endswith('/media') for method, url, _, _ in http.requests))
+
+    def test_container_older_than_24_hours_is_replaced(self):
+        http = FakeHttp([self.image_ok(), self.container('c-new'), self.status('FINISHED'), self.published(), self.permalink()])
+        ctx = self.ctx(self.insta_item(), http, self.config)
+        ctx.data.update({'container_id': 'c-old', 'container_created_at': publish.now_text(self.epoch - 86401)})
+        publish.instagram_item(ctx)
+        self.assertIn(b'creation_id=c-new', http.requests[3][3])
+
+    def test_error_status_stops(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('ERROR')])
+        with self.assertRaises(publish.StopItem):
+            publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+
+    def test_in_progress_five_times_retries_later(self):
+        http = FakeHttp([self.image_ok(), self.container()] + [self.status('IN_PROGRESS')] * 5)
+        with self.assertRaises(publish.RetryLater):
+            publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+        self.assertEqual(len(self.sleeps), 4)
+
+    def test_expired_container_is_cleared(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('EXPIRED')])
+        ctx = self.ctx(self.insta_item(), http, self.config)
+        with self.assertRaises(publish.RetryLater):
+            publish.instagram_item(ctx)
+        self.assertIsNone(ctx.data['container_id'])
+        self.assertIsNone(ctx.data['container_created_at'])
+
+    def test_publishing_cap_retries(self):
+        cap = (400, {}, json.dumps({'error': {'code': 9, 'error_subcode': 2207042, 'message': 'limit reached'}}).encode())
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), cap])
+        with self.assertRaises(publish.RetryLater):
+            publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+
+    def test_media_publish_timeout_is_unknown(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), publish.NetworkError('timed out')])
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+
+    def test_permalink_failure_still_posts(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), self.published(), publish.NetworkError('down')])
+        self.assertEqual(publish.instagram_item(self.ctx(self.insta_item(), http, self.config)), ('m1', ''))
+
+
 if __name__ == '__main__':
     unittest.main()
