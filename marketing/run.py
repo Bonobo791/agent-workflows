@@ -4,6 +4,7 @@ sources -> brief -> SEO article -> social copy, images and reel (as the Delivera
 Every step: a Codex writer, Python checks, then a fresh Codex reviewer, then the owner approves or rejects.
 """
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -56,6 +57,7 @@ DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not'
 PUBLISH_STEP = '09-publish'
 PLATFORMS = ['linkedin', 'x', 'instagram', 'youtube']  # also the posting order
 PLATFORM_NEEDS = {'linkedin': {'social'}, 'x': {'social'}, 'instagram': {'social', 'images'}, 'youtube': {'reel'}}
+PLATFORM_STEPS = {'linkedin': '04-linkedin', 'x': '05-x', 'instagram': '06-instagram', 'youtube': '08-reel'}
 SCHEDULE_RE = re.compile(r'^- (linkedin|x|instagram|youtube): (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)$')
 ARTICLE_URL_RE = re.compile(r'^https://\S+$')
 YOUTUBE_TITLE_MAX = 100
@@ -878,6 +880,117 @@ def build_final(campaign, steps):
         lines.append('')
     (final / 'index.md').write_text('\n'.join(lines))
     return final
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def fill_link(text, article_url):
+    text = text.replace(LINK, article_url)
+    if LINK in text:
+        raise WorkflowError(f'{LINK} is still in a post after the replacement')
+    return text
+
+
+def copy_media(media_dir, src, name):
+    shutil.copyfile(src, media_dir / name)
+    return {'path': f'media/{name}', 'sha256': file_sha256(media_dir / name)}
+
+
+def instagram_jpeg(media_dir, png):
+    jpg = media_dir / 'instagram.jpg'
+    run_tool(['ffmpeg', '-loglevel', 'error', '-y', '-i', str(png), '-q:v', '2', str(jpg)], media_dir)
+    if not jpg.is_file():
+        raise WorkflowError(f'ffmpeg did not create {jpg}')
+    return {'path': 'media/instagram.jpg', 'sha256': file_sha256(jpg)}
+
+
+def build_publish_plan(campaign):
+    task = (campaign / '00-task.md').read_text()
+    targets = publish_targets(task)
+    wanted = parse_deliverables(task)
+    article_url = section(task, 'Article URL', 'task')
+    times = schedule_times(task)
+    uses_images = 'images' in wanted and bool(set(targets) & {'linkedin', 'x', 'instagram'})
+    needed = ['03-article'] + [PLATFORM_STEPS[platform] for platform in targets] + (['07-images'] if uses_images else [])
+    for step in needed:
+        if not (campaign / step / 'APPROVED').is_file():
+            raise WorkflowError(f'{step} is not approved yet')
+    step_dir = campaign / PUBLISH_STEP
+    step_dir.mkdir(exist_ok=True)
+    media_dir = step_dir / 'media'
+    if media_dir.exists():
+        shutil.rmtree(media_dir)
+    media_dir.mkdir()
+    images_dir = campaign / '07-images'
+
+    def image(name):
+        return [copy_media(media_dir, images_dir / name, name)] if 'images' in wanted else []
+
+    items = [{'id': 'article', 'platform': 'website', 'action': 'check', 'url': article_url, 'depends_on': [], 'not_before': None}]
+    if 'linkedin' in targets:
+        text = (campaign / '04-linkedin' / 'output.md').read_text()
+        post = fill_link(section(text, 'Post', '04-linkedin'), article_url)
+        comment = fill_link(section(text, 'First comment', '04-linkedin'), article_url)
+        items.append({'id': 'linkedin-post', 'platform': 'linkedin', 'action': 'post', 'text': post,
+                      'media': image('linkedin.png'), 'depends_on': ['article'], 'not_before': times.get('linkedin')})
+        items.append({'id': 'linkedin-comment', 'platform': 'linkedin', 'action': 'comment', 'text': comment,
+                      'media': [], 'depends_on': ['linkedin-post'], 'not_before': times.get('linkedin')})
+    if 'x' in targets:
+        for number, post in enumerate(x_posts((campaign / '05-x' / 'output.md').read_text()), 1):
+            item = {'id': f'x-{number}', 'platform': 'x', 'action': 'post', 'text': fill_link(post, article_url),
+                    'media': image('x.png') if number == 1 else [],
+                    'depends_on': ['article'] if number == 1 else [f'x-{number - 1}']}
+            if number > 1:
+                item['reply_to'] = f'x-{number - 1}'
+            item['not_before'] = times.get('x')
+            items.append(item)
+    if 'instagram' in targets:
+        text = (campaign / '06-instagram' / 'output.md').read_text()
+        caption, hashtags = section(text, 'Caption', '06-instagram'), section(text, 'Hashtags', '06-instagram')
+        items.append({'id': 'instagram-post', 'platform': 'instagram', 'action': 'post',
+                      'text': fill_link(f'{caption}\n\n{hashtags}', article_url),
+                      'media': [instagram_jpeg(media_dir, images_dir / 'instagram.png')],
+                      'depends_on': ['article'], 'not_before': times.get('instagram')})
+    if 'youtube' in targets:
+        article = (campaign / '03-article' / 'output.md').read_text()
+        titles = [line[2:].strip() for line in article.splitlines() if line.startswith('# ')]
+        if len(titles) != 1:
+            raise WorkflowError(f'03-article must have exactly one "# " title line; it has {len(titles)}')
+        if len(titles[0]) > YOUTUBE_TITLE_MAX:
+            raise WorkflowError(f'the article title is {len(titles[0])} characters; a YouTube title allows {YOUTUBE_TITLE_MAX}')
+        meta = article.splitlines()[0][len('Meta description: '):].strip()
+        items.append({'id': 'youtube-short', 'platform': 'youtube', 'action': 'upload', 'title': titles[0],
+                      'text': fill_link(f'{meta}\n\n{article_url}', article_url),
+                      'media': [copy_media(media_dir, campaign / '08-reel' / 'reel.mp4', 'reel.mp4')],
+                      'depends_on': ['article'], 'not_before': times.get('youtube')})
+    plan = {'campaign': campaign.name, 'article_url': article_url, 'items': items}
+    (step_dir / 'plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False) + '\n')
+    return plan
+
+
+def plan_preview(plan, step_dir):
+    lines, cost = [], 0
+    for item in plan['items']:
+        lines.append(f"[{item['id']}] {item['platform']} {item['action']}, {item['not_before'] or 'as soon as approved'}")
+        if item['action'] == 'check':
+            lines.append(item['url'])
+        else:
+            if 'title' in item:
+                lines.append(f"Title: {item['title']}")
+            lines.append(item['text'])
+        for media in item.get('media', []):
+            lines.append(f"  {media['path']} ({(step_dir / media['path']).stat().st_size / 1024:.1f} KB)")
+        lines.append('')
+        if item['platform'] == 'x':
+            cost += 200 if plan['article_url'] in item['text'] else 15  # thousandths of a dollar; a post with a URL costs more
+    lines.append(f'X cost: about ${cost // 1000}.{cost % 1000:03d}')
+    return '\n'.join(lines) + '\n'
 
 
 def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES):
