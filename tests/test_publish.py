@@ -869,5 +869,71 @@ class YouTubeTest(AdapterTest):
                 publish.youtube_item(self.ctx(self.short(), FakeHttp([(status, {}, b'invalid_grant')]), {'youtube': YT_CONFIG}))
 
 
+class CommandTest(unittest.TestCase):
+    def setUp(self):
+        self.campaigns = Path(tempfile.mkdtemp()) / 'campaigns'
+        self.campaigns.mkdir()
+        patcher = mock.patch.object(run, 'CAMPAIGNS_DIR', self.campaigns)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_main(self, *argv):
+        with mock.patch.object(sys, 'argv', ['run.py', *argv]):
+            run.main()
+
+    def approved_campaign(self, events):
+        campaign = self.campaigns / 'demo'
+        (campaign / '09-publish').mkdir(parents=True)
+        (campaign / '00-task.md').write_text(publish_task(deliverables='article, social', extra='## Publish to\nx\n\n' + ARTICLE_URL))
+        plan = {'campaign': 'demo', 'article_url': 'https://moderaty.com/blog/demo', 'items': [
+            {'id': 'article', 'platform': 'website', 'action': 'check', 'url': 'https://moderaty.com/blog/demo', 'depends_on': [], 'not_before': None},
+            {'id': 'x-1', 'platform': 'x', 'action': 'post', 'text': 'One', 'media': [], 'depends_on': ['article'], 'not_before': None},
+            {'id': 'x-2', 'platform': 'x', 'action': 'post', 'text': 'Two', 'media': [], 'depends_on': ['x-1'], 'reply_to': 'x-1', 'not_before': None}]}
+        (campaign / '09-publish' / 'plan.json').write_text(json.dumps(plan))
+        (campaign / '09-publish' / 'APPROVED').write_text('{}\n')
+        (campaign / '09-publish' / 'publish.jsonl').write_text(''.join(json.dumps(event) + '\n' for event in events))
+        return campaign
+
+    def test_publish_requires_due_or_retry(self):
+        with mock.patch.object(sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit) as raised:
+            self.run_main('publish')
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_status_shows_item_states(self):
+        self.approved_campaign([
+            {'time': 't', 'item': 'article', 'event': 'attempt', 'attempt': 1},
+            {'time': 't', 'item': 'article', 'event': 'posted', 'attempt': 1, 'post_id': '', 'url': 'https://moderaty.com/blog/demo'},
+            {'time': 't', 'item': 'x-1', 'event': 'attempt', 'attempt': 1},
+            {'time': 't', 'item': 'x-1', 'event': 'posted', 'attempt': 1, 'post_id': '1', 'url': 'https://x.com/moderaty/status/1'},
+            {'time': 't', 'item': 'x-2', 'event': 'attempt', 'attempt': 1},
+            {'time': 't', 'item': 'x-2', 'event': 'failed', 'attempt': 1, 'error': 'HTTP 403: duplicate content'}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.run_main('status', 'demo')
+        text = out.getvalue()
+        self.assertIn('09-publish', text)
+        self.assertIn('approved', text)
+        self.assertIn('https://x.com/moderaty/status/1', text)
+        self.assertIn('failed', text)
+        self.assertIn('HTTP 403: duplicate content', text)
+
+    def test_retry_of_a_posted_item_is_refused(self):
+        self.approved_campaign([{'time': 't', 'item': 'x-1', 'event': 'attempt', 'attempt': 1},
+                                {'time': 't', 'item': 'x-1', 'event': 'posted', 'attempt': 1, 'post_id': '1', 'url': 'https://x.com/1'}])
+        with self.assertRaises(SystemExit) as raised:
+            self.run_main('publish', '--retry', 'demo', 'x-1')
+        self.assertIn('its state is posted', str(raised.exception.code))
+
+    def test_retry_clears_a_failed_item(self):
+        campaign = self.approved_campaign([{'time': 't', 'item': 'x-2', 'event': 'attempt', 'attempt': 1},
+                                           {'time': 't', 'item': 'x-2', 'event': 'failed', 'attempt': 1, 'error': 'bad token'}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.run_main('publish', '--retry', 'demo', 'x-2')
+        self.assertEqual(out.getvalue(), 'Reset x-2. The next publish --due sends it.\n')
+        self.assertEqual(publish.item_states(campaign / '09-publish', json.loads((campaign / '09-publish' / 'plan.json').read_text()),
+                                             0)['x-2']['state'], 'pending')
+
+
 if __name__ == '__main__':
     unittest.main()

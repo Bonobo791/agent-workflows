@@ -20,6 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from codex_client import CodexClient, CodexError  # noqa: E402
+import publish  # noqa: E402
 
 log = logging.getLogger('marketing')
 
@@ -1109,6 +1110,28 @@ def cmd_status(name):
         for key in USAGE_KEYS:
             total[key] += totals[key]
         print(f"{step['id']:<14} {state:<26} {usage_line(totals)}")
+    task = (campaign / '00-task.md').read_text()
+    if publish_targets(task):
+        step_dir = campaign / PUBLISH_STEP
+        if (step_dir / 'APPROVED').is_file():
+            publish_state = 'approved'
+        elif (step_dir / 'plan.json').is_file():
+            publish_state = 'waiting for your decision'
+        else:
+            publish_state = 'not started'
+        print(f"{PUBLISH_STEP:<14} {publish_state:<26}")
+        if publish_state == 'approved':
+            plan = json.loads((step_dir / 'plan.json').read_text())
+            states = publish.item_states(step_dir, plan, time.time())
+            for item in plan['items']:
+                found = states[item['id']]
+                if found['state'] == 'waiting':
+                    detail = f"next attempt {found['next_attempt_at']}"
+                elif found['state'] in ('failed', 'unknown'):
+                    detail = found['error']
+                else:
+                    detail = found['url'] or ''
+                print(f"  {item['id']:<18} {found['state']:<10} {detail}".rstrip())
     print(f"{'total':<14} {'':<26} {usage_line(total)}")
     if (campaign / 'final' / 'index.md').is_file():
         print(f"final package: {campaign / 'final' / 'index.md'}")
@@ -1127,6 +1150,17 @@ def cmd_run(name):
             raise WorkflowError(f'codex: {error}') from None
 
 
+def cmd_publish(due, retry):
+    if due:
+        raise SystemExit(publish.publish_due(CAMPAIGNS_DIR, PUBLISH_CONFIG))
+    name, item_id = retry
+    campaign = CAMPAIGNS_DIR / name
+    if not campaign.is_dir():
+        raise WorkflowError(f'no campaign at {campaign}')
+    publish.reset_item(campaign, item_id)
+    print(f'Reset {item_id}. The next publish --due sends it.')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Marketing workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)
@@ -1138,15 +1172,21 @@ def main():
     run.add_argument('name')
     status = sub.add_parser('status', help='show where a campaign is')
     status.add_argument('name')
+    posting = sub.add_parser('publish', help='post approved campaigns, or clear a failed or unknown item')
+    mode = posting.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--due', action='store_true', help='send every due post (the cron timer runs this)')
+    mode.add_argument('--retry', nargs=2, metavar=('CAMPAIGN', 'ITEM'), help='clear a failed or unknown item so the next --due sends it')
     args = parser.parse_args()
     try:
         if args.command == 'new':
             cmd_new(args.name, args.task_file, args.issue)
         elif args.command == 'run':
             cmd_run(args.name)
+        elif args.command == 'publish':
+            cmd_publish(args.due, args.retry)
         else:
             cmd_status(args.name)
-    except WorkflowError as error:
+    except (WorkflowError, publish.PublishError) as error:
         raise SystemExit(f'error: {error}')
 
 
