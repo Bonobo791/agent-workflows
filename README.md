@@ -2,7 +2,7 @@
 
 A brand's positioning, voice, design system and pages are prepared once. Then each task becomes a sourced brief and an SEO article, and the social posts, images and reel that its Deliverables ask for.
 Every step is written by Codex, checked by Python, reviewed by a separate Codex thread, and then waits for your approval.
-Nothing is published. The approved files end up in `campaigns/<name>/final/`.
+Nothing is published unless the task has `## Publish to` and you approve step 09 (see "Posting after approval"). The approved files end up in `campaigns/<name>/final/`.
 
 ## Requirements
 
@@ -20,6 +20,7 @@ Nothing is published. The approved files end up in `campaigns/<name>/final/`.
 4. `04-linkedin`, `05-x`, `06-instagram`: the social posts (if Deliverables has `social`). Each draft has a `## Hooks` section with three hooks from three different reader problems. The checks and the final package leave `## Hooks` out
 5. `07-images`: three still images (if Deliverables has `images`)
 6. `08-reel-script` and `08-reel`: a 30-second vertical video with a HeyGen presenter (if Deliverables has `reel`). You approve the script first; only then are the presenter clips rendered and the film made
+7. `09-publish`: shows every post exactly as it will go out, and queues them when you approve (only if the task has `## Publish to`)
 
 `article` is always made. `images` and `reel` need `social` in Deliverables.
 
@@ -132,6 +133,7 @@ campaigns/<name>/01-sources/output.md, review.md, APPROVED, usage.jsonl, writer-
 campaigns/<name>/02-brief/...
 ...
 campaigns/<name>/final/index.md
+campaigns/<name>/09-publish/plan.json, APPROVED, publish.jsonl, media/   (only with ## Publish to)
 ```
 
 Each step folder has `usage.jsonl` (the tokens of each Codex call) and `writer-thread.txt` (the writer's Codex thread, which a revision continues). `status` adds the tokens up.
@@ -147,6 +149,96 @@ A campaign made before the brand kit has no `## Brand` section, so add one and i
 - Skills: `marketing/skills/<step>/SKILL.md` (writer) and `REVIEW.md` (reviewer). Replace them with your own. `marketing/skill-library/` holds full copies of the plugin skills that the writers and reviewers also read, each with its provenance line.
 - Brand kit: the templates are in `marketing/brands/TEMPLATE/`. Each brand's folder is read by every campaign that names it in its `## Brand` section.
 - Steps, their order, what each one needs and its automatic checks: the `STEPS` list and the `CHECKS` table in `marketing/run.py`.
+
+## Posting after approval
+
+A task with `## Publish to` gets one more step, `09-publish`. Without that section nothing changes: the campaign stops at `final/`.
+
+When every content step is approved, step 09 shows every post exactly as it will go out. Type `a` to queue them, or `q` to quit. A timer then sends the queued posts through each platform's own API, retries the failures, and writes every attempt to `campaigns/<name>/09-publish/publish.jsonl`.
+
+### The task sections
+
+```
+## Publish to
+linkedin, instagram, youtube
+
+## Article URL
+https://moderaty.com/blog/demo-article
+
+## Schedule
+- linkedin: 2026-11-10T09:30Z
+- instagram: 2026-11-10T14:00Z
+```
+
+- `## Publish to` names the platforms to post on: `linkedin`, `instagram` or `youtube`.
+- `## Article URL` is the live `https://` address of the article. Publish the article on your website first, then write its address here. Step 09 stops until the address answers HTTP 200. LinkedIn gets this link in its first comment and YouTube in its description. Instagram captions end with "Link in bio", so point your bio link at the article yourself. The timer checks the address once more before the first post.
+- `## Schedule` is optional, one line per platform, in UTC. A platform without a line goes out on the first timer run after approval.
+
+### What each platform posts
+
+| Platform | Needs in Deliverables | Text | Media |
+| --- | --- | --- | --- |
+| `linkedin` | `social` | the Post, then a first comment with the article link | `linkedin.png` if `images` |
+| `instagram` | `social` and `images` | the caption, a blank line, then the hashtags | `instagram.png`, converted to JPEG |
+| `youtube` | `reel` | the article title; the meta description, a blank line, the article link | `reel.mp4`, uploaded as a Short |
+
+X is not posted automatically, because its API charges per post. Post the thread by hand from `final/05-x.md`.
+
+TikTok, Instagram Reels and publishing the article to the website are not built yet.
+
+### The config file
+
+The tokens go in `~/.config/agent-workflows/publish.json`, outside the repository. Make it readable by you only:
+
+```sh
+chmod 600 ~/.config/agent-workflows/publish.json
+```
+
+```json
+{
+  "linkedin": {"organization_id": "<page id, digits only>", "access_token": "<token>", "version": "<YYYYMM>"},
+  "instagram": {"user_id": "<Instagram user id>", "access_token": "<token>", "api_version": "v26.0",
+                "media_dir": "<folder your web server serves publicly>", "media_base_url": "https://<your domain>/<folder>"},
+  "youtube": {"client_id": "<id>", "client_secret": "<secret>", "refresh_token": "<token>", "category_id": "28"}
+}
+```
+
+If any other user can read the file, every publish run stops. The program never logs in: you paste the tokens in. When a token expires, that platform's posts stop; renew the token, then retry the item (see below).
+
+### Set up each platform once
+
+- **LinkedIn**: an app with the Community Management API and the `w_organization_social` permission, and an access token for the page.
+- **Instagram**: a professional account, Business Login for Instagram with `instagram_business_content_publish`, and a public web folder on your own server for the images. Instagram fetches each image from `media_base_url`, so the folder must be reachable from the internet.
+- **YouTube**: a Google Cloud project with the YouTube Data API, the `youtube.upload` scope, and a refresh token for your channel.
+
+### Run it from cron
+
+```
+*/5 * * * * cd /path/to/agent-workflows && /usr/bin/python3 marketing/run.py publish --due >> campaigns/publish.log 2>&1
+```
+
+Only one run at a time: a second run prints a line and exits.
+
+### What the states mean
+
+| State | Meaning |
+| --- | --- |
+| `pending` | waiting to be sent |
+| `waiting` | will be tried again at the time shown (after a temporary error) |
+| `posted` | live; the link is shown |
+| `blocked` | waits for an item it depends on, which failed or is unknown |
+| `failed` | stopped; the message says what to fix |
+| `unknown` | a publish request was sent but no clear answer came back. The timer never sends it again. Check the account; if the post is not there, retry it |
+
+Clear a failed or unknown item with:
+
+```sh
+python3 marketing/run.py publish --retry mc-32 linkedin-comment
+```
+
+The next `publish --due` sends it. `python3 marketing/run.py status mc-32` shows every item's state.
+
+To change a post, quit at the gate, change the step before it (edit its `output.md`, or delete its `APPROVED` file to redo it), and run again. Once approved, the plan is frozen. If `publish.jsonl` exists but `APPROVED` does not, the gate refuses to rebuild the plan, because posts may already be live.
 
 ## Engineering workflow
 

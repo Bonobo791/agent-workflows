@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,6 +28,7 @@ from urllib.parse import urlparse
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from codex_client import CodexClient, CodexError  # noqa: E402
+import publish  # noqa: E402
 
 log = logging.getLogger('marketing')
 
@@ -82,6 +84,14 @@ TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Requ
 # Design system names are file names: letters, digits and hyphens. TEMPLATE is uppercase, so NAME_RE would reject it.
 DESIGN_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]*$')
 DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not']
+PUBLISH_STEP = '09-publish'
+PLATFORMS = ['linkedin', 'instagram', 'youtube']  # also the posting order
+PLATFORM_NEEDS = {'linkedin': {'social'}, 'instagram': {'social', 'images'}, 'youtube': {'reel'}}
+PLATFORM_STEPS = {'linkedin': '04-linkedin', 'instagram': '06-instagram', 'youtube': '08-reel'}
+SCHEDULE_RE = re.compile(r'^- (linkedin|instagram|youtube): (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)$')
+ARTICLE_URL_RE = re.compile(r'^https://\S+$')
+YOUTUBE_TITLE_MAX = 100
+PUBLISH_CONFIG = Path.home() / '.config' / 'agent-workflows' / 'publish.json'
 POSITIONING_SECTIONS = ['One line', 'Audience', 'Reader problems', 'Value', 'Proof', 'Alternatives', 'Objections', 'Claims we never make', 'Call to action']
 # A brand file section still holding its template note stops the run.
 VOICE_SECTIONS = ['Personality', 'Tone', 'How we talk to the reader', 'Sentence style', 'Words we use', 'Words we never use',
@@ -363,6 +373,7 @@ def check_task(task, design=True):
         else:
             if design and wanted & {'images', 'reel'}:
                 errors += design_system_errors(task)
+            errors += publish_errors(task, wanted)
     return errors
 
 
@@ -374,6 +385,88 @@ def check_design_system(text):
         if not re.search(rf'^- {role}: #[0-9A-Fa-f]{{6}}$', colors, re.MULTILINE):
             errors.append(f'## Colors needs a line "- {role}: #RRGGBB" with a six-digit hex colour')
     return errors
+
+
+def publish_targets(task):
+    if 'Publish to' not in sections(task):
+        return []
+    names = [word.strip().lower() for word in sections(task)['Publish to'].split(',')]
+    names = [name for name in names if name]
+    if not names:
+        raise WorkflowError('## Publish to must name at least one of: linkedin, instagram, youtube')
+    for name in names:
+        if name == 'x':
+            raise WorkflowError('x is not posted automatically, because the X API charges per post. Remove it from ## Publish to and post the thread by hand from final/05-x.md.')
+        if name not in PLATFORMS:
+            raise WorkflowError(f'unknown platform "{name}"; use any of: linkedin, instagram, youtube')
+        if names.count(name) > 1:
+            raise WorkflowError(f'platform "{name}" is named twice in ## Publish to')
+    return [platform for platform in PLATFORMS if platform in names]
+
+
+def article_url_ok(url):
+    """One https:// address with a host. urlsplit reads the parts, so a malformed address fails here, not at publish time."""
+    if not ARTICLE_URL_RE.match(url):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme == 'https' and bool(parts.hostname)
+
+
+def publish_errors(task, wanted):
+    found = sections(task)
+    if 'Publish to' not in found:
+        if 'Article URL' in found or 'Schedule' in found:
+            return ['## Article URL and ## Schedule are only used with ## Publish to']
+        return []
+    errors = []
+    try:
+        targets = publish_targets(task)
+    except WorkflowError as error:
+        errors.append(str(error))
+        targets = []
+    for platform in targets:
+        errors += [f'{platform} needs {need} in Deliverables' for need in sorted(PLATFORM_NEEDS[platform]) if need not in wanted]
+    url = found.get('Article URL', '')
+    if not url:
+        errors.append('## Publish to needs ## Article URL: the live https:// address of the article')
+    elif not article_url_ok(url):
+        errors.append('## Article URL must be one https:// address')
+    schedule = found.get('Schedule', '')
+    if schedule and schedule != 'None.':
+        named = []
+        for line in schedule.splitlines():
+            if not line.strip():
+                continue
+            match = SCHEDULE_RE.match(line)
+            if not match:
+                errors.append(f'schedule line must look like "- linkedin: 2026-11-10T09:30Z": {line}')
+                continue
+            platform = match.group(1)
+            try:
+                time.strptime(match.group(2), '%Y-%m-%dT%H:%MZ')
+            except ValueError:
+                errors.append(f'schedule time is not a real date and time: {line}')
+            if platform not in targets:
+                errors.append(f'schedule names {platform}, which is not in ## Publish to')
+            if platform in named:
+                errors.append(f'schedule names {platform} twice')
+            named.append(platform)
+    return errors
+
+
+def schedule_times(task):
+    schedule = sections(task).get('Schedule', '')
+    if schedule in ('', 'None.'):
+        return {}
+    times = {}
+    for line in schedule.splitlines():
+        if line.strip():
+            match = SCHEDULE_RE.match(line)
+            times[match.group(1)] = match.group(2)[:-1] + ':00Z'
+    return times
 
 
 def required_headings(task):
@@ -1673,12 +1766,14 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
         minor_fix_left = True
 
 
-def build_final(campaign, steps):
+def build_final(campaign, steps, publishing=False):
     final = campaign / 'final'
     if final.exists():
         shutil.rmtree(final)
     final.mkdir()
-    lines = [f'# Final package: {campaign.name}', '', f'Built {now()}. Nothing has been published.', '']
+    note = ('Posts go out after 09-publish is approved; live links are listed under ## Published.'
+            if publishing else 'Nothing has been published.')
+    lines = [f'# Final package: {campaign.name}', '', f'Built {now()}. {note}', '']
     for step in steps:
         source = campaign / step['id']
         (final / f"{step['id']}.md").write_text(without_hooks((source / 'output.md').read_text()))
@@ -1694,7 +1789,149 @@ def build_final(campaign, steps):
     return final
 
 
-def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES):
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def fill_link(text, article_url):
+    text = text.replace(LINK, article_url)
+    if LINK in text:
+        raise WorkflowError(f'{LINK} is still in a post after the replacement')
+    return text
+
+
+def copy_media(media_dir, src, name):
+    shutil.copyfile(src, media_dir / name)
+    return {'path': f'media/{name}', 'sha256': file_sha256(media_dir / name)}
+
+
+def instagram_jpeg(media_dir, png):
+    jpg = media_dir / 'instagram.jpg'
+    run_tool(['ffmpeg', '-loglevel', 'error', '-y', '-i', str(png), '-q:v', '2', str(jpg)], media_dir)
+    if not jpg.is_file():
+        raise WorkflowError(f'ffmpeg did not create {jpg}')
+    return {'path': 'media/instagram.jpg', 'sha256': file_sha256(jpg)}
+
+
+def build_publish_plan(campaign):
+    task = (campaign / '00-task.md').read_text()
+    targets = publish_targets(task)
+    wanted = parse_deliverables(task)
+    article_url = section(task, 'Article URL', 'task')
+    times = schedule_times(task)
+    uses_images = 'images' in wanted and bool(set(targets) & {'linkedin', 'instagram'})
+    needed = ['03-article'] + [PLATFORM_STEPS[platform] for platform in targets] + (['07-images'] if uses_images else [])
+    for step in needed:
+        if not (campaign / step / 'APPROVED').is_file():
+            raise WorkflowError(f'{step} is not approved yet')
+    step_dir = campaign / PUBLISH_STEP
+    step_dir.mkdir(exist_ok=True)
+    media_dir = step_dir / 'media'
+    if media_dir.exists():
+        shutil.rmtree(media_dir)
+    media_dir.mkdir()
+    images_dir = campaign / '07-images'
+
+    def image(name):
+        return [copy_media(media_dir, images_dir / name, name)] if 'images' in wanted else []
+
+    items = [{'id': 'article', 'platform': 'website', 'action': 'check', 'url': article_url, 'depends_on': [], 'not_before': None}]
+    if 'linkedin' in targets:
+        text = (campaign / '04-linkedin' / 'output.md').read_text()
+        post = fill_link(section(text, 'Post', '04-linkedin'), article_url)
+        comment = fill_link(section(text, 'First comment', '04-linkedin'), article_url)
+        items.append({'id': 'linkedin-post', 'platform': 'linkedin', 'action': 'post', 'text': post,
+                      'media': image('linkedin.png'), 'depends_on': ['article'], 'not_before': times.get('linkedin')})
+        items.append({'id': 'linkedin-comment', 'platform': 'linkedin', 'action': 'comment', 'text': comment,
+                      'media': [], 'depends_on': ['linkedin-post'], 'not_before': times.get('linkedin')})
+    if 'instagram' in targets:
+        text = (campaign / '06-instagram' / 'output.md').read_text()
+        caption, hashtags = section(text, 'Caption', '06-instagram'), section(text, 'Hashtags', '06-instagram')
+        items.append({'id': 'instagram-post', 'platform': 'instagram', 'action': 'post',
+                      'text': fill_link(f'{caption}\n\n{hashtags}', article_url),
+                      'media': [instagram_jpeg(media_dir, images_dir / 'instagram.png')],
+                      'depends_on': ['article'], 'not_before': times.get('instagram')})
+    if 'youtube' in targets:
+        article = (campaign / '03-article' / 'output.md').read_text()
+        titles = [line[2:].strip() for line in article.splitlines() if line.startswith('# ')]
+        if len(titles) != 1:
+            raise WorkflowError(f'03-article must have exactly one "# " title line; it has {len(titles)}')
+        if len(titles[0]) > YOUTUBE_TITLE_MAX:
+            raise WorkflowError(f'the article title is {len(titles[0])} characters; a YouTube title allows {YOUTUBE_TITLE_MAX}')
+        meta = article.splitlines()[0][len('Meta description: '):].strip()
+        items.append({'id': 'youtube-short', 'platform': 'youtube', 'action': 'upload', 'title': titles[0],
+                      'text': fill_link(f'{meta}\n\n{article_url}', article_url),
+                      'media': [copy_media(media_dir, campaign / '08-reel' / 'reel.mp4', 'reel.mp4')],
+                      'depends_on': ['article'], 'not_before': times.get('youtube')})
+    plan = {'campaign': campaign.name, 'article_url': article_url, 'items': items}
+    plan_bytes = (json.dumps(plan, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+    (step_dir / 'plan.json').write_bytes(plan_bytes)
+    return plan_bytes  # the exact bytes written; the gate approves these
+
+
+def plan_preview(plan, step_dir):
+    lines = []
+    for item in plan['items']:
+        lines.append(f"[{item['id']}] {item['platform']} {item['action']}, {item['not_before'] or 'as soon as approved'}")
+        if item['action'] == 'check':
+            lines.append(item['url'])
+        else:
+            if 'title' in item:
+                lines.append(f"Title: {item['title']}")
+            lines.append(item['text'])
+        for media in item.get('media', []):
+            lines.append(f"  {media['path']} ({(step_dir / media['path']).stat().st_size / 1024:.1f} KB)")
+        lines.append('')
+    return '\n'.join(lines) + '\n'
+
+
+def publish_gate(campaign, ask, http=publish.http_request):
+    step_dir = campaign / PUBLISH_STEP
+    step_dir.mkdir(exist_ok=True)
+    if (step_dir / 'APPROVED').is_file():
+        log.info('[%s] already approved; skipping', PUBLISH_STEP)
+        return
+    if (step_dir / 'publish.jsonl').is_file():
+        raise WorkflowError('09-publish has a publish log but no APPROVED file. Posts may already be live, so the plan is not rebuilt. '
+                            'Restore 09-publish/APPROVED, or move 09-publish away only if you are sure nothing was posted.')
+    task = (campaign / '00-task.md').read_text()
+    url = section(task, 'Article URL', 'task')
+    try:  # the article must be live before anything is built or shown
+        response = http('GET', url)
+    except publish.NetworkError as error:
+        raise WorkflowError(f'could not reach the article at {url}: {error}. Make sure it is live, then run the same command again.') from None
+    if response.status != 200:
+        raise WorkflowError(f'the article is not live yet: {url} answered HTTP {response.status}. Publish it, then run the same command again.')
+    plan_bytes = build_publish_plan(campaign)
+    plan = json.loads(plan_bytes)
+    plan_sha = hashlib.sha256(plan_bytes).hexdigest()
+    print('\n' + '=' * 70)
+    print(f'Step {PUBLISH_STEP} is ready for your decision. Folder: {step_dir}')
+    print('-' * 70)
+    print(plan_preview(plan, step_dir))
+    print('-' * 70)
+    while True:
+        answer = ask('[a]pprove and queue for posting, [q]uit: ').strip().lower()
+        if answer == 'a':
+            if file_sha256(step_dir / 'plan.json') != plan_sha:  # the file must still hold the plan that was previewed
+                raise WorkflowError('plan.json changed while you were reading it; run again')
+            approval = {'approved_at': now(), 'plan_sha256': plan_sha}
+            (step_dir / 'APPROVED.tmp').write_text(json.dumps(approval) + '\n')
+            os.replace(step_dir / 'APPROVED.tmp', step_dir / 'APPROVED')  # a --due run never reads half a file
+            log.info('[%s] approved by the owner; %d items queued', PUBLISH_STEP, len(plan['items']))
+            print(f"Queued {len(plan['items'])} items. They are sent by: python3 marketing/run.py publish --due")
+            return
+        if answer == 'q':
+            log.info('[%s] owner quit at the decision prompt', PUBLISH_STEP)
+            raise SystemExit('Stopped. Run the same command again to come back to 09-publish.')
+        print('Type a or q.')
+
+
+def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES, http=publish.http_request):
     steps = campaign_steps(campaign, steps)
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
     check_skills(skills_dir, steps)
@@ -1724,9 +1961,16 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
             log.info('[%s] already approved; skipping', step['id'])
         else:
             run_step(client, roles, skills_dir, campaign, step, ask)
-    final = build_final(campaign, steps)
-    log.info('final package written: %s', final / 'index.md')
+    publishing = bool(publish_targets((campaign / '00-task.md').read_text()))
+    if (campaign / PUBLISH_STEP / 'APPROVED').is_file():
+        final = campaign / 'final'  # the approved posts and their Published list stay as they are
+        log.info('final/ kept: 09-publish is approved')
+    else:
+        final = build_final(campaign, steps, publishing=publishing)
+        log.info('final package written: %s', final / 'index.md')
     print(f"\nAll steps approved. Final package: {final / 'index.md'}")
+    if publishing:
+        publish_gate(campaign, ask, http)
     return final
 
 
@@ -1800,6 +2044,32 @@ def cmd_status(name):
         for key in USAGE_KEYS:
             total[key] += totals[key]
         print(f"{step['id']:<14} {state:<26} {usage_line(totals)}")
+    task = (campaign / '00-task.md').read_text()
+    if publish_targets(task):
+        step_dir = campaign / PUBLISH_STEP
+        if (step_dir / 'APPROVED').is_file():
+            if not (step_dir / 'plan.json').is_file():
+                raise WorkflowError(f'{name}: 09-publish/APPROVED exists but plan.json is missing; nothing was sent')
+            publish_state = 'approved'
+        elif (step_dir / 'plan.json').is_file():
+            publish_state = 'waiting for your decision'
+        else:
+            publish_state = 'not started'
+        print(f"{PUBLISH_STEP:<14} {publish_state:<26}")
+        if publish_state == 'approved':
+            plan = json.loads((step_dir / 'plan.json').read_text())
+            states = publish.item_states(step_dir, plan, time.time())
+            for item in plan['items']:
+                found = states[item['id']]
+                if found['state'] == 'waiting':
+                    detail = f"next attempt {found['next_attempt_at']}"
+                elif found['state'] in ('failed', 'unknown'):
+                    detail = found['error']
+                elif found['state'] == 'posted' and not found['url']:
+                    detail = f"posted (id {found['post_id']}); the link could not be read, find it on the account"
+                else:
+                    detail = found['url'] or ''
+                print(f"  {item['id']:<18} {found['state']:<10} {detail}".rstrip())
     print(f"{'total':<14} {'':<26} {usage_line(total)}")
     if (campaign / 'final' / 'index.md').is_file():
         print(f"final package: {campaign / 'final' / 'index.md'}")
@@ -1818,6 +2088,17 @@ def cmd_run(name):
             raise WorkflowError(f'codex: {error}') from None
 
 
+def cmd_publish(due, retry):
+    if due:
+        raise SystemExit(publish.publish_due(CAMPAIGNS_DIR, PUBLISH_CONFIG))
+    name, item_id = retry
+    campaign = CAMPAIGNS_DIR / name
+    if not campaign.is_dir():
+        raise WorkflowError(f'no campaign at {campaign}')
+    publish.reset_item(campaign, item_id)
+    print(f'Reset {item_id}. The next publish --due sends it.')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Marketing workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)
@@ -1829,6 +2110,10 @@ def main():
     run.add_argument('name')
     status = sub.add_parser('status', help='show where a campaign is')
     status.add_argument('name')
+    posting = sub.add_parser('publish', help='post approved campaigns, or clear a failed or unknown item')
+    mode = posting.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--due', action='store_true', help='send every due post (the cron timer runs this)')
+    mode.add_argument('--retry', nargs=2, metavar=('CAMPAIGN', 'ITEM'), help='clear a failed or unknown item so the next --due sends it')
     brand = sub.add_parser('brand', help="draft and approve a brand's positioning.md from its One line")
     brand.add_argument('name')
     brand.add_argument('--refresh', action='store_true', help='research again and show the differences from the approved file')
@@ -1840,13 +2125,15 @@ def main():
             cmd_new(args.name, args.task_file, args.issue)
         elif args.command == 'run':
             cmd_run(args.name)
+        elif args.command == 'publish':
+            cmd_publish(args.due, args.retry)
         elif args.command == 'brand':
             cmd_brand(args.name, args.refresh)
         elif args.command == 'heygen':
             cmd_heygen(args.what)
         else:
             cmd_status(args.name)
-    except WorkflowError as error:
+    except (WorkflowError, publish.PublishError) as error:
         raise SystemExit(f'error: {error}')
 
 
