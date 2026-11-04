@@ -123,12 +123,12 @@ STEPS = [
      'review_skills': ['stop-slop', 'platform-specs-and-validation']},
     {'id': '07-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'deliverable': 'images', 'web': False, 'check': None,
      'inputs': IMAGE_INPUTS, 'review_inputs': IMAGE_INPUTS,
-     'writer_skills': ['quote-cards-and-text-graphics', 'platform-specs-and-validation'],
-     'review_skills': ['quote-cards-and-text-graphics', 'accessibility-review']},
+     'writer_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'platform-specs-and-validation'],
+     'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'accessibility-review']},
     {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'check': None,
      'inputs': REEL_INPUTS, 'review_inputs': REEL_INPUTS,
-     'writer_skills': ['reels-script', 'instagram-reels-publishing'],
-     'review_skills': ['reels-script', 'instagram-reels-publishing', 'accessibility-review']},
+     'writer_skills': ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'],
+     'review_skills': ['openfilm-manual', 'short-form-video-script', 'reels-script', 'accessibility-review']},
 ]
 
 

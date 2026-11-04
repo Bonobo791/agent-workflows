@@ -844,13 +844,16 @@ class FilmLookTest(unittest.TestCase):
             self.run_images(client, look_failures=99, look_stdout='segmentation fault')
         self.assertEqual(len(client.prompts), 1)
 
-    def test_film_rules_in_images_and_reel_skills(self):
-        for step in ['images', 'reel']:
-            with self.subTest(step=step):
-                text = (run.SKILLS_DIR / step / 'SKILL.md').read_text()
-                self.assertIn('## film.html rules', text)
-                self.assertIn('<meta name="viewport" content="width=1080, height=1080">', text)
-                self.assertIn('Never use position, display, inset', text)
+    def test_video_steps_load_openfilm_manual(self):
+        images = next(step for step in run.STEPS if step['id'] == '07-images')
+        self.assertEqual(images['writer_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics', 'platform-specs-and-validation'])
+        self.assertEqual(images['review_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics', 'accessibility-review'])
+        self.assertTrue((run.LIBRARY_DIR / 'openfilm-manual' / 'SKILL.md').is_file())
+
+    def test_reel_skill_list(self):
+        reel = next(step for step in run.STEPS if step['id'] == '08-reel')
+        self.assertEqual(reel['writer_skills'], ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'])
+        self.assertEqual(reel['review_skills'], ['openfilm-manual', 'short-form-video-script', 'reels-script', 'accessibility-review'])
 
 
 class RecheckTest(unittest.TestCase):
