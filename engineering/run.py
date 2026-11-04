@@ -11,7 +11,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -239,6 +238,16 @@ def save_sessions(build, sessions):
     (build / 'sessions.json').write_text(json.dumps(sessions, indent=2) + '\n')
 
 
+def new_failed(build, repo, worktree, branch, reason):
+    """The error for a `new` that failed once the worktree was being added. Nothing is deleted; the owner runs the steps."""
+    return WorkflowError(
+        f'{reason}. Nothing was deleted. To start again, run these in this order, then run new again '
+        f'(a step that says there is nothing to remove can be skipped):\n'
+        f'  rm -r {build}\n'
+        f'  git -C {repo} worktree remove --force {worktree}\n'
+        f'  git -C {repo} branch -D {branch}')
+
+
 def cmd_new(name, task_file):
     if not NAME_RE.match(name):
         raise WorkflowError(f'build name {name!r} must use lowercase letters, digits and hyphens')
@@ -269,13 +278,17 @@ def cmd_new(name, task_file):
         worktree = build / 'worktree'
         added = run_command(['git', '-C', str(repo), 'worktree', 'add', '-b', branch, str(worktree), base])
         if added.returncode != 0:
-            raise WorkflowError(f'git worktree add failed: {added.stderr.strip()}')
-        log.info('created worktree %s on branch %s from %s', worktree, branch, base)
-        head = run_command(['git', '-C', str(worktree), 'rev-parse', 'HEAD'])
-        if head.returncode != 0:
-            raise WorkflowError(f'git rev-parse failed in {worktree}: {head.stderr.strip()}')
-        (build / 'base.txt').write_text(head.stdout.strip() + '\n')
-        save_sessions(build, {name: {'id': str(uuid.uuid4()), 'started': False, 'attempted': False} for name in SESSIONS})
+            raise new_failed(build, repo, worktree, branch, f'git worktree add failed: {added.stderr.strip()}')
+        try:
+            log.info('created worktree %s on branch %s from %s', worktree, branch, base)
+            head = run_command(['git', '-C', str(worktree), 'rev-parse', 'HEAD'])
+            if head.returncode != 0:
+                raise WorkflowError(f'git rev-parse failed in {worktree}: {head.stderr.strip()}')
+            (build / 'base.txt').write_text(head.stdout.strip() + '\n')
+            save_sessions(build, {name: {'id': str(uuid.uuid4()), 'started': False, 'attempted': False}
+                                  for name in SESSIONS})
+        except (OSError, WorkflowError) as error:
+            raise new_failed(build, repo, worktree, branch, str(error)) from error
     print(f'Build folder: {build}')
     print(f'Next: python3 engineering/run.py run {name}')
 

@@ -168,6 +168,35 @@ class NewTest(unittest.TestCase):
             self.new()
         self.assertFalse((self.builds / 'status-cost').exists())
 
+    def test_new_failure_after_the_worktree_lists_the_recovery_steps(self):
+        build = self.builds / 'status-cost'
+        with mock.patch.object(eng, 'save_sessions', side_effect=OSError('disk full')):
+            with self.assertRaises(eng.WorkflowError) as caught:
+                self.new()
+        message = str(caught.exception)
+        self.assertIn('disk full. Nothing was deleted.', message)
+        self.assertIn(f'rm -r {build}\n', message)
+        self.assertIn(f'git -C {self.repo} worktree remove --force {build / "worktree"}\n', message)
+        self.assertIn(f'git -C {self.repo} branch -D feature/status-cost', message)
+        self.assertTrue((build / 'worktree' / 'README.md').is_file())
+
+    def test_new_failing_worktree_add_lists_the_recovery_steps(self):
+        build = self.builds / 'status-cost'
+        real_run_command = eng.run_command
+
+        def fail_worktree_add(argv, **kwargs):
+            if argv[3:5] == ['worktree', 'add']:
+                return subprocess.CompletedProcess(argv, 128, '', 'fatal: boom')
+            return real_run_command(argv, **kwargs)
+
+        with mock.patch.object(eng, 'run_command', side_effect=fail_worktree_add):
+            with self.assertRaises(eng.WorkflowError) as caught:
+                self.new()
+        message = str(caught.exception)
+        self.assertIn('git worktree add failed: fatal: boom. Nothing was deleted.', message)
+        self.assertIn(f'rm -r {build}\n', message)
+        self.assertTrue((build / '00-task.md').is_file())
+
 
 STEP_SKILLS = {'01-plan': ['SKILL.md', 'REVIEW.md'], '02-instructions': ['SKILL.md', 'REVIEW.md'],
                '03-build': ['SKILL.md', 'REVIEW.md'], '04-pr': ['SKILL.md']}
