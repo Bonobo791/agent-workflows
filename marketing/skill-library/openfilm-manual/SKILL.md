@@ -1,4 +1,4 @@
-> Condensed from openfilm 0.2.6:MANUAL.md, copied 2026-11-04. The owner may replace this file.
+> Condensed from openfilm version 0.2.6, MANUAL.md, copied 2026-11-04. The owner may replace this file.
 
 # OpenFilm
 

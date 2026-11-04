@@ -5,7 +5,7 @@ The attached images are up to 10 frames spread evenly across the video, at half 
 The program has already checked the items listed under Checked. Do not report those.
 
 Checked:
-- openfilm render makes the reel. A failed render stops the run before the reviewer sees the frames.
+- openfilm look accepts film.html before the reel renders; a problem it reports goes back to you as a finding. openfilm render makes the reel, and a failed render stops the run before the reviewer sees the frames.
 - The presenter clips sit at the at values in presenter.json, p1 is on screen in the first 2 seconds, and every presenter line is in the film.
 
 Blocking findings:

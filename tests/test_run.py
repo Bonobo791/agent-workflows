@@ -1086,9 +1086,20 @@ class HeyGenReelTest(unittest.TestCase):
         early = [{'path': 'film.html', 'content': '<video src="assets/p1.mp4" at="0">'}]
         self.assertEqual(run.presenter_film_errors(early, presenter), [])
 
-    def film_tool(self):
+    def film_tool(self, calls=None, look_failures=0):
+        calls = calls if calls is not None else []
+        state = {'looks': 0}
+
         def fake(args, cwd):
+            if args[:2] == ['openfilm', 'look']:
+                calls.append('look')
+                state['looks'] += 1
+                if state['looks'] <= look_failures:
+                    raise run.ToolFailed(f'openfilm look 0 failed in {cwd} (exit 1):\nstdout:\n✗ film.html:10: position would move the clip\nstderr:\n',
+                                         1, '✗ film.html:10: position would move the clip', '')
+                return
             if args[:2] == ['openfilm', 'render']:
+                calls.append('render')
                 Path(args[args.index('--out') + 1]).write_bytes(b'mp4')
                 return
             if args[0] == 'ffmpeg':
@@ -1130,6 +1141,31 @@ class HeyGenReelTest(unittest.TestCase):
         self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with the timing problem, reviewer
         self.assertIn('[blocking] assets/p2.mp4 must start at 2.0 s', client.prompts[1])
         self.assertEqual(len(fake.created), 3)  # the rewrite reused every render
+
+    def test_reel_looks_before_render(self):
+        campaign, step_dir = self.make_campaign()
+        fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
+        calls = []
+        client = FakeClient(['pass'], writer_outputs=[self.film((0.0, 2.0, 4.0)), self.film((0.0, 2.0, 4.0))])
+        with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=1)):
+            run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
+        self.assertEqual(calls, ['look', 'look', 'render'])  # the failed look stops before the render
+        self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with the look problem, reviewer
+        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[1])
+        self.assertTrue((step_dir / 'APPROVED').is_file())
+
+    def test_reel_look_still_failing_stops(self):
+        campaign, step_dir = self.make_campaign()
+        fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
+        calls = []
+        client = FakeClient([], writer_outputs=[self.film((0.0, 2.0, 4.0)), self.film((0.0, 2.0, 4.0))])
+        with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=2)):
+            with self.assertRaisesRegex(run.WorkflowError, 'film.html:10') as caught:
+                run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
+        self.assertEqual(calls, ['look', 'look'])  # no render
+        self.assertIn('stdout:', str(caught.exception))
+        self.assertIn('stderr:', str(caught.exception))
+        self.assertEqual(len(client.prompts), 2)  # no reviewer call after the second failure
 
     def test_final_package_has_the_ai_label_line(self):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'

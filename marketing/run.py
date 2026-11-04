@@ -1075,10 +1075,8 @@ def film_problems(stdout):
     return problems
 
 
-def capture_still(project_dir, look_time, out_png):
-    cache = project_dir / '.film' / 'cache' / 'look'
-    if cache.exists():
-        shutil.rmtree(cache)
+def look_project(project_dir, look_time):
+    """openfilm look checks film.html. Its film.html problems go back to the writer; any other failure stops the run."""
     try:
         run_tool(['openfilm', 'look', str(look_time)], project_dir)
     except ToolFailed as error:
@@ -1086,6 +1084,13 @@ def capture_still(project_dir, look_time, out_png):
         if problems:
             raise FilmProblems(problems, str(error)) from None
         raise
+
+
+def capture_still(project_dir, look_time, out_png):
+    cache = project_dir / '.film' / 'cache' / 'look'
+    if cache.exists():
+        shutil.rmtree(cache)
+    look_project(project_dir, look_time)
     pngs = sorted(cache.glob('*.png'))
     if len(pngs) != 1:
         raise WorkflowError(f'expected exactly one PNG in {cache}, found {len(pngs)}')
@@ -1366,6 +1371,7 @@ def materialize_video(step_dir, written, character, presenter):
     if errors:
         raise FilmProblems(errors, '; '.join(errors))
     shutil.copytree(step_dir / 'assets', project_dir / 'assets', dirs_exist_ok=True)
+    look_project(project_dir, 0)  # film.html problems go back to the writer, as for the images; render only after look passes
     mp4 = step_dir / 'reel.mp4'
     if mp4.exists():
         mp4.unlink()
