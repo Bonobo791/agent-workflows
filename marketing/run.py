@@ -2043,6 +2043,8 @@ def cmd_status(name):
                     detail = f"next attempt {found['next_attempt_at']}"
                 elif found['state'] in ('failed', 'unknown'):
                     detail = found['error']
+                elif found['state'] == 'posted' and not found['url']:
+                    detail = f"posted (id {found['post_id']}); the link could not be read, find it on the account"
                 else:
                     detail = found['url'] or ''
                 print(f"  {item['id']:<18} {found['state']:<10} {detail}".rstrip())

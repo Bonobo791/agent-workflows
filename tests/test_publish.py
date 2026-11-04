@@ -638,6 +638,12 @@ class QueueTest(unittest.TestCase):
             publish.reset_item(self.campaign, 'a', clock=self.clock)
         self.assertEqual(self.state('a')['state'], 'failed')
 
+    def test_published_list_says_when_a_link_could_not_be_read(self):
+        self.approve([item('a')])
+        publish.publish_campaign(self.campaign, {}, self.http, clock=self.clock, sleep=self.sleep, adapters={'test': lambda ctx: ('m1', '')})
+        text = (self.campaign / 'final' / 'index.md').read_text()
+        self.assertIn('- a: posted (id m1); the link could not be read, find it on the account', text)
+
     def test_http_error_becomes_a_response_and_url_error_a_network_error(self):
         error = urllib.error.HTTPError('https://x.example', 404, 'Not Found', {}, io.BytesIO(b'missing'))
         with mock.patch.object(publish.OPENER, 'open', side_effect=error):
@@ -1076,6 +1082,17 @@ class CommandTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             self.run_main('status', 'demo')
         self.assertIn('APPROVED exists but plan.json is missing; nothing was sent', str(raised.exception.code))
+
+    def test_status_says_when_a_link_could_not_be_read(self):
+        self.approved_campaign([
+            {'time': 't', 'item': 'article', 'event': 'attempt', 'attempt': 1},
+            {'time': 't', 'item': 'article', 'event': 'posted', 'attempt': 1, 'post_id': '', 'url': 'https://moderaty.com/blog/demo'},
+            {'time': 't', 'item': 'linkedin-post', 'event': 'attempt', 'attempt': 1},
+            {'time': 't', 'item': 'linkedin-post', 'event': 'posted', 'attempt': 1, 'post_id': 'urn:li:share:1', 'url': ''}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.run_main('status', 'demo')
+        self.assertIn('posted (id urn:li:share:1); the link could not be read, find it on the account', out.getvalue())
 
     def test_retry_clears_a_failed_item(self):
         campaign = self.approved_campaign([{'time': 't', 'item': 'linkedin-comment', 'event': 'attempt', 'attempt': 1},

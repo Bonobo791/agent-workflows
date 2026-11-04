@@ -299,7 +299,15 @@ def add_published_list(campaign, plan, states):
     text = index.read_text()
     if '## Published' in text:
         return
-    lines = [f"- {item['id']}: {states[item['id']]['url']}" for item in plan['items'] if item['id'] != 'article']
+    lines = []
+    for item in plan['items']:
+        if item['id'] == 'article':
+            continue
+        found = states[item['id']]
+        if found['url']:
+            lines.append(f"- {item['id']}: {found['url']}")
+        else:  # the post is live; only its link could not be read
+            lines.append(f"- {item['id']}: posted (id {found['post_id']}); the link could not be read, find it on the account")
     index.write_text(text.rstrip('\n') + '\n\n## Published\n\n' + '\n'.join(lines) + '\n')
 
 
