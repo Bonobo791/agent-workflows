@@ -1175,5 +1175,11 @@ class ReadmeTest(unittest.TestCase):
         self.assertNotIn('the timer checks the address again before each post goes out', text)
 
 
+    def test_readme_says_which_post_gets_the_article_link(self):
+        text = (Path(__file__).resolve().parents[1] / 'README.md').read_text()
+        self.assertIn('LinkedIn gets this link in its first comment and YouTube in its description.', text)
+        self.assertNotIn('Every post gets this link.', text)
+
+
 if __name__ == '__main__':
     unittest.main()
