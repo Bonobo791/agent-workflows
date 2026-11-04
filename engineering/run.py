@@ -556,6 +556,195 @@ def rereview_code_prompt(previous, head, checks):
     return '\n\n'.join([CODE_REREVIEW_REQUEST.format(previous=previous, head=head), block('check output', checks)])
 
 
+PHASE_HEADING = re.compile(r'^## Phase (\d+): (.+)$')
+COMMIT_PREFIX = 'Commit message: '
+
+
+def check_plan(output):
+    found = parse_sections(output)
+    names = [name for name, _ in found]
+    bodies = dict(found)
+    errors = []
+    for name in PLAN_SECTIONS:
+        if name not in names:
+            errors.append(f'missing section "## {name}"')
+        elif not bodies[name]:
+            errors.append(f'section "## {name}" is empty')
+    present = [name for name in names if name in PLAN_SECTIONS]
+    if present != [name for name in PLAN_SECTIONS if name in present]:
+        errors.append(f'sections are out of order; use this order: {", ".join(PLAN_SECTIONS)}')
+    return errors
+
+
+def phase_problems(output):
+    errors, phases = [], []
+    for heading, text in parse_sections(output):
+        if not heading.startswith('Phase '):
+            continue
+        match = PHASE_HEADING.match(f'## {heading}')
+        if not match:
+            errors.append(f'phase heading "## {heading}" must read "## Phase <n>: <title>"')
+            continue
+        n, title = int(match.group(1)), match.group(2).strip()
+        messages = [line[len(COMMIT_PREFIX):].strip() for line in text.splitlines() if line.startswith(COMMIT_PREFIX)]
+        if len(messages) != 1:
+            errors.append(f'Phase {n} needs exactly one "{COMMIT_PREFIX.strip()}" line, found {len(messages)}')
+            continue
+        message = messages[0]
+        if not message:
+            errors.append(f'Phase {n} has an empty commit message')
+        elif len(message) > 72:
+            errors.append(f'Phase {n} commit message has {len(message)} characters; the limit is 72')
+        phases.append({'n': n, 'title': title, 'message': message})
+    numbers = [phase['n'] for phase in phases]
+    if not phases:
+        errors.append('no phases; write at least one "## Phase 1: <title>" section')
+    elif numbers != list(range(1, len(phases) + 1)):
+        errors.append(f'phases must be numbered 1, 2, 3 with no gap; found {numbers}')
+    for index, phase in enumerate(phases):
+        for earlier in phases[:index]:
+            if phase['message'] == earlier['message']:
+                errors.append(f"Phase {phase['n']} repeats the commit message of Phase {earlier['n']}")
+    return phases, errors
+
+
+def check_instructions(output):
+    return phase_problems(output)[1]
+
+
+def parse_phases(output):
+    phases, errors = phase_problems(output)
+    if errors:
+        raise WorkflowError('; '.join(errors))
+    return phases
+
+
+def text_check(step_id, output):
+    return check_plan(output) if step_id == '01-plan' else check_instructions(output)
+
+
+def has_blocking(review):
+    return any(finding['severity'] == 'blocking' for finding in review['findings'])
+
+
+def archive(step_dir):
+    history = step_dir / 'history'
+    history.mkdir(exist_ok=True)
+    dest = history / f"attempt-{len(list(history.glob('attempt-*'))) + 1}"
+    dest.mkdir()
+    shutil.copyfile(step_dir / 'output.md', dest / 'output.md')
+    review = step_dir / 'review.md'
+    if review.exists():
+        shutil.copyfile(review, dest / 'review.md')
+        review.unlink()
+
+
+def revise(build, step_dir, prompt, what):
+    """Archive the current output, then ask the planner for a new version in the same session."""
+    archive(step_dir)
+    (step_dir / 'review.json').unlink(missing_ok=True)
+    output = call_claude(build, 'planner', prompt, step_dir, what)['output']
+    (step_dir / 'output.md').write_text(output)
+    return output
+
+
+def review_output(build, step_id, step_dir, output):
+    reviewed = step_dir / 'reviewed'
+    prompt = rereview_text_prompt(output) if reviewed.exists() else review_text_prompt(build, step_id, output)
+    review = call_claude(build, 'reviewer', prompt, step_dir, 'review')
+    if has_blocking(review):
+        review['verdict'] = 'revise'
+    reviewed.touch()
+    (step_dir / 'review.md').write_text(review_markdown(review))
+    return review
+
+
+def settle(build, step_id, step_dir, output):
+    """Check and review the output, revising automatically while revisions are left. Returns the output and its review."""
+    auto_left = MAX_AUTO_REVISIONS
+    while True:
+        errors = text_check(step_id, output)
+        if errors:
+            if auto_left == 0:
+                findings = [{'severity': 'blocking', 'file': '', 'issue': error, 'fix': 'Fix it.'} for error in errors]
+                return output, {'verdict': 'revise', 'summary': 'Automatic checks failed.', 'findings': findings}
+            output = revise(build, step_dir, revision_prompt(None, '', errors), 'fix-checks')
+            auto_left -= 1
+            continue
+        review = review_output(build, step_id, step_dir, output)
+        if not has_blocking(review) or auto_left == 0:
+            return output, review
+        output = revise(build, step_dir, revision_prompt(review, '', []), 'revision')
+        auto_left -= 1
+
+
+def print_gate_usage(step_dir):
+    print(usage_line(usage_totals([step_dir / 'usage.jsonl'])))
+    for path in sorted((step_dir / 'calls').glob('*-denials.json')):
+        for denial in json.loads(path.read_text()):
+            print(f"Permission denied ({path.name}): {denial['tool_name']} {denial['tool_input']}")
+
+
+def decide(step_id, ask):
+    """Return '' to approve, or the owner's notes to reject. Quit stops the run; the same command resumes here."""
+    while True:
+        answer = ask('[a]pprove, [r]eject with notes, [q]uit: ').strip().lower()
+        if answer == 'a':
+            return ''
+        if answer == 'r':
+            notes = ask('What should change? ').strip()
+            if notes:
+                return notes
+            print('Notes cannot be empty.')
+        elif answer == 'q':
+            log.info('[%s] owner quit at the decision prompt', step_id)
+            raise SystemExit(f'Stopped. Run the same command again to continue at {step_id}.')
+        else:
+            print('Type a, r or q.')
+
+
+def show_gate(step_id, step_dir, output, review):
+    print('\n' + '=' * 70)
+    print(f'Step {step_id} is ready for your decision. Folder: {step_dir}')
+    print('-' * 70)
+    print(output)
+    print('-' * 70)
+    print('Reviewer:')
+    print(review_markdown(review))
+    print_gate_usage(step_dir)
+
+
+def run_text_step(build, step_id, ask):
+    step_dir = build / step_id
+    step_dir.mkdir(exist_ok=True)
+    if not (step_dir / 'review.json').exists():
+        if not (step_dir / 'output.md').exists():
+            first = plan_prompt if step_id == '01-plan' else instructions_prompt
+            (step_dir / 'output.md').write_text(call_claude(build, 'planner', first(build), step_dir, 'write')['output'])
+        output, review = settle(build, step_id, step_dir, (step_dir / 'output.md').read_text())
+        (step_dir / 'output.md').write_text(output)
+        (step_dir / 'review.md').write_text(review_markdown(review))
+        (step_dir / 'review.json').write_text(json.dumps(review, indent=2) + '\n')
+    while True:
+        output = (step_dir / 'output.md').read_text()
+        review = json.loads((step_dir / 'review.json').read_text())
+        show_gate(step_id, step_dir, output, review)
+        notes = decide(step_id, ask)
+        if not notes:
+            if step_id == '02-instructions':
+                phases = parse_phases(output)
+                (step_dir / 'phases.json').write_text(json.dumps(phases, indent=2) + '\n')
+            (step_dir / 'APPROVED').touch()
+            log.info('[%s] approved', step_id)
+            return
+        log.info('[%s] owner rejected with notes', step_id)
+        output = revise(build, step_dir, revision_prompt(review, notes, []), 'owner-revision')
+        output, review = settle(build, step_id, step_dir, output)
+        (step_dir / 'output.md').write_text(output)
+        (step_dir / 'review.md').write_text(review_markdown(review))
+        (step_dir / 'review.json').write_text(json.dumps(review, indent=2) + '\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Engineering workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)

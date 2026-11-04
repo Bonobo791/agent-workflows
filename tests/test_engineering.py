@@ -395,5 +395,138 @@ class PromptTest(BuildTest):
         self.assertNotIn('<owner notes>', checks)
 
 
+GOOD_PLAN = '\n\n'.join(f'## {name}\nText for {name}.' for name in eng.PLAN_SECTIONS)
+BAD_PLAN = '\n\n'.join(f'## {name}\nText for {name}.' for name in eng.PLAN_SECTIONS if name != 'Risks')
+GOOD_INSTRUCTIONS = ('## Rules\nNo fallbacks.\n\n'
+                     '## Phase 1: First\nDo the first thing.\nCommit message: Add the first thing\n\n'
+                     '## Phase 2: Second\nDo the second thing.\nCommit message: Add the second thing\n')
+BLOCKING = {'severity': 'blocking', 'file': '', 'issue': 'Too short.', 'fix': 'Make it longer.'}
+
+
+class ByRole:
+    """Routes each call to the queue of its session (planner, builder or reviewer) and records it."""
+
+    def __init__(self, **queues):
+        self.queues = {name: list(replies) for name, replies in queues.items()}
+        self.calls = []
+
+    def __call__(self, argv, prompt, cwd):
+        role = next(name for name in eng.SESSIONS if eng.SYSTEM_RULES[name] in argv)
+        self.calls.append((role, list(argv), prompt))
+        reply = self.queues[role].pop(0)
+        if callable(reply):
+            reply = reply(argv, prompt, cwd)
+        if isinstance(reply, tuple):
+            return reply
+        return 0, json.dumps(reply)
+
+
+def writer(output):
+    return lambda argv, prompt, cwd: claude_reply(session_of(argv), output=output)
+
+
+def reviewer(verdict='approve', findings=()):
+    structured = {'verdict': verdict, 'summary': 'Checked.', 'findings': list(findings)}
+    return lambda argv, prompt, cwd: claude_reply(session_of(argv), output='review', structured_output=structured)
+
+
+def answers(*values):
+    iterator = iter(values)
+    return lambda prompt: next(iterator)
+
+
+class TextStepTest(BuildTest):
+    def run_step(self, step_id, ask):
+        with contextlib.redirect_stdout(io.StringIO()):
+            eng.run_text_step(self.build, step_id, ask)
+
+    def calls_by_role(self, fake):
+        return [role for role, _, _ in fake.calls]
+
+    def test_plan_check_failure_goes_back_without_reviewer(self):
+        fake = ByRole(planner=[writer(BAD_PLAN), writer(GOOD_PLAN)], reviewer=[reviewer()])
+        with mock.patch.object(eng, 'claude_process', fake):
+            self.run_step('01-plan', answers('a'))
+        self.assertEqual(self.calls_by_role(fake), ['planner', 'planner', 'reviewer'])
+        self.assertIn('Risks', fake.calls[1][2])
+        self.assertTrue((self.step / 'APPROVED').exists())
+
+    def test_plan_revise_resumes_the_planner_session(self):
+        fake = ByRole(planner=[writer(GOOD_PLAN), writer(GOOD_PLAN)],
+                      reviewer=[reviewer('revise', [BLOCKING]), reviewer()])
+        with mock.patch.object(eng, 'claude_process', fake):
+            self.run_step('01-plan', answers('a'))
+        self.assertEqual(self.calls_by_role(fake), ['planner', 'reviewer', 'planner', 'reviewer'])
+        planner_first, planner_second = fake.calls[0][1], fake.calls[2][1]
+        self.assertIn('--session-id', planner_first)
+        self.assertIn('--resume', planner_second)
+        self.assertIn(eng.REVISION_RULE, fake.calls[2][2])
+        self.assertIn('Too short.', fake.calls[2][2])
+        self.assertIn(eng.REREVIEW_RULE, fake.calls[3][2])
+
+    def test_instructions_prompt_does_not_repeat_the_plan(self):
+        fake = ByRole(planner=[writer(GOOD_PLAN), writer(GOOD_INSTRUCTIONS)], reviewer=[reviewer(), reviewer()])
+        with mock.patch.object(eng, 'claude_process', fake):
+            self.run_step('01-plan', answers('a'))
+            self.run_step('02-instructions', answers('a'))
+        instructions_prompt = fake.calls[2][2]
+        self.assertIn(eng.INSTRUCTIONS_REQUEST, instructions_prompt)
+        self.assertNotIn('Text for Summary.', instructions_prompt)
+
+    def test_reviewer_uses_one_session_across_steps(self):
+        fake = ByRole(planner=[writer(GOOD_PLAN), writer(GOOD_INSTRUCTIONS)], reviewer=[reviewer(), reviewer()])
+        with mock.patch.object(eng, 'claude_process', fake):
+            self.run_step('01-plan', answers('a'))
+            self.run_step('02-instructions', answers('a'))
+        reviewer_calls = [(argv, prompt) for role, argv, prompt in fake.calls if role == 'reviewer']
+        self.assertEqual(session_of(reviewer_calls[0][0]), session_of(reviewer_calls[1][0]))
+        self.assertIn('<task>', reviewer_calls[0][1])
+        self.assertNotIn('<task>', reviewer_calls[1][1])
+
+    def test_parse_phases_good_and_bad(self):
+        phases = eng.parse_phases(GOOD_INSTRUCTIONS)
+        self.assertEqual(phases, [{'n': 1, 'title': 'First', 'message': 'Add the first thing'},
+                                  {'n': 2, 'title': 'Second', 'message': 'Add the second thing'}])
+        bad = {
+            'gap': '## Phase 1: A\nCommit message: a\n\n## Phase 3: B\nCommit message: b\n',
+            'missing message': '## Phase 1: A\nDo it.\n',
+            'duplicate message': '## Phase 1: A\nCommit message: same\n\n## Phase 2: B\nCommit message: same\n',
+            'long message': '## Phase 1: A\nCommit message: ' + 'x' * 73 + '\n',
+        }
+        for label, text in bad.items():
+            with self.subTest(label):
+                with self.assertRaises(eng.WorkflowError):
+                    eng.parse_phases(text)
+                self.assertTrue(eng.check_instructions(text))
+
+    def test_quit_at_the_gate_and_resume(self):
+        fake = ByRole(planner=[writer(GOOD_PLAN)], reviewer=[reviewer()])
+        with mock.patch.object(eng, 'claude_process', fake):
+            with self.assertRaises(SystemExit):
+                self.run_step('01-plan', answers('q'))
+            self.assertTrue((self.step / 'review.json').exists())
+            self.run_step('01-plan', answers('a'))
+        self.assertEqual(self.calls_by_role(fake), ['planner', 'reviewer'])
+        self.assertTrue((self.step / 'APPROVED').exists())
+
+    def test_approved_instructions_write_phases_json(self):
+        step = self.build / '02-instructions'
+        fake = ByRole(planner=[writer(GOOD_INSTRUCTIONS)], reviewer=[reviewer()])
+        with mock.patch.object(eng, 'claude_process', fake):
+            self.run_step('02-instructions', answers('a'))
+        phases = json.loads((step / 'phases.json').read_text())
+        self.assertEqual([phase['message'] for phase in phases], ['Add the first thing', 'Add the second thing'])
+
+    def test_owner_reject_sends_the_notes(self):
+        fake = ByRole(planner=[writer(GOOD_PLAN), writer(GOOD_PLAN)], reviewer=[reviewer(), reviewer()])
+        with mock.patch.object(eng, 'claude_process', fake):
+            self.run_step('01-plan', answers('r', 'Make the approach shorter.', 'a'))
+        self.assertEqual(self.calls_by_role(fake), ['planner', 'reviewer', 'planner', 'reviewer'])
+        revision = fake.calls[2][2]
+        self.assertIn('<owner notes>\nMake the approach shorter.\n</owner notes>', revision)
+        self.assertIn('<review>', revision)
+        self.assertIn(eng.REREVIEW_RULE, fake.calls[3][2])
+
+
 if __name__ == '__main__':
     unittest.main()
