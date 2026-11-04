@@ -642,5 +642,69 @@ class BuildStepTest(BuildTest):
         self.assertEqual(len(list((self.build / '03-build').glob('checks-*.txt'))), 1)
 
 
+GOOD_PR = '# Add the status total\n\n## Summary\nShows the total cost.\n\n## Testing\nUnit tests pass.\n'
+BAD_PR = '# Add the status total\n\n## Summary\nShows the total cost.\n'
+
+
+class PrCheckTest(unittest.TestCase):
+    def test_pr_check_needs_title_summary_and_testing(self):
+        self.assertEqual(eng.check_pr(GOOD_PR, None), [])
+        self.assertTrue(any('"## Testing"' in error for error in eng.check_pr(BAD_PR, None)))
+        self.assertTrue(any('first line' in error for error in eng.check_pr('## Summary\n\n## Testing\n', None)))
+        long_title = '# ' + 'x' * 73 + '\n\n## Summary\n\n## Testing\n'
+        self.assertTrue(any('73 characters' in error for error in eng.check_pr(long_title, None)))
+
+    def test_pr_check_needs_the_template_headings(self):
+        template = '## Summary\n\n## Checklist\n- [ ] tests\n'
+        self.assertTrue(any('"## Checklist"' in error for error in eng.check_pr(GOOD_PR, template)))
+        with_checklist = GOOD_PR + '\n## Checklist\n- [x] tests\n'
+        self.assertEqual(eng.check_pr(with_checklist, template), [])
+
+
+class PrStepTest(BuildTest):
+    def setUp(self):
+        super().setUp()
+        self.published = []
+        patch = mock.patch.object(eng, 'publish', side_effect=self.fake_publish)
+        self.publish = patch.start()
+        self.addCleanup(patch.stop)
+
+    def fake_publish(self, build, title, body_file):
+        self.published.append((title, body_file.read_text()))
+        return 'https://github.com/Bonobo791/agent-workflows/pull/7\n'
+
+    def test_pr_check_failure_goes_back_to_the_builder(self):
+        fake = ByRole(builder=[writer(BAD_PR), writer(GOOD_PR)])
+        with mock.patch.object(eng, 'claude_process', fake), contextlib.redirect_stdout(io.StringIO()):
+            eng.run_pr_step(self.build, answers('a'))
+        self.assertEqual([role for role, _, _ in fake.calls], ['builder', 'builder'])
+        self.assertIn('<python checks>', fake.calls[1][2])
+        self.assertEqual(self.published, [('Add the status total', GOOD_PR.split('\n', 1)[1].strip() + '\n')])
+
+    def test_publish_runs_only_after_approval(self):
+        fake = ByRole(builder=[writer(GOOD_PR)])
+        with mock.patch.object(eng, 'claude_process', fake), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                eng.run_pr_step(self.build, answers('q'))
+            self.publish.assert_not_called()
+            eng.run_pr_step(self.build, answers('a'))
+        self.publish.assert_called_once()
+        self.assertEqual((self.build / '04-pr' / 'PR_URL').read_text().strip(),
+                         'https://github.com/Bonobo791/agent-workflows/pull/7')
+        self.assertTrue((self.build / '04-pr' / 'APPROVED').exists())
+
+    def test_run_build_skips_approved_steps(self):
+        for step in ['01-plan', '02-instructions', '03-build']:
+            (self.build / step).mkdir(exist_ok=True)
+            (self.build / step / 'APPROVED').touch()
+        fake = ByRole(builder=[writer(GOOD_PR)])
+        out = io.StringIO()
+        with mock.patch.object(eng, 'claude_process', fake), contextlib.redirect_stdout(out):
+            eng.run_build(self.build, answers('a'))
+        self.assertEqual([role for role, _, _ in fake.calls], ['builder'])
+        self.assertIn('All steps approved. Draft pull request: https://github.com/Bonobo791/agent-workflows/pull/7',
+                      out.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()

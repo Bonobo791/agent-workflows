@@ -946,6 +946,131 @@ def run_build_step(build, ask):
     code_review(build, ask)
 
 
+def read_template(build):
+    path = build / 'worktree' / '.github' / 'pull_request_template.md'
+    return path.read_text() if path.exists() else None
+
+
+def split_pr(output):
+    lines = output.splitlines()
+    title = lines[0][2:].strip() if lines and lines[0].startswith('# ') else ''
+    return title, '\n'.join(lines[1:]).strip() + '\n'
+
+
+def check_pr(output, template):
+    errors = []
+    lines = output.splitlines()
+    if not lines or not lines[0].startswith('# '):
+        errors.append('the first line must be "# " followed by the title')
+    else:
+        title = lines[0][2:].strip()
+        if not 1 <= len(title) <= 72:
+            errors.append(f'the title has {len(title)} characters; it must have 1 to 72')
+    body_lines = [line.strip() for line in lines[1:]]
+    for heading in ['## Summary', '## Testing']:
+        if heading not in body_lines:
+            errors.append(f'the body needs a "{heading}" section')
+    if template is not None:
+        for line in template.splitlines():
+            if line.startswith('## ') and line.strip() not in body_lines:
+                errors.append(f'the body is missing the template heading "{line.strip()}"')
+    return errors
+
+
+def settle_pr(build, step_dir, template):
+    """Check the pull request text, sending errors back to the builder while automatic revisions are left."""
+    auto_left = MAX_AUTO_REVISIONS
+    output = (step_dir / 'output.md').read_text()
+    while True:
+        errors = check_pr(output, template)
+        if not errors or auto_left == 0:
+            return output
+        output = call_claude(build, 'builder', revision_prompt(None, '', errors), step_dir, 'pr-fix')['output']
+        (step_dir / 'output.md').write_text(output)
+        auto_left -= 1
+
+
+def publish(build, title, body_file):
+    """The only outward action: push the branch and open a draft pull request. Never merges."""
+    worktree = build / 'worktree'
+    branch = branch_of(build)
+    base = task_value(read_task(build), 'Base branch')
+    pushed = run_command(['git', '-C', str(worktree), 'push', '-u', 'origin', branch])
+    if pushed.returncode != 0:
+        raise WorkflowError(f'git push failed: {pushed.stderr.strip()}')
+    created = run_command(['gh', 'pr', 'create', '--draft', '--base', base, '--head', branch,
+                           '--title', title, '--body-file', str(body_file)], cwd=worktree)
+    if created.returncode != 0:
+        raise WorkflowError(f'gh pr create failed: {created.stderr.strip()}')
+    return created.stdout.strip().splitlines()[-1]
+
+
+def run_pr_step(build, ask):
+    step_dir = build / '04-pr'
+    step_dir.mkdir(exist_ok=True)
+    template = read_template(build)
+    if not (step_dir / 'body.md').exists():
+        if not (step_dir / 'output.md').exists():
+            (step_dir / 'output.md').write_text(call_claude(build, 'builder', pr_prompt(template), step_dir, 'pr')['output'])
+        output = settle_pr(build, step_dir, template)
+        (step_dir / 'output.md').write_text(output)
+        (step_dir / 'body.md').write_text(split_pr(output)[1])
+    while True:
+        output = (step_dir / 'output.md').read_text()
+        title, body = split_pr(output)
+        errors = check_pr(output, template)
+        print('\n' + '=' * 70)
+        print(f'Step 04-pr is ready for your decision. Folder: {step_dir}')
+        print('-' * 70)
+        print(f'# {title}\n\n{body}', end='')
+        print('-' * 70)
+        for error in errors:
+            print(f'Check failed: {error}')
+        print_gate_usage(step_dir)
+        print(f"Approving pushes {branch_of(build)} to origin and opens a DRAFT pull request against "
+              f"{task_value(read_task(build), 'Base branch')}. Nothing is merged.")
+        notes = decide('04-pr', ask)
+        if not notes:
+            if errors:
+                print('Cannot approve while the checks above fail. Reject with notes, or quit.')
+                continue
+            url = publish(build, title, step_dir / 'body.md')
+            (step_dir / 'PR_URL').write_text(url + '\n')
+            (step_dir / 'APPROVED').touch()
+            log.info('[04-pr] draft pull request %s', url)
+            return
+        (step_dir / 'body.md').unlink()
+        output = call_claude(build, 'builder', revision_prompt(None, notes, []), step_dir, 'pr-revision')['output']
+        (step_dir / 'output.md').write_text(output)
+        output = settle_pr(build, step_dir, template)
+        (step_dir / 'output.md').write_text(output)
+        (step_dir / 'body.md').write_text(split_pr(output)[1])
+
+
+def run_build(build, ask):
+    for step_id in STEP_IDS:
+        if (build / step_id / 'APPROVED').exists():
+            continue
+        if step_id in ('01-plan', '02-instructions'):
+            run_text_step(build, step_id, ask)
+        elif step_id == '03-build':
+            run_build_step(build, ask)
+        else:
+            run_pr_step(build, ask)
+    url = (build / '04-pr' / 'PR_URL').read_text().strip()
+    print(f'All steps approved. Draft pull request: {url}')
+    cmd_status(build.name)
+
+
+def cmd_run(name):
+    build = BUILDS_DIR / name
+    if not build.is_dir():
+        raise WorkflowError(f'no build named {name} in {BUILDS_DIR}')
+    with build_log(build):
+        check_tools()
+        run_build(build, input)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Engineering workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)
