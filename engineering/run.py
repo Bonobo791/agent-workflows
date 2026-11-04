@@ -745,6 +745,207 @@ def run_text_step(build, step_id, ask):
         (step_dir / 'review.json').write_text(json.dumps(review, indent=2) + '\n')
 
 
+def git_out(path, *args):
+    done = run_command(['git', '-C', str(path), *args])
+    if done.returncode != 0:
+        raise WorkflowError(f"git {' '.join(args)} failed in {path}: {done.stderr.strip()}")
+    return done.stdout.strip()
+
+
+def head_sha(build):
+    return git_out(build / 'worktree', 'rev-parse', 'HEAD')
+
+
+def base_sha(build):
+    return (build / 'base.txt').read_text().strip()
+
+
+def branch_of(build):
+    return task_value(read_task(build), 'Branch')
+
+
+def latest_checks_path(build):
+    return max((build / '03-build').glob('checks-*.txt'), key=lambda path: int(path.stem.split('-')[1]), default=None)
+
+
+def run_checks(build):
+    """Run the task's check commands in the worktree and save their output. Returns one error per failed command."""
+    task = read_task(build)
+    worktree = build / 'worktree'
+    report, errors = [], []
+    for line, argv in zip(check_command_lines(task), check_commands(task)):
+        try:
+            done = run_command(argv, cwd=worktree, timeout=CHECK_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            report.append(f'### check: {line} -> TIMEOUT\n')
+            errors.append(f'check timed out after {CHECK_TIMEOUT} s: {line}')
+            continue
+        tail = '\n'.join((done.stdout + done.stderr).splitlines()[-200:])
+        report.append(f"### check: {line} -> {'PASS' if done.returncode == 0 else 'FAIL'}\n{tail}\n")
+        if done.returncode != 0:
+            errors.append(f'check failed (exit {done.returncode}): {line}\n{tail}')
+    step_dir = build / '03-build'
+    step_dir.mkdir(exist_ok=True)
+    number = len(list(step_dir.glob('checks-*.txt'))) + 1
+    (step_dir / f'checks-{number}.txt').write_text('\n'.join(report))
+    return errors
+
+
+def verify(build, head_before, expected_message):
+    """Python's checks after a builder call. Returns error strings; an empty list means the work is good."""
+    worktree = build / 'worktree'
+    errors = []
+    current = git_out(worktree, 'rev-parse', '--abbrev-ref', 'HEAD')
+    if current != branch_of(build):
+        errors.append(f'the worktree is on branch {current}, not {branch_of(build)}')
+    dirty = git_out(worktree, 'status', '--porcelain')
+    if dirty:
+        errors.append('uncommitted changes remain; commit the phase work and nothing else:\n' + dirty)
+    if head_sha(build) == head_before:
+        errors.append('no new commit was made')
+    if expected_message is not None:
+        subject = git_out(worktree, 'log', '-1', '--format=%s')
+        if subject != expected_message:
+            errors.append(f'the last commit message is {subject!r}; it must be exactly {expected_message!r}')
+    if not git_out(worktree, 'log', '--format=%H', f'{base_sha(build)}..HEAD'):
+        errors.append('the branch has no commits after the base')
+    return errors + run_checks(build)
+
+
+def fix_until_clean(build, step_dir, label, errors):
+    fixes = 0
+    while errors and fixes < MAX_FIX_ATTEMPTS:
+        before = head_sha(build)
+        fixes += 1
+        call_claude(build, 'builder', fix_prompt('\n\n'.join(errors)), step_dir, f'{label}-fix-{fixes}')
+        errors = verify(build, before, None)
+    return errors
+
+
+def stop_after_fixes(build, label):
+    return WorkflowError(f'{label} still fails its checks after {MAX_FIX_ATTEMPTS} fixes; see {latest_checks_path(build)}. '
+                         f'Fix it by hand in {build / "worktree"} and commit, then run again.')
+
+
+def run_phase(build, phase):
+    step_dir = build / '03-build'
+    n = phase['n']
+    done_file = step_dir / f'phase-{n}.done'
+    if done_file.exists():
+        return
+    phase_dir = step_dir / f'phase-{n}'
+    phase_dir.mkdir(exist_ok=True)
+    start_file = phase_dir / 'start-head.txt'
+    if not start_file.exists():
+        start_file.write_text(head_sha(build) + '\n')
+    start_head = start_file.read_text().strip()
+    report_file = phase_dir / 'report.md'
+    if report_file.exists():
+        errors = verify(build, start_head, None)
+    else:
+        started = load_sessions(build)['builder']['started']
+        prompt = phase_prompt(n, phase['message']) if started else first_phase_prompt(build)
+        report_file.write_text(call_claude(build, 'builder', prompt, step_dir, f'phase-{n}')['output'])
+        errors = verify(build, start_head, phase['message'])
+    errors = fix_until_clean(build, step_dir, f'phase-{n}', errors)
+    if errors:
+        raise stop_after_fixes(build, f'phase {n}')
+    done_file.write_text(head_sha(build) + '\n')
+
+
+def review_code(build, base, step_dir):
+    head = head_sha(build)
+    checks = latest_checks_path(build)
+    if checks is None:
+        raise WorkflowError('no check output exists yet; run the phases first')
+    previous_file = step_dir / 'reviewed-head.txt'
+    if previous_file.exists():
+        prompt = rereview_code_prompt(previous_file.read_text().strip(), head, checks.read_text())
+    else:
+        prompt = review_code_prompt(build, base, head, checks.read_text())
+    review = call_claude(build, 'reviewer', prompt, step_dir, 'code-review')
+    if has_blocking(review):
+        review['verdict'] = 'revise'
+    previous_file.write_text(head + '\n')
+    return review
+
+
+def fix_review(build, step_dir, review, notes):
+    round_file = step_dir / 'round.txt'
+    number = int(round_file.read_text()) if round_file.exists() else 1
+    before = head_sha(build)
+    call_claude(build, 'builder', review_fix_prompt(review, notes, number), step_dir, f'review-fix-{number}')
+    errors = verify(build, before, f'Fix review findings, round {number}')
+    errors = fix_until_clean(build, step_dir, f'review-fix-{number}', errors)
+    if errors:
+        raise stop_after_fixes(build, f'review fix {number}')
+    round_file.write_text(f'{number + 1}\n')
+
+
+def review_until_settled(build, base, step_dir):
+    auto_left = MAX_AUTO_REVISIONS
+    review = review_code(build, base, step_dir)
+    while has_blocking(review) and auto_left > 0:
+        fix_review(build, step_dir, review, '')
+        auto_left -= 1
+        review = review_code(build, base, step_dir)
+    return review
+
+
+def save_review(step_dir, review):
+    (step_dir / 'review.md').write_text(review_markdown(review))
+    (step_dir / 'review.json').write_text(json.dumps(review, indent=2) + '\n')
+
+
+def show_build_gate(build, base, review):
+    worktree = build / 'worktree'
+    print('\n' + '=' * 70)
+    print(f'Step 03-build is ready for your decision. Worktree: {worktree}')
+    print('-' * 70)
+    print(git_out(worktree, 'log', '--oneline', f'{base}..HEAD'))
+    print(git_out(worktree, 'diff', '--stat', f'{base}...HEAD'))
+    print('Checks from the last run:')
+    checks = latest_checks_path(build)
+    for line in checks.read_text().splitlines() if checks else []:
+        if line.startswith('### check: '):
+            print('  ' + line[len('### check: '):])
+    print('-' * 70)
+    print('Reviewer:')
+    print(review_markdown(review))
+    print_gate_usage(build / '03-build')
+    paths = [build / step / 'usage.jsonl' for step in STEP_IDS]
+    for session in SESSIONS:
+        print(f'{session}: {usage_line(usage_totals(paths, session))}')
+
+
+def code_review(build, ask):
+    step_dir = build / '03-build'
+    base = base_sha(build)
+    review_file = step_dir / 'review.json'
+    if not review_file.exists():
+        save_review(step_dir, review_until_settled(build, base, step_dir))
+    while True:
+        review = json.loads(review_file.read_text())
+        show_build_gate(build, base, review)
+        notes = decide('03-build', ask)
+        if not notes:
+            (step_dir / 'APPROVED').touch()
+            log.info('[03-build] approved')
+            return
+        log.info('[03-build] owner rejected with notes')
+        review_file.unlink()
+        fix_review(build, step_dir, review, notes)
+        save_review(step_dir, review_until_settled(build, base, step_dir))
+
+
+def run_build_step(build, ask):
+    step_dir = build / '03-build'
+    step_dir.mkdir(exist_ok=True)
+    for phase in json.loads((build / '02-instructions' / 'phases.json').read_text()):
+        run_phase(build, phase)
+    code_review(build, ask)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Engineering workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)

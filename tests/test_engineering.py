@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import io
+import itertools
 import json
 import subprocess
 import sys
@@ -57,15 +58,17 @@ GIT_IDENTITY = ['-c', 'user.name=test', '-c', 'user.email=test@example.com']
 def git(repo, *args):
     done = subprocess.run(['git', *GIT_IDENTITY, '-C', str(repo), *args], capture_output=True, text=True)
     if done.returncode != 0:
-        raise AssertionError(done.stderr)
+        raise AssertionError(done.stdout + done.stderr)
     return done.stdout.strip()
 
 
-def make_repo(path):
+def make_repo(path, files=None):
     path.mkdir(parents=True)
     subprocess.run(['git', 'init', '-q', '-b', 'main', str(path)], check=True)
     (path / 'README.md').write_text('hello\n')
-    git(path, 'add', 'README.md')
+    for name, text in (files or {}).items():
+        (path / name).write_text(text)
+    git(path, 'add', '-A')
     git(path, 'commit', '-q', '-m', 'Initial commit')
     return path
 
@@ -178,12 +181,14 @@ def write_skill_files(root):
 
 class BuildTest(unittest.TestCase):
     """A real build (worktree included) made by `new` in a temporary target repository, with stub skill files."""
+    CHECKS = ('python3 -m unittest discover -s tests',)
+    REPO_FILES = {}
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name).resolve()
-        repo = make_repo(root / 'repo')
+        repo = make_repo(root / 'repo', self.REPO_FILES)
         self.builds = root / 'builds'
         write_skill_files(root / 'skills')
         for name, value in (('BUILDS_DIR', self.builds), ('SKILLS_DIR', root / 'skills')):
@@ -191,7 +196,7 @@ class BuildTest(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
         task = root / 'task.md'
-        task.write_text(task_text(repo))
+        task.write_text(task_text(repo, checks=self.CHECKS))
         with contextlib.redirect_stdout(io.StringIO()):
             eng.cmd_new('status-cost', str(task))
         self.build = self.builds / 'status-cost'
@@ -526,6 +531,115 @@ class TextStepTest(BuildTest):
         self.assertIn('<owner notes>\nMake the approach shorter.\n</owner notes>', revision)
         self.assertIn('<review>', revision)
         self.assertIn(eng.REREVIEW_RULE, fake.calls[3][2])
+
+
+CHECK_SCRIPT = "import pathlib, sys\nsys.exit(0 if pathlib.Path('ready.txt').exists() else 1)\n"
+PHASES = [{'n': 1, 'title': 'One', 'message': 'Add one'}, {'n': 2, 'title': 'Two', 'message': 'Add two'}]
+
+
+WORK_FILES = itertools.count(1)
+
+
+def builder(message, files=None):
+    """A builder reply: writes a new file plus `files`, commits them once with `message`, and reports."""
+
+    def reply(argv, prompt, cwd):
+        worktree = Path(cwd)
+        for name, text in {f'work-{next(WORK_FILES)}.txt': f'work {message}\n', **(files or {})}.items():
+            (worktree / name).write_text(text)
+        git(worktree, 'add', '-A')
+        git(worktree, 'commit', '-q', '-m', message)
+        return claude_reply(session_of(argv), output='Committed.')
+    return reply
+
+
+class BuildStepTest(BuildTest):
+    CHECKS = ('python3 check.py',)
+    REPO_FILES = {'check.py': CHECK_SCRIPT}
+
+    def setUp(self):
+        super().setUp()
+        (self.build / '02-instructions').mkdir()
+        (self.build / '02-instructions' / 'phases.json').write_text(json.dumps(PHASES))
+        (self.build / '02-instructions' / 'output.md').write_text(GOOD_INSTRUCTIONS)
+
+    def run_build(self, fake, *gate_answers):
+        with mock.patch.object(eng, 'claude_process', fake), contextlib.redirect_stdout(io.StringIO()):
+            eng.run_build_step(self.build, answers(*(gate_answers or ('a',))))
+
+    def test_phase_without_the_expected_commit_goes_back_to_the_builder(self):
+        fake = ByRole(builder=[builder('Add other', {'ready.txt': 'yes\n'}), builder('Fix failing checks'),
+                               builder('Add two')],
+                      reviewer=[reviewer()])
+        self.run_build(fake)
+        self.assertEqual(self.calls_by_role(fake), ['builder', 'builder', 'builder', 'reviewer'])
+        self.assertIn(eng.FIX_RULE, fake.calls[1][2])
+        self.assertEqual(fake.calls[2][2], eng.phase_prompt(2, 'Add two'))
+        self.assertTrue((self.build / '03-build' / 'APPROVED').exists())
+
+    def calls_by_role(self, fake):
+        return [role for role, _, _ in fake.calls]
+
+    def test_uncommitted_changes_fail_verify(self):
+        worktree = self.build / 'worktree'
+        before = eng.head_sha(self.build)
+        (worktree / 'ready.txt').write_text('yes\n')
+        git(worktree, 'add', 'ready.txt')
+        git(worktree, 'commit', '-q', '-m', 'Add one')
+        (worktree / 'stray.txt').write_text('left behind\n')
+        errors = eng.verify(self.build, before, 'Add one')
+        self.assertTrue(any('uncommitted changes' in error for error in errors), errors)
+
+    def test_failed_check_goes_back_without_a_reviewer_call(self):
+        fake = ByRole(builder=[builder('Add one'), builder('Fix failing checks', {'ready.txt': 'yes\n'}),
+                               builder('Add two')],
+                      reviewer=[reviewer()])
+        self.run_build(fake)
+        self.assertEqual(self.calls_by_role(fake), ['builder', 'builder', 'builder', 'reviewer'])
+        self.assertIn(eng.FIX_RULE, fake.calls[1][2])
+        self.assertIn('check failed (exit 1): python3 check.py', fake.calls[1][2])
+
+    def test_phase_two_uses_the_short_prompt_and_resume(self):
+        fake = ByRole(builder=[builder('Add one', {'ready.txt': 'yes\n'}), builder('Add two')], reviewer=[reviewer()])
+        self.run_build(fake)
+        second_argv, second_prompt = fake.calls[1][1], fake.calls[1][2]
+        self.assertEqual(second_prompt, eng.phase_prompt(2, 'Add two'))
+        self.assertIn('--resume', second_argv)
+
+    def test_still_failing_after_fixes_stops_with_an_error(self):
+        fake = ByRole(builder=[builder('Add one'), builder('Fix failing checks'), builder('Fix failing checks')],
+                      reviewer=[])
+        with self.assertRaisesRegex(eng.WorkflowError, 'phase 1 still fails its checks after 2 fixes'):
+            self.run_build(fake)
+        self.assertEqual(self.calls_by_role(fake), ['builder', 'builder', 'builder'])
+
+    def test_blocking_review_sends_fixes_then_rereviews_the_new_range(self):
+        fake = ByRole(builder=[builder('Add one', {'ready.txt': 'yes\n'}), builder('Add two'),
+                               builder('Fix review findings, round 1')],
+                      reviewer=[reviewer('revise', [BLOCKING]), reviewer()])
+        self.run_build(fake)
+        self.assertEqual(self.calls_by_role(fake), ['builder', 'builder', 'reviewer', 'builder', 'reviewer'])
+        worktree = self.build / 'worktree'
+        previous, head = git(worktree, 'rev-parse', 'HEAD~1'), git(worktree, 'rev-parse', 'HEAD')
+        self.assertIn(f'{previous}..{head}', fake.calls[4][2])
+        self.assertEqual((self.build / '03-build' / 'round.txt').read_text().strip(), '2')
+
+    def test_build_resumes_at_the_first_unfinished_phase(self):
+        first_run = ByRole(builder=[builder('Add one', {'ready.txt': 'yes\n'}), (1, 'boom')], reviewer=[])
+        with self.assertRaises(eng.WorkflowError):
+            self.run_build(first_run)
+        second_run = ByRole(builder=[builder('Add two')], reviewer=[reviewer()])
+        self.run_build(second_run)
+        self.assertEqual(self.calls_by_role(second_run), ['builder', 'reviewer'])
+        self.assertEqual(second_run.calls[0][2], eng.phase_prompt(2, 'Add two'))
+
+    def test_check_timeout_is_a_failed_check(self):
+        (self.build / '03-build').mkdir()
+        timeout = subprocess.TimeoutExpired(cmd='python3 check.py', timeout=1)
+        with mock.patch.object(eng, 'run_command', side_effect=timeout):
+            errors = eng.run_checks(self.build)
+        self.assertTrue(any('timed out' in error for error in errors), errors)
+        self.assertEqual(len(list((self.build / '03-build').glob('checks-*.txt'))), 1)
 
 
 if __name__ == '__main__':
