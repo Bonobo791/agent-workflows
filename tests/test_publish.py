@@ -1124,5 +1124,12 @@ class CommandTest(unittest.TestCase):
         plan = json.loads((campaign / '09-publish' / 'plan.json').read_text())
         self.assertEqual(publish.item_states(campaign / '09-publish', plan, 0)['linkedin-comment']['state'], 'pending')
 
+class ReadmeTest(unittest.TestCase):
+    def test_readme_says_the_article_is_checked_once_more_before_the_first_post(self):
+        text = (Path(__file__).resolve().parents[1] / 'README.md').read_text()
+        self.assertIn('The timer checks the address once more before the first post.', text)
+        self.assertNotIn('the timer checks the address again before each post goes out', text)
+
+
 if __name__ == '__main__':
     unittest.main()
