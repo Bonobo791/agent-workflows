@@ -16,12 +16,26 @@ import publish  # noqa: E402
 import run  # noqa: E402
 from test_run import task_text, FakeClient, answers, ROLES, TEXT_STEPS  # noqa: E402
 
+REAL_BRANDS = Path(__file__).resolve().parents[1] / 'marketing' / 'brands'
+_brands_patch = None
+
+
+def setUpModule():
+    """test_run.py points run.BRANDS_DIR at a temporary folder when it is imported. These tests check the real brand folders."""
+    global _brands_patch
+    _brands_patch = mock.patch.object(run, 'BRANDS_DIR', REAL_BRANDS)
+    _brands_patch.start()
+
+
+def tearDownModule():
+    _brands_patch.stop()
+
 ARTICLE_URL = '## Article URL\nhttps://moderaty.com/blog/demo\n\n'
 LINKEDIN = '## Publish to\nlinkedin\n\n' + ARTICLE_URL
 
 
 def publish_task(deliverables='article, social, images, reel', extra=''):
-    return task_text(deliverables, design_system='moderaty') + extra
+    return task_text(deliverables, brand='moderaty') + extra
 
 
 class PublishTaskTest(unittest.TestCase):
@@ -247,9 +261,11 @@ class GateTest(PlanMixin, unittest.TestCase):
     def test_publish_to_calls_the_gate_after_the_final_package(self):
         skills = make_skills(Path(tempfile.mkdtemp()))
         (self.campaign / '00-task.md').write_text(publish_task(extra=PUBLISH_ALL))
-        for step in ('01-brief', '02-article', '03-x'):
-            self.write(f'{step}/output.md', 'Text.\n')
-            self.write(f'{step}/APPROVED', 'ok\n')
+        steps = [step for step in TEXT_STEPS if step['id'] in ('01-brief', '02-article', '03-x')]
+        for step in steps:  # 03-x is re-checked on every run, so it must be a valid thread
+            self.write(f"{step['id']}/output.md", '1/ First post.\n\n2/ Read it: [ARTICLE LINK]\n' if step['id'] == '03-x' else 'Text.\n')
+        for step in steps:  # an approval records the fingerprint of its inputs, so each one is written after the outputs exist
+            self.write(f"{step['id']}/APPROVED", f"{run.now()}\nfingerprint: {run.fingerprint(step, skills, self.campaign)}\n")
         shown = io.StringIO()
         announced = []
 
