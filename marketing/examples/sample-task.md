@@ -24,5 +24,5 @@ None.
 ## Constraints
 None.
 
-## Design system
-TEMPLATE
+## Brand
+moderaty

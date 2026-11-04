@@ -1,4 +1,6 @@
-# Design system: <name>
+# Design system: <brand>
+
+Template note: fill in every value below for this brand, then delete this line.
 
 ## Colors
 Colours the images and reel may use. Only these colours may appear.

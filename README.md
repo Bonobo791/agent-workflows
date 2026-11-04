@@ -1,6 +1,6 @@
 # Marketing workflow
 
-One task becomes a sourced brief and an SEO article, then the social posts, images and reel that its Deliverables ask for.
+A brand's positioning, voice, design system and pages are prepared once. Then each task becomes a sourced brief and an SEO article, and the social posts, images and reel that its Deliverables ask for.
 Every step is written by Codex, checked by Python, reviewed by a separate Codex thread, and then waits for your approval.
 Nothing is published. The approved files end up in `campaigns/<name>/final/`.
 
@@ -13,18 +13,20 @@ Nothing is published. The approved files end up in `campaigns/<name>/final/`.
 
 ## Steps
 
-1. `01-sources`: finds the facts on the web, from primary sources only
-2. `02-brief`: the brief, with the facts copied from step 01
-3. `03-article`: the SEO article
-4. `04-linkedin`, `05-x`, `06-instagram`: the social posts (if Deliverables has `social`)
+0. The brand kit, once per brand: `brand <brand>` drafts `positioning.md` from its One line with one web-search pass. Every campaign checks the brand kit before any Codex call.
+1. `01-sources`: finds the facts the campaign needs beyond the brand kit, from primary sources only: at least 3 searches, and at least 3 facts with URLs from 3 different sites
+2. `02-brief`: the brief. Its Angle is one reader problem from `positioning.md`, and each Channel idea starts with a different Value line from it
+3. `03-article`: the SEO article. Each H2 delivers only its Adds line from the brief. It links only to the pages listed in `pages.md`
+4. `04-linkedin`, `05-x`, `06-instagram`: the social posts (if Deliverables has `social`). Each draft has a `## Hooks` section with three hooks from three different reader problems. The checks and the final package leave `## Hooks` out
 5. `07-images`: three still images (if Deliverables has `images`)
-6. `08-reel`: a vertical video of 15 to 30 seconds (if Deliverables has `reel`)
+6. `08-reel-script` and `08-reel`: a 30-second vertical video with a HeyGen presenter (if Deliverables has `reel`). You approve the script first; only then are the presenter clips rendered and the film made
 
 `article` is always made. `images` and `reel` need `social` in Deliverables.
 
 ## Use
 
 ```sh
+python3 marketing/run.py brand moderaty                  # once per brand: draft positioning.md (see Brand kit)
 python3 marketing/run.py new mc-32 --issue MC-32         # create a campaign from an It's a Plan issue
 python3 marketing/run.py new spring-launch my-task.md    # or from a task file
 python3 marketing/run.py run mc-32                       # run; stops at every step for your decision
@@ -37,11 +39,21 @@ At each step you see the output and the review, then type:
 - `r` to reject and type what should change
 - `q` to quit; run the same command later to come back to the same step
 
-A step that fails the automatic checks goes back to the writer without a reviewer call. If the reviewer says revise, the writer rewrites automatically, up to 2 times, before the step comes to you.
+A step that fails the automatic checks goes back to the writer without a reviewer call. If the reviewer says revise, or a pass has minor findings, the writer rewrites automatically once, then the reviewer checks again before the step comes to you. A failed check uses the same one rewrite.
+
+## What the checks enforce
+
+Python checks each draft before a reviewer sees it. A failed check goes back to the writer:
+
+- Structure and length: the required sections and headings, the article's length against the brief's target, a meta description of 150 to 160 characters, an opening paragraph of three sentences or fewer with "if" or "when", a thread of at most three X posts, a LinkedIn post of 1,000 characters or fewer, and an Instagram caption that ends "Link in bio".
+- Wording: banned phrases such as "the brief", "supplied facts", "based on the facts" and "fictional"; "X, not Y" and "not X, it's Y" contrasts; hedge words in a first line; more than three sentences that start with the same two words; a six-word phrase used three times.
+- Sources and brand: at least 3 searches and 3 URL facts from 3 sites, and every fact with a URL or "(from task)". Links only to pages in `pages.md`.
+
+The reviewers judge what Python cannot: whether each fact is on its page, whether the hook names a real reader problem, whether a post has one idea and a position, and whether the copy sounds like the brand's voice.
 
 ## Task file
 
-Every task has these sections, in this order. Each one must be present and not empty; `None.` is allowed. `## Design system` is needed only when Deliverables include images or reel.
+Every task has these sections, in this order. Each one must be present and not empty; `None.` is allowed.
 
 ```
 # Task: <title>
@@ -67,25 +79,45 @@ article, social, images, reel
 ## Constraints
 <rules the content must follow, or None.>
 
-## Design system
-<a file name from marketing/design-systems without .md, such as moderaty, or None. when Deliverables have no images or reel>
+## Brand
+<a folder name in marketing/brands/, such as moderaty>
 ```
-
-Make a new design system by copying `marketing/design-systems/TEMPLATE.md`.
 
 Deliverables is a comma-separated list of `article`, `social`, `images` and `reel`. See `marketing/examples/sample-task.md`.
 
 `--issue` writes this file from the It's a Plan issue, including the required headings from the SOP that the issue links to. Check the file before you run the campaign.
 
+## Brand kit
+
+Each brand has a folder, `marketing/brands/<brand>/`, with five files. Every campaign reads the first four; `character.md` is read only for reels:
+
+- `design-system.md`: colours, fonts and layout for images and reel.
+- `voice.md`: how the brand sounds.
+- `positioning.md`: what the product sells, to whom, the reader problems, the proof and the alternatives.
+- `pages.md`: the pages the article may link to.
+- `character.md`: the reel presenter's name, personality, HeyGen avatar and voice ids, what they do and don't do on camera, and the disclosure line. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
+
+Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. `character.md` is needed only for reels. Replace each `Template note:` line with your text. A run stops before any Codex call if a file is missing or still has a template note.
+
+Write `## One line` in `positioning.md` first: what the product is, for whom, the result, and the product URL. Then run:
+
+```sh
+python3 marketing/run.py brand <brand>            # one web-search pass drafts the rest of positioning.md
+python3 marketing/run.py brand <brand> --refresh  # research again, and show the differences from the approved file
+```
+
+The draft goes to the a/r/q prompt. On approval, `positioning.md` is saved with `Approved: <date>` at the top. A campaign warns when that date is more than 90 days old.
+
 ## Models
 
-Each step uses one of three roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
+Each step uses one of four roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
 
 | Role | Used for | Model | Effort |
 | --- | --- | --- | --- |
-| writer | steps 01 to 06, and the import | `gpt-6-luna` | `max` |
-| reviewer | the review of every step | `gpt-6-sol` | `medium` |
-| creator | images and reel | `gpt-6-sol` | `high` |
+| writer | steps 01, 03 to 06, and the import | `gpt-6.1-sol` | `medium` |
+| strategist | the brief (step 02) | `gpt-6.1-sol` | `high` |
+| reviewer | the review of every step | `gpt-6.1-sol` | `high` |
+| creator | images and reel | `gpt-6.1-sol` | `high` |
 
 Before any step runs, the program checks that each model and effort is in your Codex model list. If one is not, it stops with an `error:` message.
 
@@ -106,11 +138,14 @@ Each step folder has `usage.jsonl` (the tokens of each Codex call) and `writer-t
 
 To follow a run from another terminal, run `tail -f campaigns/<name>/run.log`.
 
-Campaigns made before the sources step was added use the old folder numbers and cannot be resumed. Start them again.
+The brand command keeps its own folder, `campaigns/brand-<brand>/`, with the same files.
+
+A campaign made before the brand kit has no `## Brand` section, so add one and its brand folder before running it.
 
 ## Change the steps or the skills
 
-- Skills: `marketing/skills/<step>/SKILL.md` (writer) and `REVIEW.md` (reviewer). Replace them with your own.
+- Skills: `marketing/skills/<step>/SKILL.md` (writer) and `REVIEW.md` (reviewer). Replace them with your own. `marketing/skill-library/` holds full copies of the plugin skills that the writers and reviewers also read, each with its provenance line.
+- Brand kit: the templates are in `marketing/brands/TEMPLATE/`. Each brand's folder is read by every campaign that names it in its `## Brand` section.
 - Steps, their order, what each one needs and its automatic checks: the `STEPS` list and the `CHECKS` table in `marketing/run.py`.
 
 ## Engineering workflow
