@@ -1944,8 +1944,12 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
         else:
             run_step(client, roles, skills_dir, campaign, step, ask)
     publishing = bool(publish_targets((campaign / '00-task.md').read_text()))
-    final = build_final(campaign, steps, publishing=publishing)
-    log.info('final package written: %s', final / 'index.md')
+    if (campaign / PUBLISH_STEP / 'APPROVED').is_file():
+        final = campaign / 'final'  # the approved posts and their Published list stay as they are
+        log.info('final/ kept: 09-publish is approved')
+    else:
+        final = build_final(campaign, steps, publishing=publishing)
+        log.info('final package written: %s', final / 'index.md')
     print(f"\nAll steps approved. Final package: {final / 'index.md'}")
     if publishing:
         publish_gate(campaign, ask, http)

@@ -248,6 +248,18 @@ class GateTest(PlanMixin, unittest.TestCase):
         with self.assertRaisesRegex(run.WorkflowError, 'has a publish log but no APPROVED file'):
             run.publish_gate(self.campaign, answers('a'), FakeHttp([]))
 
+    def test_approved_campaign_keeps_its_published_list(self):
+        skills = make_skills(Path(tempfile.mkdtemp()))
+        (self.campaign / '00-task.md').write_text(publish_task(extra=PUBLISH_ALL))
+        (self.campaign / '09-publish').mkdir(exist_ok=True)
+        (self.campaign / '09-publish' / 'APPROVED').write_text('{}\n')
+        (self.campaign / 'final').mkdir()
+        (self.campaign / 'final' / 'index.md').write_text('# Final\n\n## Published\n\n- linkedin-post: https://www.linkedin.com/feed/update/urn:li:share:1/\n')
+        with mock.patch('run.build_final') as build:
+            run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=[], skills_dir=skills, roles=ROLES)
+        build.assert_not_called()
+        self.assertIn('- linkedin-post: https://www.linkedin.com/feed/update/urn:li:share:1/', (self.campaign / 'final' / 'index.md').read_text())
+
     def test_campaign_without_publish_to_has_no_gate(self):
         root = Path(tempfile.mkdtemp())
         skills = make_skills(root)
