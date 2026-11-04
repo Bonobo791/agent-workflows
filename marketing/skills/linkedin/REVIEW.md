@@ -15,6 +15,7 @@ Blocking findings:
 - The post covers more than one idea, or reads as a summary of the article.
 - No opinion or recommendation.
 - A stronger hook was passed over in ## Hooks.
+- Hooks in ## Hooks that share one reader problem.
 - More than 2 facts in the post.
 - A post whose main point is a product limit or a reason not to buy.
 - A claim that is not in the brief's Facts, or a claim that contradicts the brief.
