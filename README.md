@@ -136,7 +136,7 @@ https://moderaty.com/blog/demo-article
 ```
 
 - `## Publish to` names the platforms to post on: `linkedin`, `x`, `instagram` or `youtube`.
-- `## Article URL` is the live `https://` address of the article. You publish the article on your website yourself and write its address here. Every post gets this link, and the timer checks that it answers before any post goes out.
+- `## Article URL` is the live `https://` address of the article. Publish the article on your website first, then write its address here. Step 09 stops until the address answers HTTP 200. Every post gets this link, and the timer checks the address again before each post goes out.
 - `## Schedule` is optional, one line per platform, in UTC. A platform without a line goes out on the first timer run after approval.
 
 ### What each platform posts

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+from http.client import IncompleteRead
 from pathlib import Path
 from unittest import mock
 
@@ -192,29 +193,49 @@ def make_skills(root):
 
 
 class GateTest(PlanMixin, unittest.TestCase):
+    def test_gate_gets_the_article_url_first(self):
+        http = FakeHttp([(200, {}, b'<html>')])
+        run.publish_gate(self.campaign, answers('a'), http)
+        self.assertEqual(http.requests[0][:2], ('GET', 'https://moderaty.com/blog/demo'))
+
+    def test_article_not_live_stops_before_the_plan(self):
+        with self.assertRaisesRegex(run.WorkflowError, 'HTTP 404'):
+            run.publish_gate(self.campaign, answers(), FakeHttp([(404, {}, b'')]))
+        self.assertFalse((self.campaign / '09-publish' / 'plan.json').exists())
+        self.assertFalse((self.campaign / '09-publish' / 'APPROVED').exists())
+
+    def test_unreachable_article_stops_before_the_plan(self):
+        with self.assertRaisesRegex(run.WorkflowError, 'could not reach the article'):
+            run.publish_gate(self.campaign, answers(), FakeHttp([publish.NetworkError('timed out')]))
+        self.assertFalse((self.campaign / '09-publish' / 'plan.json').exists())
+
+    def test_no_redirect_handler_returns_none(self):
+        self.assertIsNone(publish.NoRedirect().redirect_request(None, None, 308, 'x', {}, 'https://example.com'))
+
     def test_approve_writes_the_plan_hash(self):
-        run.publish_gate(self.campaign, answers('a'))
+        run.publish_gate(self.campaign, answers('a'), FakeHttp([(200, {}, b'')]))
         approval = json.loads((self.campaign / '09-publish' / 'APPROVED').read_text())
-        self.assertEqual(approval['plan_sha256'], hashlib.sha256((self.campaign / '09-publish' / 'plan.json').read_bytes()).hexdigest())
+        plan_hash = hashlib.sha256((self.campaign / '09-publish' / 'plan.json').read_bytes()).hexdigest()
+        self.assertEqual(approval['plan_sha256'], plan_hash)
         self.assertTrue(approval['approved_at'].endswith('Z'))
 
     def test_quit_writes_no_approval(self):
         with self.assertRaises(SystemExit):
-            run.publish_gate(self.campaign, answers('q'))
+            run.publish_gate(self.campaign, answers('q'), FakeHttp([(200, {}, b'')]))
         self.assertFalse((self.campaign / '09-publish' / 'APPROVED').exists())
 
     def test_approved_gate_does_not_rebuild(self):
         (self.campaign / '09-publish').mkdir()
         (self.campaign / '09-publish' / 'APPROVED').write_text('{}\n')
         with mock.patch('run.build_publish_plan') as build:
-            run.publish_gate(self.campaign, answers())
+            run.publish_gate(self.campaign, answers(), FakeHttp([]))
         build.assert_not_called()
 
     def test_publish_log_without_approval_is_refused(self):
         (self.campaign / '09-publish').mkdir()
         (self.campaign / '09-publish' / 'publish.jsonl').write_text('')
         with self.assertRaisesRegex(run.WorkflowError, 'has a publish log but no APPROVED file'):
-            run.publish_gate(self.campaign, answers('a'))
+            run.publish_gate(self.campaign, answers('a'), FakeHttp([]))
 
     def test_campaign_without_publish_to_has_no_gate(self):
         root = Path(tempfile.mkdtemp())
@@ -224,6 +245,7 @@ class GateTest(PlanMixin, unittest.TestCase):
         (campaign / '00-task.md').write_text(task_text())
         run.run_campaign(campaign, FakeClient(['pass', 'pass']), ask=answers('a', 'a'), steps=TEXT_STEPS, skills_dir=skills, roles=ROLES)
         self.assertFalse((campaign / '09-publish').exists())
+        self.assertIn('Nothing has been published.', (campaign / 'final' / 'index.md').read_text())
 
     def test_publish_to_calls_the_gate_after_the_final_package(self):
         skills = make_skills(Path(tempfile.mkdtemp()))
@@ -231,11 +253,17 @@ class GateTest(PlanMixin, unittest.TestCase):
         for step in ('01-brief', '02-article', '03-x'):
             self.write(f'{step}/output.md', 'Text.\n')
             self.write(f'{step}/APPROVED', 'ok\n')
-        with mock.patch('run.publish_gate') as gate:
-            run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=TEXT_STEPS, skills_dir=skills, roles=ROLES)
-        gate.assert_called_once()
-        self.assertTrue((self.campaign / 'final' / 'index.md').is_file())
+        shown = io.StringIO()
+        announced = []
 
+        def gate(campaign, ask, http):
+            announced.append('All steps approved' in shown.getvalue())
+
+        with contextlib.redirect_stdout(shown), mock.patch('run.publish_gate', side_effect=gate) as gate_mock:
+            run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=TEXT_STEPS, skills_dir=skills, roles=ROLES)
+        gate_mock.assert_called_once()
+        self.assertEqual(announced, [True])
+        self.assertIn('Posts go out after 09-publish is approved', (self.campaign / 'final' / 'index.md').read_text())
 
 APPROVED_AT = '2026-11-04T10:00:00Z'
 
@@ -255,6 +283,21 @@ class FakeHttp:
         if isinstance(answer, Exception):
             raise answer
         return publish.Response(*answer)
+
+
+class CutOffAnswer:
+    """What urllib gives back when the body stops early: reading it raises IncompleteRead."""
+    status = 201
+    headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        raise IncompleteRead(b'{"data"')
 
 
 def item(item_id, depends=(), not_before=None, platform='test', **extra):
@@ -495,8 +538,33 @@ class QueueTest(unittest.TestCase):
         self.run_once()
         self.assertEqual(self.state('a')['state'], 'posted')
 
-    def test_no_redirect_handler_returns_none(self):
-        self.assertIsNone(publish.NoRedirect().redirect_request(None, None, 308, 'x', {}, 'https://example.com'))
+    def test_missing_plan_is_refused(self):
+        self.approve([item('a')])
+        (self.step / 'plan.json').unlink()
+        with self.assertRaisesRegex(publish.PublishError, 'APPROVED exists but plan.json is missing; nothing was sent'):
+            self.run_once()
+        self.assertEqual(self.calls, [])
+
+    def test_retry_after_is_seconds_or_a_date_and_anything_else_is_no_header(self):
+        epoch = publish.parse_time(APPROVED_AT)
+        self.assertEqual(publish.header_wait(publish.Response(429, {'retry-after': '120'}, b''), epoch), 120)
+        self.assertEqual(publish.header_wait(publish.Response(429, {'retry-after': 'Wed, 04 Nov 2026 10:10:00 GMT'}, b''), epoch), 600)
+        self.assertIsNone(publish.header_wait(publish.Response(429, {'retry-after': 'soon'}, b''), epoch))
+        self.assertIsNone(publish.header_wait(publish.Response(429, {'x-rate-limit-reset': 'later'}, b''), epoch))
+
+    def test_config_that_is_not_json_is_refused(self):
+        config = self.root / 'publish.json'
+        config.write_text('{not json')
+        config.chmod(0o600)
+        with self.assertRaisesRegex(publish.PublishError, 'is not valid JSON'):
+            publish.load_config(config)
+
+    def test_a_body_cut_off_mid_read_is_a_network_error(self):
+        with mock.patch.object(publish.OPENER, 'open', return_value=CutOffAnswer()):
+            with self.assertRaises(publish.OutcomeUnknown):
+                publish.send(publish.http_request, 'X post', True, 0, 'POST', 'https://api.x.com/2/tweets', body=b'{}')
+            with self.assertRaises(publish.RetryLater):
+                publish.send(publish.http_request, 'token', False, 0, 'POST', 'https://oauth2.googleapis.com/token', body=b'x')
 
     def test_http_error_becomes_a_response_and_url_error_a_network_error(self):
         error = urllib.error.HTTPError('https://x.example', 404, 'Not Found', {}, io.BytesIO(b'missing'))
@@ -590,8 +658,14 @@ class LinkedInTest(AdapterTest):
         self.assertEqual(result, ('urn:li:comment:7', 'https://www.linkedin.com/feed/update/urn:li:share:9/'))
 
     def test_upload_500_retries(self):
+        init = (200, {}, json.dumps({'value': {'uploadUrl': 'https://upload.example/1', 'image': 'urn:li:image:1'}}).encode())
         with self.assertRaises(publish.RetryLater):
-            publish.linkedin_item(self.ctx(self.with_image('Hi'), FakeHttp([(500, {}, b'')]), {'linkedin': LINKEDIN_CONFIG}))
+            publish.linkedin_item(self.ctx(self.with_image('Hi'), FakeHttp([init, (500, {}, b'')]), {'linkedin': LINKEDIN_CONFIG}))
+
+    def test_malformed_image_init_stops(self):
+        for answer in ((200, {}, b'<html>'), (200, {}, json.dumps({'value': {'image': 'urn:li:image:1'}}).encode())):
+            with self.subTest(answer=answer), self.assertRaises(publish.StopItem):
+                publish.linkedin_item(self.ctx(self.with_image('Hi'), FakeHttp([answer]), {'linkedin': LINKEDIN_CONFIG}))
 
     def test_post_401_stops(self):
         with self.assertRaises(publish.StopItem):
@@ -673,6 +747,16 @@ class XTest(AdapterTest):
     def test_answer_without_an_id_after_posting_is_unknown(self):
         with self.assertRaises(publish.OutcomeUnknown):
             publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), FakeHttp([(201, {}, b'{}')]), {'x': X_CONFIG}))
+
+    def test_malformed_media_upload_answer_stops(self):
+        (self.step / 'media' / 'x.png').write_bytes(b'png')
+        it = item('x-1', platform='x', text='First', media=[{'path': 'media/x.png', 'sha256': 'unused'}])
+        with self.assertRaises(publish.StopItem):
+            publish.x_item(self.ctx(it, FakeHttp([(200, {}, b'<html>')]), {'x': X_CONFIG}))
+
+    def test_malformed_answer_after_posting_is_unknown(self):
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), FakeHttp([(201, {}, b'<html>')]), {'x': X_CONFIG}))
 
     def test_multipart_body_has_the_fields_and_the_file(self):
         content_type, body = publish.multipart([('media_category', 'tweet_image')], [('media', 'x.png', 'image/png', b'png-bytes')])
@@ -774,6 +858,30 @@ class InstagramTest(AdapterTest):
         with self.assertRaises(publish.OutcomeUnknown):
             publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
 
+    def test_malformed_container_or_status_answer_stops(self):
+        sequences = [[self.image_ok(), (200, {}, b'<html>')],
+                     [self.image_ok(), (200, {}, b'{}')],
+                     [self.image_ok(), self.container(), (200, {}, b'<html>')],
+                     [self.image_ok(), self.container(), (200, {}, b'{}')]]
+        for sequence in sequences:
+            with self.subTest(sequence=sequence), self.assertRaises(publish.StopItem):
+                publish.instagram_item(self.ctx(self.insta_item(), FakeHttp(sequence), self.config))
+
+    def test_malformed_publish_answer_is_unknown(self):
+        for answer in ((200, {}, b'<html>'), (200, {}, b'{}')):
+            http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), answer])
+            with self.subTest(answer=answer), self.assertRaises(publish.OutcomeUnknown):
+                publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+
+    def test_malformed_permalink_still_posts(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), self.published(), (200, {}, b'<html>')])
+        self.assertEqual(publish.instagram_item(self.ctx(self.insta_item(), http, self.config)), ('m1', ''))
+
+    def test_error_body_that_is_not_json_follows_the_status_table(self):
+        http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), (400, {}, b'<html>')])
+        with self.assertRaises(publish.StopItem):
+            publish.instagram_item(self.ctx(self.insta_item(), http, self.config))
+
     def test_permalink_failure_still_posts(self):
         http = FakeHttp([self.image_ok(), self.container(), self.status('FINISHED'), self.published(), publish.NetworkError('down')])
         self.assertEqual(publish.instagram_item(self.ctx(self.insta_item(), http, self.config)), ('m1', ''))
@@ -863,6 +971,22 @@ class YouTubeTest(AdapterTest):
         with self.assertRaises(publish.RetryLater):
             publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
 
+    def test_malformed_token_answer_stops(self):
+        with self.assertRaises(publish.StopItem):
+            publish.youtube_item(self.ctx(self.short(), FakeHttp([(200, {}, b'<html>')]), {'youtube': YT_CONFIG}))
+
+    def test_status_answer_without_a_video_id_stops(self):
+        for answer in ((200, {}, b'<html>'), (200, {}, b'{}'), (308, {'range': 'items=0-3'}, b'')):
+            ctx = self.ctx(self.short(), FakeHttp([self.token(), answer]), {'youtube': YT_CONFIG})
+            ctx.data['session_url'] = SESSION
+            with self.subTest(answer=answer), self.assertRaises(publish.StopItem):
+                publish.youtube_item(ctx)
+
+    def test_upload_answer_without_a_video_id_is_unknown(self):
+        http = FakeHttp([self.token(), self.session(), (200, {}, b'{}')])
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
+
     def test_refused_refresh_token_stops(self):
         for status in (400, 401):
             with self.subTest(status=status), self.assertRaises(publish.StopItem):
@@ -923,6 +1047,13 @@ class CommandTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             self.run_main('publish', '--retry', 'demo', 'x-1')
         self.assertIn('its state is posted', str(raised.exception.code))
+
+    def test_status_stops_when_the_plan_is_missing(self):
+        campaign = self.approved_campaign([])
+        (campaign / '09-publish' / 'plan.json').unlink()
+        with self.assertRaises(SystemExit) as raised:
+            self.run_main('status', 'demo')
+        self.assertIn('APPROVED exists but plan.json is missing; nothing was sent', str(raised.exception.code))
 
     def test_retry_clears_a_failed_item(self):
         campaign = self.approved_campaign([{'time': 't', 'item': 'x-2', 'event': 'attempt', 'attempt': 1},

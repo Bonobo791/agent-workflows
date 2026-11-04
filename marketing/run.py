@@ -869,7 +869,9 @@ def build_final(campaign, steps):
     if final.exists():
         shutil.rmtree(final)
     final.mkdir()
-    lines = [f'# Final package: {campaign.name}', '', f'Built {now()}. Nothing has been published.', '']
+    note = ('Posts go out after 09-publish is approved; live links are listed under ## Published.'
+            if publish_targets((campaign / '00-task.md').read_text()) else 'Nothing has been published.')
+    lines = [f'# Final package: {campaign.name}', '', f'Built {now()}. {note}', '']
     for step in steps:
         source = campaign / step['id']
         shutil.copyfile(source / 'output.md', final / f"{step['id']}.md")
@@ -994,7 +996,7 @@ def plan_preview(plan, step_dir):
     return '\n'.join(lines) + '\n'
 
 
-def publish_gate(campaign, ask):
+def publish_gate(campaign, ask, http=publish.http_request):
     step_dir = campaign / PUBLISH_STEP
     step_dir.mkdir(exist_ok=True)
     if (step_dir / 'APPROVED').is_file():
@@ -1003,6 +1005,14 @@ def publish_gate(campaign, ask):
     if (step_dir / 'publish.jsonl').is_file():
         raise WorkflowError('09-publish has a publish log but no APPROVED file. Posts may already be live, so the plan is not rebuilt. '
                             'Restore 09-publish/APPROVED, or move 09-publish away only if you are sure nothing was posted.')
+    task = (campaign / '00-task.md').read_text()
+    url = section(task, 'Article URL', 'task')
+    try:  # the article must be live before anything is built or shown
+        response = http('GET', url)
+    except publish.NetworkError as error:
+        raise WorkflowError(f'could not reach the article at {url}: {error}. Make sure it is live, then run the same command again.') from None
+    if response.status != 200:
+        raise WorkflowError(f'the article is not live yet: {url} answered HTTP {response.status}. Publish it, then run the same command again.')
     plan = build_publish_plan(campaign)
     print('\n' + '=' * 70)
     print(f'Step {PUBLISH_STEP} is ready for your decision. Folder: {step_dir}')
@@ -1023,7 +1033,7 @@ def publish_gate(campaign, ask):
         print('Type a or q.')
 
 
-def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES):
+def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES, http=publish.http_request):
     steps = campaign_steps(campaign, steps)
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
     check_skills(skills_dir, steps)
@@ -1035,9 +1045,9 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
             run_step(client, roles, skills_dir, campaign, step, ask)
     final = build_final(campaign, steps)
     log.info('final package written: %s', final / 'index.md')
-    if publish_targets((campaign / '00-task.md').read_text()):
-        publish_gate(campaign, ask)
     print(f"\nAll steps approved. Final package: {final / 'index.md'}")
+    if publish_targets((campaign / '00-task.md').read_text()):
+        publish_gate(campaign, ask, http)
     return final
 
 
@@ -1114,6 +1124,8 @@ def cmd_status(name):
     if publish_targets(task):
         step_dir = campaign / PUBLISH_STEP
         if (step_dir / 'APPROVED').is_file():
+            if not (step_dir / 'plan.json').is_file():
+                raise WorkflowError(f'{name}: 09-publish/APPROVED exists but plan.json is missing; nothing was sent')
             publish_state = 'approved'
         elif (step_dir / 'plan.json').is_file():
             publish_state = 'waiting for your decision'

@@ -6,6 +6,8 @@ callable, so tests never reach the network.
 import base64
 import calendar
 import collections
+import datetime
+import email.utils
 import fcntl
 import hashlib
 import hmac
@@ -19,6 +21,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import HTTPException
 from pathlib import Path
 
 RETRY_MINUTES = [5, 10, 20, 40]
@@ -69,12 +72,13 @@ def lower_headers(headers):
 def http_request(method, url, headers=None, body=None, timeout=HTTP_TIMEOUT):
     request = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
     try:
-        with OPENER.open(request, timeout=timeout) as answer:
-            return Response(answer.status, lower_headers(answer.headers), answer.read())
-    except urllib.error.HTTPError as error:  # must come before URLError, which HTTPError subclasses
-        with error:
-            return Response(error.code, lower_headers(error.headers), error.read())
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+        try:
+            with OPENER.open(request, timeout=timeout) as answer:
+                return Response(answer.status, lower_headers(answer.headers), answer.read())
+        except urllib.error.HTTPError as error:  # must come before URLError, which HTTPError subclasses
+            with error:
+                return Response(error.code, lower_headers(error.headers), error.read())
+    except (urllib.error.URLError, HTTPException, OSError) as error:  # HTTPException: a body cut off mid-read (IncompleteRead)
         raise NetworkError(str(error)) from None
 
 
@@ -94,11 +98,29 @@ def file_hash(path):
     return digest.hexdigest()
 
 
+def retry_after_seconds(value, epoch):
+    """Retry-After as whole seconds or as an HTTP date. Any other value counts as no header."""
+    if value is None:
+        return None
+    value = value.strip()
+    if re.fullmatch(r'[0-9]+', value):
+        return int(value)
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    return int(when.timestamp() - epoch)
+
+
 def header_wait(response, epoch):
-    if 'retry-after' in response.headers:
-        return int(response.headers['retry-after'])
-    if 'x-rate-limit-reset' in response.headers:
-        return int(response.headers['x-rate-limit-reset']) - int(epoch)
+    seconds = retry_after_seconds(response.headers.get('retry-after'), epoch)
+    if seconds is not None:
+        return seconds
+    reset = response.headers.get('x-rate-limit-reset', '').strip()
+    if re.fullmatch(r'[0-9]+', reset):
+        return int(reset) - int(epoch)
     return None
 
 
@@ -280,7 +302,9 @@ def publish_campaign(campaign, config, http, clock=time.time, sleep=time.sleep, 
     step_dir = campaign / '09-publish'
     approval = json.loads((step_dir / 'APPROVED').read_text())
     plan_path = step_dir / 'plan.json'
-    if not plan_path.is_file() or file_hash(plan_path) != approval['plan_sha256']:
+    if not plan_path.is_file():
+        raise PublishError(f'{campaign.name}: 09-publish/APPROVED exists but plan.json is missing; nothing was sent')
+    if file_hash(plan_path) != approval['plan_sha256']:
         raise PublishError(f'{campaign.name}: plan.json changed after approval; nothing was sent')
     plan = json.loads(plan_path.read_text())
     for item in plan['items']:
@@ -643,7 +667,7 @@ def youtube_session_position(ctx, session, headers, size):
     response = send(ctx.http, what, False, ctx.clock(), 'PUT', session,
                     headers={**headers, 'Content-Length': '0', 'Content-Range': f'bytes */{size}'}, body=b'')
     if response.status in (200, 201):
-        return 'done', published_field(response, 'YouTube upload', 'id')
+        return 'done', dig(answer_json(response, what), what, 'id')
     if response.status == 308:
         received = response.headers.get('range')
         if not received:
