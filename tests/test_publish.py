@@ -1,12 +1,17 @@
+import contextlib
+import fcntl
 import hashlib
+import io
 import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'marketing'))
+import publish  # noqa: E402
 import run  # noqa: E402
 from test_run import task_text, FakeClient, answers, ROLES, TEXT_STEPS  # noqa: E402
 
@@ -230,6 +235,286 @@ class GateTest(PlanMixin, unittest.TestCase):
             run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=TEXT_STEPS, skills_dir=skills, roles=ROLES)
         gate.assert_called_once()
         self.assertTrue((self.campaign / 'final' / 'index.md').is_file())
+
+
+APPROVED_AT = '2026-11-04T10:00:00Z'
+
+
+class FakeHttp:
+    """Answers in order: a (status, headers, body) tuple becomes a Response, an exception is raised. Running out fails the test."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.requests = []
+
+    def __call__(self, method, url, headers=None, body=None, timeout=60):
+        self.requests.append((method, url, headers, body))
+        if not self.answers:
+            raise AssertionError(f'unexpected request: {method} {url}')
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return publish.Response(*answer)
+
+
+def item(item_id, depends=(), not_before=None, platform='test', **extra):
+    return {'id': item_id, 'platform': platform, 'action': 'post', 'text': item_id, 'media': [],
+            'depends_on': list(depends), 'not_before': not_before, **extra}
+
+
+class QueueTest(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.campaign = self.root / 'demo'
+        self.step = self.campaign / '09-publish'
+        self.step.mkdir(parents=True)
+        (self.campaign / 'final').mkdir()
+        (self.campaign / 'final' / 'index.md').write_text('# Final package: demo\n\nBuilt.')  # no trailing newline, as build_final writes it
+        self.epoch = [publish.parse_time(APPROVED_AT)]
+        self.script = {}  # item id -> answers for the test adapter, in order
+        self.calls = []   # item ids the test adapter was asked to publish
+        self.http = FakeHttp([])
+        self.adapters = {'test': self.fake_adapter, 'website': publish.check_article}
+
+    def clock(self):
+        return self.epoch[0]
+
+    def sleep(self, seconds):
+        self.epoch[0] += seconds
+
+    def fake_adapter(self, ctx):
+        item_id = ctx.item['id']
+        self.calls.append(item_id)
+        answers = self.script.get(item_id, [])
+        if answers:
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            publish.check(answer, {200}, 'test call', False, ctx.clock())  # a Response: judged by the failure table
+        return f'p-{item_id}', f'https://x.example/{item_id}'
+
+    def approve(self, items):
+        plan = {'campaign': 'demo', 'article_url': 'https://moderaty.com/blog/demo', 'items': items}
+        (self.step / 'plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False) + '\n')
+        approval = {'approved_at': APPROVED_AT, 'plan_sha256': publish.file_hash(self.step / 'plan.json')}
+        (self.step / 'APPROVED').write_text(json.dumps(approval) + '\n')
+
+    def run_once(self):
+        return publish.publish_campaign(self.campaign, {}, self.http, clock=self.clock, sleep=self.sleep, adapters=self.adapters)
+
+    def state(self, item_id):
+        plan = json.loads((self.step / 'plan.json').read_text())
+        return publish.item_states(self.step, plan, self.clock())[item_id]
+
+    def test_items_wait_for_their_dependencies(self):
+        self.approve([item('a'), item('b', depends=['a'])])
+        self.script['a'] = [publish.RetryLater('busy')]
+        self.run_once()
+        self.assertEqual(self.calls, ['a'])
+        self.sleep(300)
+        self.run_once()
+        self.assertEqual(self.calls, ['a', 'a', 'b'])
+        self.assertEqual(self.state('b')['state'], 'posted')
+
+    def test_not_before_holds_an_item(self):
+        self.approve([item('a', not_before='2026-11-04T11:00:00Z')])
+        self.run_once()
+        self.assertEqual(self.calls, [])
+        self.epoch[0] = publish.parse_time('2026-11-04T11:00:00Z')
+        self.run_once()
+        self.assertEqual(self.calls, ['a'])
+
+    def test_null_not_before_uses_the_approval_time(self):
+        self.epoch[0] -= 60
+        self.approve([item('a')])
+        self.run_once()
+        self.assertEqual(self.calls, [])
+        self.sleep(60)
+        self.run_once()
+        self.assertEqual(self.calls, ['a'])
+
+    def test_retry_waits_5_then_10_minutes(self):
+        self.approve([item('a')])
+        self.script['a'] = [publish.RetryLater('busy'), publish.RetryLater('busy')]
+        self.run_once()
+        self.assertEqual(publish.parse_time(self.state('a')['next_attempt_at']), self.clock() + 300)
+        self.run_once()  # not due yet, so nothing is sent
+        self.assertEqual(self.calls, ['a'])
+        self.sleep(300)
+        self.run_once()
+        self.assertEqual(self.calls, ['a', 'a'])
+        self.assertEqual(publish.parse_time(self.state('a')['next_attempt_at']), self.clock() + 600)
+
+    def test_fifth_retry_marks_failed(self):
+        self.approve([item('a')])
+        self.script['a'] = [publish.RetryLater('busy') for _ in range(5)]
+        for _ in range(4):
+            self.run_once()
+            self.epoch[0] = publish.parse_time(self.state('a')['next_attempt_at'])
+        self.run_once()
+        self.assertEqual(self.state('a')['state'], 'failed')
+        self.assertEqual(self.state('a')['attempts'], 5)
+        self.assertEqual(len(self.calls), 5)
+
+    def test_retry_after_header_sets_a_longer_wait(self):
+        self.approve([item('a')])
+        self.script['a'] = [publish.Response(429, {'retry-after': '3600'}, b'slow down')]
+        self.run_once()
+        self.assertEqual(publish.parse_time(self.state('a')['next_attempt_at']), self.clock() + 3600)
+
+    def test_rate_limit_reset_header_sets_the_wait(self):
+        self.approve([item('a')])
+        self.script['a'] = [publish.Response(429, {'x-rate-limit-reset': str(self.clock() + 900)}, b'')]
+        self.run_once()
+        self.assertEqual(publish.parse_time(self.state('a')['next_attempt_at']), self.clock() + 900)
+
+    def test_stop_item_fails_at_once_and_blocks_dependants(self):
+        self.approve([item('a'), item('b', depends=['a'])])
+        self.script['a'] = [publish.StopItem('bad token')]
+        self.run_once()
+        self.assertEqual(self.state('a')['state'], 'failed')
+        self.assertEqual(self.state('b')['state'], 'blocked')
+        self.assertEqual(self.calls, ['a'])
+
+    def test_outcome_unknown_is_never_resent(self):
+        self.approve([item('a')])
+        self.script['a'] = [publish.OutcomeUnknown('no answer')]
+        self.run_once()
+        self.sleep(2 * 86400)
+        self.run_once()
+        self.assertEqual(self.calls, ['a'])
+        self.assertEqual(self.state('a')['state'], 'unknown')
+
+    def test_stop_after_sent_counts_as_unknown(self):
+        self.approve([item('a')])
+        publish.append_event(self.step, self.clock, 'a', 'attempt', attempt=1)
+        publish.append_event(self.step, self.clock, 'a', 'sent', attempt=1)
+        self.run_once()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.state('a')['state'], 'unknown')
+
+    def test_stop_while_preparing_is_retried(self):
+        self.approve([item('a')])
+        publish.append_event(self.step, self.clock, 'a', 'attempt', attempt=1)
+        self.run_once()
+        self.assertEqual(self.calls, ['a'])
+        self.assertEqual(self.state('a')['state'], 'posted')
+
+    def test_posted_item_is_never_sent_again(self):
+        self.approve([item('a')])
+        self.run_once()
+        self.sleep(86400)
+        self.run_once()
+        self.assertEqual(self.calls, ['a'])
+
+    def test_changed_plan_is_refused(self):
+        self.approve([item('a')])
+        plan = json.loads((self.step / 'plan.json').read_text())
+        plan['items'][0]['text'] = 'changed after approval'
+        (self.step / 'plan.json').write_text(json.dumps(plan))
+        with self.assertRaises(publish.PublishError):
+            self.run_once()
+        self.assertEqual(self.calls, [])
+
+    def test_changed_media_is_refused(self):
+        (self.step / 'media').mkdir()
+        (self.step / 'media' / 'reel.mp4').write_bytes(b'version one')
+        self.approve([item('a', media=[{'path': 'media/reel.mp4', 'sha256': publish.file_hash(self.step / 'media' / 'reel.mp4')}])])
+        (self.step / 'media' / 'reel.mp4').write_bytes(b'version two')
+        with self.assertRaises(publish.PublishError):
+            self.run_once()
+        self.assertEqual(self.calls, [])
+
+    def test_second_run_is_skipped_while_locked(self):
+        lock = (self.root / '.publish.lock').open('a')
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = publish.publish_due(self.root, self.root / 'publish.json', http=self.http, clock=self.clock, sleep=self.sleep)
+        self.assertEqual(code, 0)
+        self.assertIn('another publish run is active; skipping', out.getvalue())
+
+    def test_config_readable_by_others_is_refused(self):
+        config = self.root / 'publish.json'
+        config.write_text('{}')
+        config.chmod(0o644)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = publish.publish_due(self.root, config, http=self.http, clock=self.clock, sleep=self.sleep)
+        self.assertEqual(code, 1)
+        self.assertIn(f'chmod 600 {config}', err.getvalue())
+        config.chmod(0o600)
+        self.assertEqual(publish.load_config(config), {})
+
+    def test_article_404_waits(self):
+        self.approve([item('article', platform='website', action='check', url='https://moderaty.com/blog/demo')])
+        self.http.answers = [(404, {}, b'')]
+        self.run_once()
+        self.assertEqual(self.state('article')['state'], 'waiting')
+        self.http.answers = [(200, {}, b'<html>')]
+        self.sleep(300)
+        self.run_once()
+        self.assertEqual(self.state('article')['state'], 'posted')
+
+    def test_publish_network_error_is_unknown_and_prepare_network_error_retries(self):
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.send(FakeHttp([publish.NetworkError('timeout')]), 'post', True, 0, 'POST', 'https://x')
+        with self.assertRaises(publish.RetryLater):
+            publish.send(FakeHttp([publish.NetworkError('timeout')]), 'token', False, 0, 'POST', 'https://x')
+
+    def test_5xx_on_publish_call_is_unknown_except_503(self):
+        ok = {201}
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.check(publish.Response(500, {}, b''), ok, 'post', True, 0)
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.check(publish.Response(502, {}, b''), ok, 'post', True, 0)
+        with self.assertRaises(publish.RetryLater):
+            publish.check(publish.Response(503, {}, b''), ok, 'post', True, 0)
+        with self.assertRaises(publish.RetryLater):
+            publish.check(publish.Response(500, {}, b''), ok, 'upload', False, 0)
+        with self.assertRaises(publish.StopItem):
+            publish.check(publish.Response(401, {}, b'no'), ok, 'post', True, 0)
+
+    def test_published_list_is_added_once(self):
+        self.approve([item('article'), item('a')])
+        self.run_once()
+        self.run_once()
+        text = (self.campaign / 'final' / 'index.md').read_text()
+        self.assertEqual(text.count('## Published'), 1)
+        self.assertIn('- a: https://x.example/a', text)
+        self.assertNotIn('- article:', text)
+
+    def test_reset_makes_a_failed_item_pending(self):
+        self.approve([item('a')])
+        self.script['a'] = [publish.StopItem('bad token')]
+        self.run_once()
+        self.assertEqual(self.state('a')['state'], 'failed')
+        publish.reset_item(self.campaign, 'a', clock=self.clock)
+        self.assertEqual(self.state('a')['state'], 'pending')
+        self.run_once()
+        self.assertEqual(self.state('a')['state'], 'posted')
+
+    def test_no_redirect_handler_returns_none(self):
+        self.assertIsNone(publish.NoRedirect().redirect_request(None, None, 308, 'x', {}, 'https://example.com'))
+
+    def test_http_error_becomes_a_response_and_url_error_a_network_error(self):
+        error = urllib.error.HTTPError('https://x.example', 404, 'Not Found', {}, io.BytesIO(b'missing'))
+        with mock.patch.object(publish.OPENER, 'open', side_effect=error):
+            self.assertEqual(publish.http_request('GET', 'https://x.example'), publish.Response(404, {}, b'missing'))
+        with mock.patch.object(publish.OPENER, 'open', side_effect=urllib.error.URLError('down')):
+            with self.assertRaises(publish.NetworkError):
+                publish.http_request('GET', 'https://x.example')
+
+    def test_a_line_cut_off_by_a_crash_is_ignored(self):
+        self.approve([item('a')])
+        publish.append_event(self.step, self.clock, 'a', 'attempt', attempt=1)
+        with (self.step / 'publish.jsonl').open('a') as handle:
+            handle.write('{"time": "2026-11-04T10:00:00Z", "item": "a", "ev')  # the process died while writing 'sent'
+        self.run_once()
+        self.assertEqual(self.calls, ['a'])
+        self.assertEqual(self.state('a')['state'], 'posted')
+        self.assertEqual([event['event'] for event in publish.read_events(self.step)], ['attempt', 'attempt', 'posted'])
 
 
 if __name__ == '__main__':
