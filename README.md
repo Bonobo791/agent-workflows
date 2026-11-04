@@ -37,7 +37,7 @@ At each step you see the output and the review, then type:
 - `r` to reject and type what should change
 - `q` to quit; run the same command later to come back to the same step
 
-A step that fails the automatic checks goes back to the writer without a reviewer call. If the reviewer says revise, the writer rewrites automatically, up to 2 times, before the step comes to you.
+A step that fails the automatic checks goes back to the writer without a reviewer call. If the reviewer says revise, or a pass has minor findings, the writer rewrites automatically once, then the reviewer checks again before the step comes to you. A failed check uses the same one rewrite.
 
 ## Task file
 

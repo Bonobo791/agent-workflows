@@ -4,7 +4,9 @@
 
 Write one LinkedIn post that promotes the article and carries the brief's Channel idea for LinkedIn.
 
-Write Markdown with exactly these two sections, in this order:
+Before writing, draft 3 different hooks under ## Hooks, each from a different angle. Pick the strongest and write the post under ## Post. The checks and the final package leave out ## Hooks.
+
+Write Markdown with exactly these three sections, in this order: ## Hooks (three hooks, one per line, each from a different angle), ## Post, then ## First comment.
 
 ## Post
 - The first line is the hook: 140 characters or fewer.

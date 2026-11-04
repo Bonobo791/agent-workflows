@@ -4,8 +4,12 @@
 
 Write the X post that carries the brief's Channel idea for X and points to the article. Write a thread only when the idea needs more than one post.
 
+Before writing, draft 3 different hooks under ## Hooks, each from a different angle. Pick the strongest and write the post under ## Post. The checks and the final package leave out ## Hooks.
+
+Write Markdown with exactly two sections, in this order: ## Hooks (three hooks, one per line, each from a different angle), then ## Post (the post or thread, with the rules below).
+
 - A single post has no numbers.
-- A thread has at most 5 posts. Start each post with its number and a slash, then the text on the same line: `1/ Hook text`, `2/ Next text`, and so on.
+- A thread has at most 3 posts. Start each post with its number and a slash, then the text on the same line: `1/ Hook text`, `2/ Next text`, and so on.
 - Each post is 280 characters or fewer. Count `[ARTICLE LINK]` as 23 characters.
 - Write `[ARTICLE LINK]` once, in the last post.
 - At most two hashtags in total.

@@ -4,9 +4,11 @@
 
 Write the caption, hashtags and image text for one Instagram feed post that carries the brief's Channel idea for Instagram.
 
-Write Markdown with exactly these three sections, in this order:
+Before writing, draft 3 different hooks under ## Hooks, each from a different angle. Pick the strongest and write the post under ## Post. The checks and the final package leave out ## Hooks.
 
-## Caption
+Write Markdown with exactly these four sections, in this order: ## Hooks (three hooks, one per line, each from a different angle), ## Post (the caption), ## Hashtags, then ## Image text.
+
+## Post
 - The primary keyword appears in the first sentence.
 - The last line is exactly: Link in bio
 

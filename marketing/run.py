@@ -36,7 +36,7 @@ ROLES = {
     'creator': {'model': 'gpt-6.1-sol', 'effort': 'high'},
     'strategist': {'model': 'gpt-6.1-sol', 'effort': 'high'},
 }
-MAX_AUTO_REVISIONS = 2
+MAX_AUTO_REVISIONS = 1  # one automatic rewrite, shared by a failed check, a revise and a minor-findings pass
 MAX_REVIEW_FRAMES = 10
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
@@ -576,18 +576,18 @@ def check_x(output, task, brief):
 
 
 def check_instagram(output, task, brief):
-    errors = missing_sections(output, ['Caption', 'Hashtags', 'Image text'])
+    errors = missing_sections(output, ['Post', 'Hashtags', 'Image text'])
     found = sections(output)
-    caption_lines = [line.strip() for line in found.get('Caption', '').splitlines() if line.strip()]
+    caption_lines = [line.strip() for line in found.get('Post', '').splitlines() if line.strip()]
     if not caption_lines or not caption_lines[-1].endswith('Link in bio'):
-        errors.append('the Caption must end with "Link in bio"')
+        errors.append('the Post must end with "Link in bio"')
     hashtags = len(HASHTAG_RE.findall(found.get('Hashtags', '')))
     if not 3 <= hashtags <= 5:
         errors.append(f'the Hashtags section has {hashtags} hashtags; the limit is 3 to 5')
     words = len(found.get('Image text', '').split())
     if words > 8:
         errors.append(f'the Image text has {words} words; the limit is 8')
-    errors += hedge_errors(first_line(found.get('Caption', '')))
+    errors += hedge_errors(first_line(found.get('Post', '')))
     errors += social_word_errors(output, 'post')
     errors += wording_errors(output)
     return errors
@@ -640,7 +640,7 @@ def read_input(campaign, spec):
         step_dir = campaign / input_id
         if not (step_dir / 'APPROVED').is_file():
             raise WorkflowError(f'input {input_id} is not approved yet')
-        text = (step_dir / 'output.md').read_text()
+        text = without_hooks((step_dir / 'output.md').read_text())
     if not part:
         return text
     if part == 'outline':
@@ -898,11 +898,22 @@ def write(client, roles, skills_dir, campaign, step, step_dir, revision):
     return written, materialize(step, step_dir, written)
 
 
+def without_hooks(text):
+    """The Hooks section is the writer's working notes: checks, later inputs and the final package leave it out."""
+    kept, skipping = [], False
+    for line in text.splitlines():
+        if line.startswith('## '):
+            skipping = line[3:].strip() == 'Hooks'
+        if not skipping:
+            kept.append(line)
+    return '\n'.join(kept).strip() + '\n'
+
+
 def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
     errors = []
     if step['check'] is not None:
         brief = (campaign / '02-brief' / 'output.md').read_text() if step['id'] in ('03-article', '04-linkedin', '05-x', '06-instagram') else None
-        output, task = (step_dir / 'output.md').read_text(), (campaign / '00-task.md').read_text()
+        output, task = without_hooks((step_dir / 'output.md').read_text()), (campaign / '00-task.md').read_text()
         if step['check'] == 'sources':
             errors = check_sources(output, task, brief, read_searches(step_dir))
         else:
@@ -1010,7 +1021,7 @@ def build_final(campaign, steps):
     lines = [f'# Final package: {campaign.name}', '', f'Built {now()}. Nothing has been published.', '']
     for step in steps:
         source = campaign / step['id']
-        shutil.copyfile(source / 'output.md', final / f"{step['id']}.md")
+        (final / f"{step['id']}.md").write_text(without_hooks((source / 'output.md').read_text()))
         lines += [f"## {step['id']}", '', f"- [{step['id']}.md]({step['id']}.md)"]
         for asset in sorted(source.glob('*.png')) + sorted(source.glob('*.mp4')):
             name = f"{step['id']}-{asset.name}"

@@ -148,13 +148,12 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(client.prompts), 8)
         self.assertTrue((self.campaign / '01-brief' / 'APPROVED').is_file())
 
-    def test_two_revises_then_pass(self):
+    def test_two_revises_go_to_the_owner_after_one_rewrite(self):
         client = FakeClient(['revise', 'revise', 'pass', 'pass'])
         self.go(client, answers('a', 'a'))
-        self.assertEqual(len(client.prompts), 8)
+        self.assertEqual(len(client.prompts), 6)  # writer, reviewer, writer, reviewer, owner; then the second step
         self.assertIsNone(client.thread_params[0])  # call 1 starts a new writer thread
-        self.assertEqual(client.thread_params[2], 'thread-1')  # call 3 continues it
-        self.assertEqual(client.thread_params[4], 'thread-1')  # call 5 continues it too
+        self.assertEqual(client.thread_params[2], 'thread-1')  # call 3, the one rewrite, continues it
 
     def test_owner_reject_resets_the_loop(self):
         client = FakeClient(['pass', 'revise', 'revise', 'revise', 'pass'])
@@ -163,13 +162,12 @@ class RunTest(unittest.TestCase):
 
     def test_failed_checks_count_as_a_round(self):
         (self.campaign / '00-task.md').write_text(task_text('article, social'))
-        texts = ['brief', 'article', 'a' * 300, 'a' * 300, 'a' * 300]
+        texts = ['brief', 'article', 'a' * 300, 'a' * 300]
         client = FakeClient(['pass', 'pass'], writer_outputs=[json.dumps({'output': text, 'notes': ''}) for text in texts])
         self.go(client, answers('a', 'a', 'a'))
-        self.assertEqual(len(client.prompts), 7)  # three X writer calls; the reviewer is never called for X
+        self.assertEqual(len(client.prompts), 6)  # brief and article with reviews; two X writer calls, no reviewer for X
         self.assertIn('write x', client.prompts[4])
-        self.assertIn('the limit is 280', client.prompts[5])
-        self.assertIn('the limit is 280', client.prompts[6])
+        self.assertIn('the limit is 280', client.prompts[5])  # the one automatic rewrite
 
     def test_owner_notes_reach_the_writer(self):
         client = FakeClient(['pass', 'pass', 'pass'])
@@ -306,7 +304,7 @@ class ChecksTest(unittest.TestCase):
 
     def test_instagram_image_text_word_limit(self):
         def instagram(words):
-            return f'## Caption\nHook. Link in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\n{words}\n'
+            return f'## Post\nHook. Link in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\n{words}\n'
         self.assertEqual(run.check_instagram(instagram('one two three four five six seven eight'), '', None), [])
         self.assertTrue(run.check_instagram(instagram('one two three four five six seven eight nine'), '', None))
 
@@ -453,7 +451,7 @@ class WordingTest(unittest.TestCase):
         self.assertEqual(run.wording_errors('Studio holds comments with links.'), [])
 
     def test_instagram_caption_with_a_banned_phrase_fails(self):
-        output = '## Caption\nWe sent the reader the brief first.\nLink in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\nSave hours\n'
+        output = '## Post\nWe sent the reader the brief first.\nLink in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\nSave hours\n'
         self.assertTrue(any('remove "the brief"' in e for e in run.check_instagram(output, task_text(), None)))
 
 
@@ -479,7 +477,7 @@ class SocialLimitsTest(unittest.TestCase):
             outputs = {
                 'check_linkedin': linkedin_post(f'You wake up to spam, {word} the rest.'),
                 'check_x': f'1/ You wake up to spam, {word} the rest.',
-                'check_instagram': f'## Caption\nYou wake up to spam, {word} the rest.\nLink in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\nSave hours\n',
+                'check_instagram': f'## Post\nYou wake up to spam, {word} the rest.\nLink in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\nSave hours\n',
             }
             for name, output in outputs.items():
                 with self.subTest(word=word, check=name):
@@ -560,6 +558,15 @@ class MinorFindingsTest(unittest.TestCase):
     def test_minor_findings_get_one_rewrite(self):
         client = self.run_with(['minor', 'pass'])
         self.assertEqual([model for model, _ in client.calls], ['w', 'r', 'w', 'r'])  # writer, reviewer, writer, reviewer, then the owner
+
+    def test_hooks_are_left_out_of_the_final_package(self):
+        campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        (campaign / '04-linkedin').mkdir(parents=True)
+        (campaign / '04-linkedin' / 'output.md').write_text('## Hooks\nOne\nTwo\n\n## Post\nThe post.\n\n## First comment\nComment.\n')
+        final = run.build_final(campaign, [{'id': '04-linkedin'}])
+        copied = (final / '04-linkedin.md').read_text()
+        self.assertNotIn('## Hooks', copied)
+        self.assertIn('## Post', copied)
 
     def test_second_minor_findings_go_to_the_owner(self):
         client = self.run_with(['minor', 'minor'])
