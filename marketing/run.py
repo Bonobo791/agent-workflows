@@ -1037,12 +1037,20 @@ def half_size(png, out_png):
     run_tool(['ffmpeg', '-loglevel', 'error', '-y', '-i', str(png), '-vf', 'scale=iw/2:ih/2', str(out_png)], png.parent)
 
 
+FILM_PROBLEM_RE = re.compile(r'^(?:✗ )?(film\.html:\d+:.*)$')
+
+
 def film_problems(stdout):
-    """The problem lines of openfilm's "✗ film.html has N problems" report; empty for any other output."""
-    lines = stdout.lstrip().splitlines()
-    if not lines or not lines[0].startswith('✗ film.html has'):
+    """The problems in an openfilm look report: "✗ film.html:10: ..." for one, or "✗ film.html has N problems:" with indented lines. Empty for any other output."""
+    text = stdout.lstrip()
+    if not text.startswith('✗ film.html'):
         return []
-    return [line.strip() for line in lines[1:] if line.startswith('  ')]
+    problems = []
+    for line in text.splitlines():
+        match = FILM_PROBLEM_RE.match(line.strip())
+        if match:
+            problems.append(match.group(1))
+    return problems
 
 
 def capture_still(project_dir, look_time, out_png):

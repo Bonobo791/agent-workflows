@@ -838,6 +838,19 @@ class FilmLookTest(unittest.TestCase):
         self.assertEqual(len(client.prompts), 2)  # no reviewer call after the second failure
         self.assertIn('stderr:', str(caught.exception))
 
+    def test_single_look_problem_becomes_check_error(self):
+        client = FakeClient(['pass'], writer_outputs=[self.projects(), self.projects()])
+        self.run_images(client, look_failures=1, look_stdout='✗ film.html:10: position would move the clip')
+        self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with one problem, reviewer
+        self.assertEqual(client.prompts[1].count('[blocking]'), 1)
+        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[1])
+
+    def test_skills_ban_clip_position(self):
+        line = "A clip's style places it only with left, top, width, height and rotate. Never put position, display, inset, right, bottom, margin, transform, translate, scale, z-index, visibility, animation or transition in a clip's style."
+        for step in ['images', 'reel']:
+            with self.subTest(step=step):
+                self.assertIn(line, (run.SKILLS_DIR / step / 'SKILL.md').read_text())
+
     def test_other_look_failure_stops_at_once(self):
         client = FakeClient([], writer_outputs=[self.projects(), self.projects()])
         with self.assertRaises(run.WorkflowError):

@@ -13,6 +13,7 @@ Structure:
 
 How to build it:
 - Put every `<iframe>` clip inside one `<section>` in `<body>`. OpenFilm rejects a clip outside a section ("outside any track"). Clips in one section must not overlap in time; a title over footage goes in a second `<section>`.
+- A clip's style places it only with left, top, width, height and rotate. Never put position, display, inset, right, bottom, margin, transform, translate, scale, z-index, visibility, animation or transition in a clip's style.
 - Set the viewport meta tag to the stage size. Without it OpenFilm uses 1920 × 1080, which is wrong for this reel. Use this shape:
 
 ```html
