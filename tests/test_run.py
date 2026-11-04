@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -910,6 +911,18 @@ class RecheckTest(unittest.TestCase):
                       'this is a process note, not a fact; remove it: "A fact https://example.com (checked 2026-11-03)"', message)
         self.assertIn('rm -r campaigns/demo/02-brief campaigns/demo/final', message)
 
+    def test_only_the_approved_date_changes_nothing(self):
+        write_brand('datebrand', **{'positioning.md': 'Approved: 2026-11-04\n\n' + POSITIONING_TEXT})
+        (self.campaign / '00-task.md').write_text(task_text('article', brand='datebrand'))
+        client = FakeClient(['pass'], writer_outputs=[json.dumps({'output': full_brief('- Content type: guide\n- Target length: 1600 words'), 'notes': ''})])
+        self.run_brief(client, answers('a'))
+        positioning = BRANDS_TMP / 'datebrand' / 'positioning.md'
+        self.assertEqual(run.stale_steps(self.campaign, [self.brief_step], run.SKILLS_DIR), [])
+        positioning.write_text(positioning.read_text().replace('Approved: 2026-11-04', 'Approved: 2030-01-01'))
+        self.assertEqual(run.stale_steps(self.campaign, [self.brief_step], run.SKILLS_DIR), [])  # only the date changed
+        positioning.write_text(positioning.read_text().replace(PROBLEMS[0], PROBLEMS[0] + ' Changed.'))
+        self.assertEqual(run.stale_steps(self.campaign, [self.brief_step], run.SKILLS_DIR), [self.brief_step])
+
     def test_recheck_passes_unaffected_steps(self):
         self.approve_brief()
         client = FakeClient([])
@@ -1087,7 +1100,7 @@ class HeyGenReelTest(unittest.TestCase):
                 run.render_presenter(campaign, step_dir, CHARACTER)
             run.render_presenter(campaign, step_dir, CHARACTER)
         self.assertEqual(len(fake.created), 1)  # the rerun polled the same video; it did not start a second one
-        self.assertEqual(list((step_dir / 'heygen-cache').glob('*.pending.json')), [])
+        self.assertEqual(list((campaign.parent / '.heygen-cache').glob('*.pending.json')), [])
         self.assertTrue((step_dir / 'presenter.json').is_file())
 
     def test_failed_render_removes_the_pending_record(self):
@@ -1095,7 +1108,7 @@ class HeyGenReelTest(unittest.TestCase):
         with self.heygen(FakeHeyGen(durations=(2.0,), failing='First line.')):
             with self.assertRaisesRegex(run.HeyGenError, 'failed'):
                 run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(list((step_dir / 'heygen-cache').glob('*.pending.json')), [])
+        self.assertEqual(list((campaign.parent / '.heygen-cache').glob('*.pending.json')), [])
 
     def test_approved_reel_needs_no_heygen_key(self):
         campaign, _ = self.make_campaign()
@@ -1106,6 +1119,30 @@ class HeyGenReelTest(unittest.TestCase):
         with mock.patch.dict(os.environ):
             os.environ.pop('HEYGEN_API_KEY', None)
             run.run_campaign(campaign, FakeClient([]), ask=answers(), steps=[reel], skills_dir=run.SKILLS_DIR, roles=ROLES)
+
+    def test_deleting_the_reel_step_reuses_its_clips(self):
+        campaign, step_dir = self.make_campaign()
+        fake = FakeHeyGen()
+        with self.heygen(fake):
+            run.render_presenter(campaign, step_dir, CHARACTER)
+            self.assertEqual(len(fake.created), 3)
+            shutil.rmtree(step_dir)
+            step_dir.mkdir()
+            run.render_presenter(campaign, step_dir, CHARACTER)
+        self.assertEqual(len(fake.created), 3)  # every line was cached, so the rerun made no HeyGen call
+        self.assertTrue((step_dir / 'presenter.json').is_file())
+
+    def test_only_a_changed_line_is_rendered_again(self):
+        campaign, step_dir = self.make_campaign()
+        fake = FakeHeyGen()
+        with self.heygen(fake):
+            run.render_presenter(campaign, step_dir, CHARACTER)
+            script = campaign / '08-reel-script' / 'script.json'
+            data = json.loads(script.read_text())
+            data['lines'][1]['text'] = 'A new second line.'
+            script.write_text(json.dumps(data))
+            run.render_presenter(campaign, step_dir, CHARACTER)
+        self.assertEqual(len(fake.created), 4)  # one new video, for the changed line only
 
     def test_failed_render_stops_with_response(self):
         campaign, step_dir = self.make_campaign()
