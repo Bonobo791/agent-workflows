@@ -432,6 +432,8 @@ def dig(data, what, *keys):
         if not isinstance(data, dict) or key not in data:
             raise StopItem(f'{what}: the answer has no "{key}"')
         data = data[key]
+    if data is None or data == '':  # a null or empty value is missing, not a value to post
+        raise StopItem(f'{what}: the answer has an empty "{keys[-1]}"')
     return data
 
 
@@ -500,6 +502,8 @@ def published_field(response, what, *keys):
             value = value[key]
     except (ValueError, KeyError, TypeError):
         raise OutcomeUnknown(f'{what} answered without {".".join(keys)}; check the account') from None
+    if value is None or value == '':
+        raise OutcomeUnknown(f'{what} answered with an empty {".".join(keys)}; check the account')
     return value
 
 

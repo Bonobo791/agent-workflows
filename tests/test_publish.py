@@ -664,6 +664,24 @@ class AdapterTest(unittest.TestCase):
                                    lambda: self.epoch, self.sleeps.append, {}, attempt)
 
 
+class NullAnswerTest(AdapterTest):
+    def test_null_or_empty_answers_count_as_missing(self):
+        def image_answer(value):
+            return (200, {}, json.dumps({'value': {'uploadUrl': 'https://upload.example/1', 'image': value}}).encode())
+
+        def upload_answer(value):
+            return (200, {}, json.dumps({'value': {'uploadUrl': value, 'image': 'urn:li:image:1'}}).encode())
+
+        (self.step / 'media' / 'linkedin.png').write_bytes(b'png')
+        media = [{'path': 'media/linkedin.png', 'sha256': 'unused'}]
+        for answer in (image_answer(None), image_answer(''), upload_answer(None)):
+            with self.subTest(answer=answer), self.assertRaises(publish.StopItem):
+                publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi', media=media), FakeHttp([answer]),
+                                               {'linkedin': LINKEDIN_CONFIG}))
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.published_field(publish.Response(201, {}, b'{"data": {"id": null}}'), 'X post', 'data', 'id')
+
+
 class LinkedInTest(AdapterTest):
     def image_answers(self):
         return [(200, {}, json.dumps({'value': {'uploadUrl': 'https://upload.example/1', 'image': 'urn:li:image:1'}}).encode()),
