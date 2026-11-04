@@ -1062,11 +1062,19 @@ def run_build(build, ask):
     cmd_status(build.name)
 
 
+def check_skills():
+    for step_id in STEP_IDS:
+        read_skill(step_id, 'SKILL.md')
+    for step_id in ['01-plan', '02-instructions', '03-build']:
+        read_skill(step_id, 'REVIEW.md')
+
+
 def cmd_run(name):
     build = BUILDS_DIR / name
     if not build.is_dir():
         raise WorkflowError(f'no build named {name} in {BUILDS_DIR}')
     with build_log(build):
+        check_skills()
         check_tools()
         run_build(build, input)
 

@@ -3,6 +3,7 @@ import importlib.util
 import io
 import itertools
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -704,6 +705,20 @@ class PrStepTest(BuildTest):
         self.assertEqual([role for role, _, _ in fake.calls], ['builder'])
         self.assertIn('All steps approved. Draft pull request: https://github.com/Bonobo791/agent-workflows/pull/7',
                       out.getvalue())
+
+
+class SkillFileTest(unittest.TestCase):
+    def test_shipped_skill_files_are_present(self):
+        eng.check_skills()
+
+    def test_missing_skill_file_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skills = Path(tmp) / 'skills'
+            shutil.copytree(ROOT / 'engineering' / 'skills', skills)
+            (skills / '03-build' / 'REVIEW.md').unlink()
+            with mock.patch.object(eng, 'SKILLS_DIR', skills):
+                with self.assertRaisesRegex(eng.WorkflowError, 'missing skill file'):
+                    eng.check_skills()
 
 
 if __name__ == '__main__':
