@@ -140,7 +140,8 @@ STEPS = [
      'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'accessibility-review']},
     {'id': '08-reel-script', 'skill': 'reel-script', 'kind': 'script', 'role': 'writer', 'deliverable': 'reel', 'web': False, 'check': 'reel-script',
      'inputs': REEL_SCRIPT_INPUTS, 'review_inputs': REEL_SCRIPT_INPUTS,
-     'writer_skills': ['short-form-video-script', 'hook-writer', 'reels-script'], 'review_skills': ['short-form-video-script', 'reels-script', 'accessibility-review']},
+     'writer_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script'],
+     'review_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script']},
     {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'check': None,
      'inputs': REEL_INPUTS, 'review_inputs': REEL_INPUTS,
      'writer_skills': ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'],
@@ -1050,7 +1051,7 @@ def run_tool(args, cwd):
         raise WorkflowError(f"{' '.join(args)} did not finish within 900 s in {cwd}") from None
     if proc.returncode != 0:
         raise ToolFailed(f"{' '.join(args)} failed in {cwd} (exit {proc.returncode}):\n"
-                         f"stdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}",
+                         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}",
                          proc.returncode, proc.stdout, proc.stderr)
 
 

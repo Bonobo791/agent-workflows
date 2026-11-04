@@ -1072,7 +1072,7 @@ class HeyGenReelTest(unittest.TestCase):
             with self.assertRaisesRegex(run.WorkflowError, 'clip p2'):
                 run.render_presenter(campaign, step_dir, CHARACTER)
 
-    def test_srt_becomes_webvtt_with_dots(self):
+    def test_srt_converts_to_vtt(self):
         vtt = run.srt_to_vtt(FakeHeyGen.SRT)
         self.assertTrue(vtt.startswith('WEBVTT\n\n'))
         self.assertIn('00:00:01.200 --> 00:00:03.400\nHello, there.', vtt)
