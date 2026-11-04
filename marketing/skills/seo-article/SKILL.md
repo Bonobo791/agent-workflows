@@ -37,3 +37,4 @@ Rules:
 - An illustrative example needs no label. Write it as a scene, without the word "fictional".
 - Draft the opening from a Reader problem in positioning.md. Never invent a reader problem.
 - Link only to the pages listed in pages.md, using their paths.
+- Do not write a contrast: no "X, not Y", no "not X, it's Y" and no "rather than". State the point directly.

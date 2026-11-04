@@ -50,6 +50,7 @@ What the task does not say and the owner must decide, or None.
 
 Rules:
 - Use only the task and the sources step. Never invent features, prices, numbers, customers, quotes or dates.
+- Never plan a section, goal or channel idea that needs a file the task doesn't supply, such as a screen recording, screenshot or video. Leave it out of the plan.
 - Follow the task's Constraints.
 - Do not copy schedule dates into any section. They are not rules for later steps.
 - No em dashes.

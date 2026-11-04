@@ -891,6 +891,47 @@ class RecheckTest(unittest.TestCase):
         self.assertEqual(client.prompts, [])  # nothing was run again, so no Codex call
 
 
+class ReviewRulesInPromptTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.skills = self.tmp / 'skills'
+        (self.skills / 'brief').mkdir(parents=True)
+        (self.skills / 'brief' / 'SKILL.md').write_text('write brief')
+        (self.skills / 'brief' / 'REVIEW.md').write_text('review brief')
+        self.campaign = self.tmp / 'campaigns' / 'demo'
+        self.campaign.mkdir(parents=True)
+        (self.campaign / '00-task.md').write_text(task_text())
+
+    def test_writer_prompt_includes_review_rules(self):
+        prompt = run.writer_prompt(self.skills, self.campaign, dict(TEXT_STEPS[0]))
+        self.assertIn(run.REVIEW_LINE, prompt)
+        self.assertIn('review brief', prompt)
+        self.assertLess(prompt.index('write brief'), prompt.index(run.REVIEW_LINE))
+
+    def test_revision_prompt_says_fix_everywhere(self):
+        prompt = run.revision_prompt(dict(TEXT_STEPS[0]), {'verdict': 'revise', 'summary': 'Checked.', 'findings': []}, '')
+        self.assertIn('Fix each finding everywhere it occurs in the draft', prompt)
+
+    def test_rather_than_is_a_contrast(self):
+        sentence = 'Studio holds comments rather than replies.'
+        article = META_LINE + '\n# Title\n\nIf you export, use the button.\n\n' + sentence + '\n'
+        checks = [
+            run.check_article(article, task_text(), full_brief('- Target length: 6 words')),
+            run.check_linkedin(linkedin_post(sentence), task_text(), None),
+            run.check_x(sentence + ' ' + run.LINK, task_text(), None),
+            run.check_instagram(f'## Post\n{sentence}\nLink in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\nSave hours\n', task_text(), None),
+        ]
+        for errors in checks:
+            self.assertIn(f'rewrite this contrast as a direct statement: "{sentence}"', errors)
+
+    def test_notes_skip_leading_blank_lines(self):
+        step_dir = Path(tempfile.mkdtemp())
+        (step_dir / 'output.md').write_text('Draft.\n')
+        review = {'verdict': 'revise', 'summary': 'Checked.', 'findings': []}
+        notes = run.decide({'id': '01-x'}, step_dir, review, answers('r', '', 'first note', 'second note', ''))
+        self.assertEqual(notes, 'first note\nsecond note')
+
+
 class SearchLogTest(unittest.TestCase):
     def test_each_web_search_is_logged_and_returned(self):
         client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])

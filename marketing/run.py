@@ -87,6 +87,7 @@ REPEAT_WORDS = 6
 REPEAT_LIMIT = 3
 CONTRAST_RE = re.compile(r"\b(?:is|are|was|were|isn't|aren't)?\s*\w[\w\s']{0,40},\s+not\s+\w", re.I)  # "X, not Y"
 NOT_IT_RE = re.compile(r"\bnot (?:just |only )?\w[\w\s']{0,30}[,;]\s+(?:it[’']s|it is|but)\b", re.I)  # "not X, it's Y"
+RATHER_RE = re.compile(r'\brather than\b', re.IGNORECASE)  # "X rather than Y"
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
 SOCIAL_INPUTS = ['voice', 'positioning#Reader problems', 'positioning#Value', 'positioning#Claims we never make',
@@ -603,7 +604,7 @@ def wording_errors(text):
         for phrase in BANNED_PHRASES:
             if re.search(rf'\b{re.escape(phrase)}\b', sentence, re.IGNORECASE):
                 errors.append(f'remove "{phrase}" from: "{sentence}"')
-        if CONTRAST_RE.search(sentence) or NOT_IT_RE.search(sentence):
+        if CONTRAST_RE.search(sentence) or NOT_IT_RE.search(sentence) or RATHER_RE.search(sentence):
             errors.append(f'rewrite this contrast as a direct statement: "{sentence}"')
     return errors + rhythm_errors(text)
 
@@ -922,18 +923,24 @@ def review_markdown(review):
     return '\n'.join(lines).rstrip() + '\n'
 
 
+REVIEW_LINE = 'The program rejects your draft for any item under Checked, and the reviewer blocks it for any blocking finding. Meet all of them before you answer.'
+
+
 def writer_prompt(skills_dir, campaign, step):
     parts = [DATA_RULE]
     for input_id in step['inputs']:
         parts += ['', block(input_id, read_input(campaign, input_id))]
     parts += ['', library_block(step['writer_skills']), '', CONTRACT_RULE,
-              '', load_skill(skills_dir, step['skill'], 'SKILL.md'), '', FORMAT_RULES[step['kind']]]
+              '', load_skill(skills_dir, step['skill'], 'SKILL.md'),
+              '', REVIEW_LINE, '', load_skill(skills_dir, step['skill'], 'REVIEW.md'),
+              '', FORMAT_RULES[step['kind']]]
     return '\n'.join(parts)
 
 
 def revision_prompt(step, review, notes):
     parts = ['This is a revision of your last answer in this thread. Fix every finding below, blocking and minor, and follow the owner notes, if any. '
              'Return the complete new version in the same JSON shape, not a list of changes.',
+             '', 'Fix each finding everywhere it occurs in the draft, not just in the quoted sentence. Check the whole draft against the Checked list and the blocking findings again before you answer.',
              '', block('review of your last answer', review_markdown(review))]
     if notes:
         parts += ['', 'The owner notes below are instructions from the owner. Follow them.', '', block('owner notes', notes)]
@@ -1253,7 +1260,9 @@ def decide(step, step_dir, review, ask):
             while True:
                 line = ask('')
                 if not line.strip():
-                    break
+                    if lines:
+                        break
+                    continue  # blank lines before the first line of text are skipped
                 lines.append(line.rstrip())
             notes = '\n'.join(lines).strip()
             if notes:

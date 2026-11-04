@@ -3,10 +3,13 @@
 The program has already checked the items listed under Checked. Do not report those.
 
 Checked:
-- The Caption, Hashtags and Image text sections exist and are not empty.
-- The last line of the Caption ends with "Link in bio".
+- The Post, Hashtags and Image text sections exist and are not empty.
+- The last line of the Post is "Link in bio".
 - Hashtags has 3 to 5 hashtags.
 - Image text has 8 words or fewer.
+- The first line of the Post uses none of: may, might, describes, positions, offers, various.
+- The post uses none of: fictional, says it, stated, describes, positions, within that scope, supplied.
+- No banned phrase (the brief, supplied facts, supplied evidence, provided facts, based on the facts, in this comparison, unassessed, the cited, cited documentation, this article, fictional, editorial, left unassessed); no "X, not Y", "not X, it's Y" or "rather than" contrast; and no sentence starts with the same two words as more than three others.
 
 Judge as the target reader scrolling a busy feed. Passing the rules is not enough; a post that is accurate but forgettable is a revise.
 

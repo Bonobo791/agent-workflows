@@ -3,11 +3,16 @@
 The program has already checked the items listed under Checked. Do not report those.
 
 Checked:
-- Line 1 starts with "Meta description: ".
-- The meta description is 150 to 160 characters.
+- Line 1 starts with "Meta description: ", and the meta description is 150 to 160 characters.
 - There is exactly one "# " title line.
 - The required headings appear as "## " headings in the required order.
 - The word count is within 20% of the brief's target.
+- The opening paragraph after the title is 3 sentences or fewer and gives the answer with "if" or "when".
+- No six-word phrase appears three or more times.
+- No sentence starts with the same two words as more than three others.
+- No banned phrase (the brief, supplied facts, supplied evidence, provided facts, based on the facts, in this comparison, unassessed, the cited, cited documentation, this article, fictional, editorial, left unassessed) in the article.
+- No "X, not Y", "not X, it's Y" or "rather than" contrast.
+- Every link to a page (a path starting with "/") is listed in pages.md.
 
 Blocking findings:
 - A claim that is not in the brief's Facts.

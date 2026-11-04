@@ -2,6 +2,11 @@
 
 Look at each attached image. You see every image at half size, so judge the text size as it would look on a phone.
 
+The program has already checked the items listed under Checked. Do not report those.
+
+Checked:
+- openfilm look accepts film.html. A problem it reports goes back to you as a finding before the reviewer sees the images.
+
 Blocking findings:
 - Headline text that names a product or feature instead of the reader's problem.
 - Text that overlaps, is cut off, is too small to read on a phone, or has weak contrast.

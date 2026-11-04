@@ -2,6 +2,11 @@
 
 The attached images are up to 10 frames spread evenly across the video, at half size. The image note gives the second of each frame. Judge text size as it would look on a phone.
 
+The program has already checked the items listed under Checked. Do not report those.
+
+Checked:
+- openfilm render makes the reel. A failed render stops the run before the reviewer sees the frames.
+
 Blocking findings:
 - Headline text that names a product or feature instead of the reader's problem.
 - Text that overlaps, is cut off, is too small to read on a phone, or has weak contrast in any frame.

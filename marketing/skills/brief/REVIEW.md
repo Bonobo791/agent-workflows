@@ -4,15 +4,17 @@ The program has already checked the items listed under Checked. Do not report th
 
 Checked:
 - The eleven brief sections exist and are not empty.
-- Every fact under Facts has a URL or ends with "(from task)".
+- Every fact under Facts has a URL or ends with "(from task)", and no fact is a process line: issue or tracker text, a due or start date, the earliest start, shared capacity, prerequisites, publication approval, a parent, an accountable owner, a tracker owner, a canonical placement, a recheck-after date, the step contract, or "research is permitted".
 - The Article plan has exactly one "- Target length: 2000 words" line, with a whole number.
-- Channel ideas has the three channel lines when Deliverables include social, or "Not needed." when they do not.
-- Each Channel idea line is 200 characters or fewer.
 - Every H2 in the Article plan has an "- Adds:" line.
+- The Angle's Reader problem is one of the lines in positioning.md's Reader problems, quoted exactly.
+- The Reader problems section copies positioning.md's Reader problems word for word.
+- Channel ideas has LinkedIn, X and Instagram lines when Deliverables include social, each starting with a different line from positioning.md's Value section and each 200 characters or fewer; otherwise "Not needed.".
 
 Check the brief against the task and the sources step.
 
 Blocking findings:
+- A section, goal or channel idea that needs a file the task doesn't supply.
 - Reader problems that do not copy positioning.md's Reader problems word for word.
 - Facts that differ from the sources step's Facts, or that are missing or added.
 - A fact the sources step did not confirm.
