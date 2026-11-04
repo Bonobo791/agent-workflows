@@ -678,6 +678,64 @@ class BrandKitTest(unittest.TestCase):
 
 
 
+class ProcessLinesTest(unittest.TestCase):
+    def test_task_rejects_process_lines(self):
+        samples = ['Issue MC-15 is tracked here.', 'Due 2026-11-11 for review.', 'Do not start before the pilot.',
+                   'Check shared capacity first.', 'Check the prerequisite.', 'Publication requires approval.',
+                   'Parent C01 covers it.', 'Accountable lead: Ada.', 'Tracker owner: Ada.', 'Canonical placement: the blog.',
+                   'Recheck after launch.', 'Re-check after launch.']
+        for line in samples:
+            with self.subTest(line=line):
+                errors = run.check_task(task_text().replace('## Constraints\nNone.', f'## Constraints\n{line}'))
+                self.assertIn(f'remove this internal process line from the task: "{line}"', errors)
+
+    def test_schedule_line_is_allowed(self):
+        task = task_text().replace('## Constraints\nNone.', '## Constraints\nNone.').replace('## Details\nProduct:', '## Details\nSchedule: do not start before 2026-11-11\nProduct:')
+        self.assertFalse(any('process line' in e for e in run.check_task(task)))
+
+    def test_sources_and_brief_reject_process_facts(self):
+        sources = sources_text().replace('- Fact 0 https://site0', '- Publication requires approval https://site0')
+        self.assertIn('this is a process note, not a fact; remove it: "Publication requires approval https://site0.example.com/page0 (checked 2026-11-03)"',
+                      run.check_sources(sources, '', None, ['q'] * 5))
+        brief = full_brief('- Target length: 800 words').replace('A fact https://example.com', 'Shared capacity https://example.com')
+        self.assertTrue(any('this is a process note, not a fact' in e for e in run.check_brief(brief, task_text(), None)))
+
+
+class ApprovalTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.skills = self.tmp / 'skills'
+        (self.skills / 'brief').mkdir(parents=True)
+        (self.skills / 'brief' / 'SKILL.md').write_text('write brief')
+        (self.skills / 'brief' / 'REVIEW.md').write_text('review brief')
+        self.campaign = self.tmp / 'campaigns' / 'demo'
+        self.campaign.mkdir(parents=True)
+        (self.campaign / '00-task.md').write_text(task_text())
+        self.step = dict(TEXT_STEPS[0])
+
+    def run_one(self, client, ask):
+        return run.run_campaign(self.campaign, client, ask=ask, steps=[dict(self.step)], skills_dir=self.skills, roles=ROLES)
+
+    def test_approved_step_records_fingerprint(self):
+        self.run_one(FakeClient(['pass']), answers('a'))
+        text = (self.campaign / '01-brief' / 'APPROVED').read_text()
+        self.assertIn(f'fingerprint: {run.fingerprint(self.step, self.skills)}', text)
+
+    def test_run_stops_on_stale_approval(self):
+        self.run_one(FakeClient(['pass']), answers('a'))
+        (self.skills / 'brief' / 'SKILL.md').write_text('changed rules')
+        with self.assertRaisesRegex(run.WorkflowError, 'approved under older rules: 01-brief'):
+            self.run_one(FakeClient([]), answers())
+        with self.assertRaisesRegex(run.WorkflowError, 'rm -r campaigns/demo/01-brief campaigns/demo/final'):
+            self.run_one(FakeClient([]), answers())
+
+    def test_approval_without_fingerprint_is_stale(self):
+        self.run_one(FakeClient(['pass']), answers('a'))
+        (self.campaign / '01-brief' / 'APPROVED').write_text('2026-11-03 10:00\n')
+        with self.assertRaisesRegex(run.WorkflowError, 'approved under older rules: 01-brief'):
+            self.run_one(FakeClient([]), answers())
+
+
 class SearchLogTest(unittest.TestCase):
     def test_each_web_search_is_logged_and_returned(self):
         client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])

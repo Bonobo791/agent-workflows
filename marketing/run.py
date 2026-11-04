@@ -5,6 +5,8 @@ Every step: a Codex writer, Python checks, then a fresh Codex reviewer, then the
 """
 import argparse
 import difflib
+import hashlib
+import inspect
 import json
 import logging
 import os
@@ -45,6 +47,7 @@ NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
 URL_RE = re.compile(r'https?://\S+')
 RECHECK_RE = re.compile(r're-?check after', re.IGNORECASE)
+PROCESS_RE = re.compile(r"\b(?:issue\s+[A-Z]+-\d+|due\s+\d{4}-\d{2}-\d{2}|do not start before|shared capacity|prerequisites?|publication requires approval|parent\s+[A-Z]+\d+|accountable|tracker owner|canonical placement|recheck after|re-check after)\b", re.I)
 MIN_SEARCHES = 3  # the sources step
 MIN_URL_FACTS = 3
 MIN_SITES = 3
@@ -312,6 +315,8 @@ def check_task(task, design=True):
     errors += missing_sections(task, TASK_SECTIONS)
     if any(RECHECK_RE.search(line) for line in task.splitlines()):
         errors.append('"recheck after" lines are not allowed; the workflow researches when it runs')
+    errors += [f'remove this internal process line from the task: "{line}"' for line in task.splitlines()
+               if PROCESS_RE.search(line) and not line.startswith('Schedule:')]
     if 'Deliverables' in sections(task):
         try:
             wanted = parse_deliverables(task)
@@ -380,6 +385,7 @@ def check_sources(output, task, brief, searches=()):
     if not facts:
         errors.append('the Facts section needs at least one "- " line')
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts if not has_source(fact)]
+    errors += [f'this is a process note, not a fact; remove it: "{fact}"' for fact in facts if PROCESS_RE.search(fact)]
     if len(searches) < MIN_SEARCHES:
         errors.append(f'the sources step ran {len(searches)} web searches; it needs at least {MIN_SEARCHES}')
     url_facts = [fact for fact in facts if URL_RE.search(fact)]
@@ -414,6 +420,7 @@ def check_brief(output, task, brief):
     if len(TARGET_RE.findall(sections(output).get('Article plan', ''))) != 1:
         errors.append('Article plan needs one line like "- Target length: 2000 words" with a whole number.')
     errors += adds_errors(sections(output).get('Article plan', ''))
+    errors += [f'this is a process note, not a fact; remove it: "{fact}"' for fact in facts_of(output) if PROCESS_RE.search(fact)]
     found = positioning_sections(brand_of(task))
     problems = [problem_text(line) for line in bullets(found.get('Reader problems', ''))]
     values = [line.split('→')[0].strip() for line in bullets(found.get('Value', ''))]
@@ -1182,6 +1189,38 @@ def decide(step, step_dir, review, ask):
             print('Type a, r or q.')
 
 
+def fingerprint(step, skills_dir):
+    """What an approval depends on: the step's skills, its library skills and its check function."""
+    digest = hashlib.sha256()
+    parts = [load_skill(skills_dir, step['skill'], 'SKILL.md'), load_skill(skills_dir, step['skill'], 'REVIEW.md')]
+    for name in step['writer_skills'] + step['review_skills']:
+        path = LIBRARY_DIR / name / 'SKILL.md'
+        parts.append(path.read_text() if path.is_file() else '')
+    parts.append(inspect.getsource(CHECKS[step['check']]) if step.get('check') else '')
+    for part in parts:
+        digest.update(part.encode() + b'\0')
+    return digest.hexdigest()
+
+
+def stale_steps(campaign, steps, skills_dir):
+    stale = []
+    for step in steps:
+        approved = campaign / step['id'] / 'APPROVED'
+        if not approved.is_file():
+            continue
+        recorded = re.search(r'^fingerprint: ([0-9a-f]+)$', approved.read_text(), re.MULTILINE)
+        if recorded is None or recorded.group(1) != fingerprint(step, skills_dir):
+            stale.append(step)
+    return stale
+
+
+def stale_message(campaign, steps, stale):
+    first = steps.index(stale[0])
+    redo = [f'campaigns/{campaign.name}/{step["id"]}' for step in steps[first:]] + [f'campaigns/{campaign.name}/final']
+    return (f"these approved steps were approved under older rules: {', '.join(step['id'] for step in stale)}. "
+            f"Delete them and every later step to redo them: rm -r {' '.join(redo)}")
+
+
 def run_step(client, roles, skills_dir, campaign, step, ask):
     step_dir = campaign / step['id']
     step_dir.mkdir(exist_ok=True)
@@ -1214,7 +1253,7 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
         notes = decide(step, step_dir, review, ask)
         if not notes:
             log.info('[%s] approved by the owner', step['id'])
-            (step_dir / 'APPROVED').write_text(now() + '\n')
+            (step_dir / 'APPROVED').write_text(f"{now()}\nfingerprint: {fingerprint(step, skills_dir)}\n")
             return
         log.info('[%s] owner rejected; notes: %s', step['id'], notes)
         revision = (review, notes)
@@ -1246,6 +1285,13 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
     steps = campaign_steps(campaign, steps)
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
     check_skills(skills_dir, steps)
+    task = (campaign / '00-task.md').read_text()
+    errors = check_task(task)  # before any Codex call, so campaigns made before a rule are caught too
+    stale = stale_steps(campaign, steps, skills_dir)
+    if stale:
+        errors.append(stale_message(campaign, steps, stale))
+    if errors:
+        raise WorkflowError('; '.join(errors))
     if any(spec.partition('#')[0] in BRAND_INPUTS for step in steps for spec in step['inputs'] + step['review_inputs']):
         brand = brand_of((campaign / '00-task.md').read_text())
         errors = check_brand(brand)
