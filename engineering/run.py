@@ -271,6 +271,180 @@ def cmd_new(name, task_file):
     print(f'Next: python3 engineering/run.py run {name}')
 
 
+USAGE_FIELDS = {'input': 'input_tokens', 'cache_write': 'cache_creation_input_tokens',
+                'cache_read': 'cache_read_input_tokens', 'output': 'output_tokens'}
+
+
+def allowed_tools(build, session_name):
+    allowed = list(ROLES[session_name]['allowed'])
+    if session_name == 'builder':
+        allowed += [f'Bash({line})' for line in check_command_lines(read_task(build))]
+    return allowed
+
+
+def claude_args(build, session_name):
+    """Every call of a session gets the same flags; only --session-id or --resume differs."""
+    role = ROLES[session_name]
+    entry = load_sessions(build)[session_name]
+    argv = ['claude', '-p',
+            '--output-format', 'json',
+            '--model', role['model'],
+            '--effort', role['effort'],
+            '--max-budget-usd', f"{role['budget_usd']:.2f}",
+            '--permission-mode', 'dontAsk',
+            '--tools', role['tools'],
+            '--allowedTools', ','.join(allowed_tools(build, session_name)),
+            '--strict-mcp-config',
+            '--setting-sources', 'project',
+            '--disable-slash-commands',
+            '--exclude-dynamic-system-prompt-sections',
+            '--append-system-prompt', SYSTEM_RULES[session_name],
+            '--json-schema', schema_text(role['schema'])]
+    if entry['started']:
+        return argv + ['--resume', entry['id']]
+    return argv + ['--session-id', entry['id']]
+
+
+def claude_process(argv, prompt, cwd):
+    """The only place that starts claude. The prompt goes on stdin, never in argv."""
+    try:
+        done = run_command(argv, input=prompt, cwd=cwd, timeout=CLAUDE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise WorkflowError(f'claude did not finish within {CLAUDE_TIMEOUT} s')
+    if done.stderr.strip():
+        with (Path(cwd).parent / 'claude-stderr.log').open('a', encoding='utf-8') as handle:
+            handle.write(f'--- {now()}\n{done.stderr}')
+    return done.returncode, done.stdout
+
+
+def reply_field(reply, key):
+    if key not in reply:
+        raise WorkflowError(f'claude reply has no {key}')
+    return reply[key]
+
+
+def read_usage(paths):
+    records = []
+    for path in paths:
+        if path.is_file():
+            records += [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return records
+
+
+def record_usage(build, step_dir, session_name, what, reply):
+    usage = reply_field(reply, 'usage')
+    for key in USAGE_FIELDS.values():
+        if key not in usage:
+            raise WorkflowError(f'token usage has no {key}')
+    record = {'time': now(), 'what': what, 'session': session_name,
+              'session_id': reply_field(reply, 'session_id'), 'model': ROLES[session_name]['model'],
+              'subtype': reply_field(reply, 'subtype'), 'turns': reply_field(reply, 'num_turns'),
+              'cost_usd': reply_field(reply, 'total_cost_usd'),
+              **{name: usage[key] for name, key in USAGE_FIELDS.items()},
+              'denials': len(reply_field(reply, 'permission_denials'))}
+    with (step_dir / 'usage.jsonl').open('a', encoding='utf-8') as handle:
+        handle.write(json.dumps(record) + '\n')
+
+
+def usage_totals(paths, session=None):
+    """Adds up every call (every line) in the given usage files, optionally for one session only."""
+    totals = {'input': 0, 'cache_write': 0, 'cache_read': 0, 'output': 0, 'cost_usd': 0.0}
+    for record in read_usage(paths):
+        if session is not None and record['session'] != session:
+            continue
+        for key in totals:
+            totals[key] += record[key]
+    return totals
+
+
+def usage_line(totals):
+    fresh, written, read = totals['input'], totals['cache_write'], totals['cache_read']
+    seen = fresh + written + read
+    hit = round(100 * read / seen) if seen else 0
+    return (f"non-cached input {fresh + written} (input {fresh}, cache write {written}), "
+            f"cache read {read} ({hit}% of input), output {totals['output']}, cost ${totals['cost_usd']:.4f}")
+
+
+def session_attempted(build, session_name):
+    """True when a call of this session was recorded, so its first call ran and did not succeed."""
+    paths = [build / step / 'usage.jsonl' for step in STEP_IDS]
+    return any(record['session'] == session_name for record in read_usage(paths))
+
+
+def call_claude(build, session_name, prompt, step_dir, what):
+    sessions = load_sessions(build)
+    entry = sessions[session_name]
+    if not entry['started'] and session_attempted(build, session_name):
+        entry['id'] = str(uuid.uuid4())
+        save_sessions(build, sessions)
+        log.info('starting a new %s session because the first call never finished', session_name)
+    calls = step_dir / 'calls'
+    calls.mkdir(parents=True, exist_ok=True)
+    stem = f'{len(list(calls.glob("*-prompt.txt"))) + 1:02d}-{what}'
+    (calls / f'{stem}-prompt.txt').write_text(prompt)
+    returncode, stdout = claude_process(claude_args(build, session_name), prompt, build / 'worktree')
+    (calls / f'{stem}-reply.json').write_text(stdout)
+    try:
+        reply = json.loads(stdout)
+    except json.JSONDecodeError:
+        reply = None
+    if not isinstance(reply, dict):
+        raise WorkflowError(f"{what}: claude did not return JSON: {stdout[:300]!r}; saved to {calls / f'{stem}-reply.json'}")
+    record_usage(build, step_dir, session_name, what, reply)
+    if returncode != 0 or reply.get('is_error') or reply.get('subtype') != 'success':
+        raise WorkflowError(f"{what}: claude ended with {reply.get('subtype')}: {reply.get('errors')}")
+    if reply_field(reply, 'session_id') != entry['id']:
+        raise WorkflowError(f"{what}: claude used session {reply['session_id']}, expected {entry['id']}")
+    if not entry['started']:
+        entry['started'] = True
+        save_sessions(build, sessions)
+    structured = reply_field(reply, 'structured_output')
+    if not isinstance(structured, dict):
+        raise WorkflowError(f'{what}: structured output is not an object')
+    denials = reply_field(reply, 'permission_denials')
+    for denial in denials:
+        log.warning('%s: permission denied for %s %s', what, denial['tool_name'], denial['tool_input'])
+    if denials:
+        (calls / f'{stem}-denials.json').write_text(json.dumps(denials, indent=2) + '\n')
+    return structured
+
+
+def step_state(step_dir):
+    if (step_dir / 'APPROVED').exists():
+        return 'approved'
+    if (step_dir / 'review.json').exists() or (step_dir / 'body.md').exists():
+        return 'waiting for the owner'
+    if step_dir.is_dir() and any(step_dir.iterdir()):
+        return 'in progress'
+    return 'not started'
+
+
+def cmd_status(name):
+    build = BUILDS_DIR / name
+    if not build.is_dir():
+        raise WorkflowError(f'no build named {name} in {BUILDS_DIR}')
+    paths = [build / step / 'usage.jsonl' for step in STEP_IDS]
+    print(f'Build {name}: {build}')
+    print(f"{'step':<18}{'state':<24}usage")
+    for step in STEP_IDS:
+        print(f"{step:<18}{step_state(build / step):<24}{usage_line(usage_totals([build / step / 'usage.jsonl']))}")
+    print()
+    print(f"{'session':<18}{'':<24}usage")
+    for session in SESSIONS:
+        print(f"{session:<18}{'':<24}{usage_line(usage_totals(paths, session))}")
+    print(f"{'total':<18}{'':<24}{usage_line(usage_totals(paths))}")
+    print()
+    print('Context sent on the last call of each session (input + cache write + cache read):')
+    records = read_usage(paths)
+    for session in SESSIONS:
+        mine = [record for record in records if record['session'] == session]
+        if not mine:
+            print(f'  {session}: no calls yet')
+            continue
+        last = mine[-1]
+        print(f"  {session}: {last['input'] + last['cache_write'] + last['cache_read']} tokens")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Engineering workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)

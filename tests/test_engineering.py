@@ -165,5 +165,169 @@ class NewTest(unittest.TestCase):
         self.assertFalse((self.builds / 'status-cost').exists())
 
 
+class BuildTest(unittest.TestCase):
+    """A real build (worktree included) made by `new` in a temporary target repository."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name).resolve()
+        repo = make_repo(root / 'repo')
+        self.builds = root / 'builds'
+        patch = mock.patch.object(eng, 'BUILDS_DIR', self.builds)
+        patch.start()
+        self.addCleanup(patch.stop)
+        task = root / 'task.md'
+        task.write_text(task_text(repo))
+        with contextlib.redirect_stdout(io.StringIO()):
+            eng.cmd_new('status-cost', str(task))
+        self.build = self.builds / 'status-cost'
+        self.step = self.build / '01-plan'
+        self.step.mkdir()
+
+
+def claude_reply(session_id, output='Done.', **extra):
+    reply = {'type': 'result', 'subtype': 'success', 'is_error': False, 'result': output,
+             'structured_output': {'output': output}, 'session_id': session_id, 'num_turns': 2,
+             'total_cost_usd': 0.25,
+             'usage': {'input_tokens': 2, 'cache_creation_input_tokens': 4714,
+                       'cache_read_input_tokens': 61972, 'output_tokens': 300},
+             'permission_denials': []}
+    reply.update(extra)
+    return reply
+
+
+def session_of(argv):
+    flag = '--session-id' if '--session-id' in argv else '--resume'
+    return argv[argv.index(flag) + 1]
+
+
+def without_session_flags(argv):
+    argv = list(argv)
+    for flag in ('--session-id', '--resume'):
+        if flag in argv:
+            index = argv.index(flag)
+            del argv[index:index + 2]
+    return argv
+
+
+def echo_ok(argv, prompt, cwd):
+    return claude_reply(session_of(argv))
+
+
+def failed_budget(argv, prompt, cwd):
+    return 1, json.dumps(claude_reply(session_of(argv), is_error=True, subtype='error_max_budget_usd',
+                                      errors=['Reached maximum budget ($5.00)']))
+
+
+class FakeClaude:
+    """Stands in for claude_process: returns queued replies in order and records every call."""
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    def __call__(self, argv, prompt, cwd):
+        self.calls.append((list(argv), prompt, cwd))
+        reply = self.replies.pop(0)
+        if callable(reply):
+            reply = reply(argv, prompt, cwd)
+        if isinstance(reply, tuple):
+            return reply
+        return 0, json.dumps(reply)
+
+
+class CallTest(BuildTest):
+    def test_first_call_uses_session_id_then_resume(self):
+        fake = FakeClaude(echo_ok, echo_ok)
+        with mock.patch.object(eng, 'claude_process', fake):
+            eng.call_claude(self.build, 'planner', 'first prompt', self.step, 'plan')
+            eng.call_claude(self.build, 'planner', 'second prompt', self.step, 'revise')
+        first, second = fake.calls[0][0], fake.calls[1][0]
+        self.assertIn('--session-id', first)
+        self.assertNotIn('--resume', first)
+        self.assertIn('--resume', second)
+        self.assertNotIn('--session-id', second)
+        self.assertEqual(session_of(first), session_of(second))
+
+    def test_every_call_of_a_session_has_the_same_flags(self):
+        before = eng.claude_args(self.build, 'builder')
+        fake = FakeClaude(echo_ok)
+        with mock.patch.object(eng, 'claude_process', fake):
+            eng.call_claude(self.build, 'builder', 'prompt', self.step, 'phase-1')
+        after = eng.claude_args(self.build, 'builder')
+        self.assertNotEqual(before, after)
+        self.assertEqual(without_session_flags(before), without_session_flags(after))
+        self.assertIn('Bash(python3 -m unittest discover -s tests)', after[after.index('--allowedTools') + 1])
+
+    def test_prompt_goes_on_stdin_not_argv(self):
+        argv = ['claude', '-p']
+        done = subprocess.CompletedProcess(argv, 0, '{}', '')
+        with mock.patch.object(eng, 'run_command', return_value=done) as run:
+            eng.claude_process(argv, 'SECRET PROMPT TEXT', self.build / 'worktree')
+        args, kwargs = run.call_args
+        self.assertEqual(kwargs['input'], 'SECRET PROMPT TEXT')
+        self.assertNotIn('SECRET PROMPT TEXT', args[0])
+
+    def test_reply_that_is_not_json_is_an_error(self):
+        fake = FakeClaude((0, 'No conversation found with session ID: x\n'))
+        with mock.patch.object(eng, 'claude_process', fake):
+            with self.assertRaisesRegex(eng.WorkflowError, 'did not return JSON'):
+                eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan')
+
+    def test_budget_reply_is_an_error_and_still_recorded(self):
+        fake = FakeClaude(failed_budget)
+        with mock.patch.object(eng, 'claude_process', fake):
+            with self.assertRaisesRegex(eng.WorkflowError, 'error_max_budget_usd'):
+                eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan')
+        self.assertEqual(len((self.step / 'usage.jsonl').read_text().splitlines()), 1)
+
+    def test_session_marked_started_only_after_success(self):
+        fake = FakeClaude(failed_budget, echo_ok)
+        with mock.patch.object(eng, 'claude_process', fake):
+            with self.assertRaises(eng.WorkflowError):
+                eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan')
+            self.assertFalse(eng.load_sessions(self.build)['planner']['started'])
+            eng.call_claude(self.build, 'planner', 'prompt', self.step, 'revise')
+        self.assertTrue(eng.load_sessions(self.build)['planner']['started'])
+
+    def test_unfinished_first_call_gets_a_new_session_id(self):
+        fake = FakeClaude(failed_budget, echo_ok)
+        with mock.patch.object(eng, 'claude_process', fake):
+            with self.assertRaises(eng.WorkflowError):
+                eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan')
+            first_id = eng.load_sessions(self.build)['planner']['id']
+            with self.assertLogs('engineering', level='INFO') as logs:
+                eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan-again')
+        self.assertTrue(any('starting a new planner session because the first call never finished' in line
+                            for line in logs.output))
+        second_argv = fake.calls[1][0]
+        self.assertIn('--session-id', second_argv)
+        self.assertNotEqual(session_of(second_argv), first_id)
+
+
+class UsageTest(BuildTest):
+    def test_usage_line_shows_non_cached_and_hit_rate(self):
+        line = eng.usage_line({'input': 2, 'cache_write': 4714, 'cache_read': 61972, 'output': 300, 'cost_usd': 0.5})
+        self.assertIn('non-cached input 4716', line)
+        self.assertIn('93% of input', line)
+
+    def test_status_adds_every_call(self):
+        step3 = self.build / '03-build'
+        step3.mkdir()
+        fake = FakeClaude(echo_ok, echo_ok)
+        with mock.patch.object(eng, 'claude_process', fake):
+            eng.call_claude(self.build, 'planner', 'prompt', self.step, 'plan')
+            eng.call_claude(self.build, 'builder', 'prompt', step3, 'phase-1')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            eng.cmd_status('status-cost')
+        rows = {line.split()[0]: line for line in out.getvalue().splitlines() if line.strip()}
+        self.assertIn('non-cached input 9432', rows['total'])
+        self.assertIn('cost $0.5000', rows['total'])
+        self.assertIn('non-cached input 4716', rows['planner'])
+        self.assertIn('non-cached input 4716', rows['builder'])
+
+
 if __name__ == '__main__':
     unittest.main()
