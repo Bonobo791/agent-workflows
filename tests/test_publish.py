@@ -602,6 +602,31 @@ class QueueTest(unittest.TestCase):
             self.run_once()
         self.assertEqual(self.state('a')['state'], 'posted')
 
+    def test_unexpected_adapter_error_is_failed_or_unknown_and_never_retried(self):
+        ran = []
+
+        def fails_before_sending(ctx):
+            ran.append('fails')
+            raise RuntimeError('boom')
+
+        def fails_after_sending(ctx):
+            ran.append('sends')
+            ctx.sent()
+            raise RuntimeError('lost')
+
+        self.approve([item('a', platform='fails'), item('b', platform='sends')])
+        adapters = {'fails': fails_before_sending, 'sends': fails_after_sending, 'website': publish.check_article}
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            publish.publish_campaign(self.campaign, {}, self.http, clock=self.clock, sleep=self.sleep, adapters=adapters)
+            publish.publish_campaign(self.campaign, {}, self.http, clock=self.clock, sleep=self.sleep, adapters=adapters)
+        self.assertEqual(self.state('a')['state'], 'failed')
+        self.assertEqual(self.state('a')['error'], 'unexpected RuntimeError: boom')
+        self.assertEqual(self.state('b')['state'], 'unknown')
+        self.assertEqual(self.state('b')['error'], 'unexpected RuntimeError: lost')
+        self.assertEqual(ran, ['fails', 'sends'])
+        self.assertIn('RuntimeError: boom', err.getvalue())
+
     def test_http_error_becomes_a_response_and_url_error_a_network_error(self):
         error = urllib.error.HTTPError('https://x.example', 404, 'Not Found', {}, io.BytesIO(b'missing'))
         with mock.patch.object(publish.OPENER, 'open', side_effect=error):

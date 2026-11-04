@@ -15,6 +15,7 @@ import re
 import shutil
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -238,6 +239,7 @@ class ItemContext:
         self.sleep = sleep
         self.data = data
         self.attempt = attempt
+        self.sent_called = False  # set once the 'sent' event is written, just before the publish call
 
     def save(self, data):
         self.data.update(data)
@@ -245,6 +247,7 @@ class ItemContext:
 
     def sent(self):
         append_event(self.step_dir, self.clock, self.item['id'], 'sent', attempt=self.attempt)
+        self.sent_called = True
 
 
 def advice(kind, campaign, item):
@@ -275,6 +278,10 @@ def attempt_item(campaign, step_dir, item, states, config, http, clock, sleep, a
         report_failure(campaign, step_dir, item, clock, 'failed', attempt, error)
     except OutcomeUnknown as error:
         report_failure(campaign, step_dir, item, clock, 'unknown', attempt, error)
+    except Exception as error:  # an adapter bug: never retried; unknown if the publish request may have gone out
+        traceback.print_exc()
+        kind = 'unknown' if ctx.sent_called else 'failed'
+        report_failure(campaign, step_dir, item, clock, kind, attempt, f'unexpected {type(error).__name__}: {error}')
     else:
         append_event(step_dir, clock, item_id, 'posted', attempt=attempt, post_id=post_id, url=url)
         print(f'{campaign.name} {item_id}: posted {url}')
