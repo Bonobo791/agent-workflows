@@ -347,6 +347,10 @@ def publish_errors(task, wanted):
                 errors.append(f'schedule line must look like "- x: 2026-11-10T14:00Z": {line}')
                 continue
             platform = match.group(1)
+            try:
+                time.strptime(match.group(2), '%Y-%m-%dT%H:%MZ')
+            except ValueError:
+                errors.append(f'schedule time is not a real date and time: {line}')
             if platform not in targets:
                 errors.append(f'schedule names {platform}, which is not in ## Publish to')
             if platform in named:

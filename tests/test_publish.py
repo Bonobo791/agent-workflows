@@ -60,6 +60,10 @@ class PublishTaskTest(unittest.TestCase):
         errors = run.check_task(publish_task(extra=LINKEDIN + '## Schedule\n- x: 2026-11-10T14:00Z\n\n'))
         self.assertIn('schedule names x, which is not in ## Publish to', errors)
 
+    def test_schedule_time_must_be_a_real_date(self):
+        errors = run.check_task(publish_task(extra=LINKEDIN + '## Schedule\n- linkedin: 2026-11-31T14:00Z\n\n'))
+        self.assertIn('schedule time is not a real date and time: - linkedin: 2026-11-31T14:00Z', errors)
+
     def test_schedule_times_adds_seconds(self):
         task = publish_task(extra='## Publish to\nlinkedin, x\n\n' + ARTICLE_URL + '## Schedule\n- x: 2026-11-10T14:00Z\n- linkedin: 2026-11-10T09:30Z\n\n')
         self.assertEqual(run.check_task(task), [])
@@ -566,6 +570,29 @@ class QueueTest(unittest.TestCase):
             with self.assertRaises(publish.RetryLater):
                 publish.send(publish.http_request, 'token', False, 0, 'POST', 'https://oauth2.googleapis.com/token', body=b'x')
 
+    def test_unreadable_approval_stops_only_that_campaign(self):
+        bad = self.root / 'a-bad' / '09-publish'
+        bad.mkdir(parents=True)
+        (bad / 'APPROVED').write_text('{not json')
+        self.approve([item('article', platform='website', action='check', url='https://moderaty.com/blog/demo')])
+        self.http.answers = [(200, {}, b'')]
+        config = self.root / 'publish.json'
+        config.write_text('{}')
+        config.chmod(0o600)
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = publish.publish_due(self.root, config, http=self.http, clock=self.clock, sleep=self.sleep)
+        self.assertEqual(code, 1)
+        self.assertIn('a-bad: 09-publish/APPROVED is unreadable; nothing was sent', err.getvalue())
+        self.assertEqual(self.state('article')['state'], 'posted')
+
+    def test_missing_final_index_stops_only_the_published_list(self):
+        self.approve([item('a')])
+        (self.campaign / 'final' / 'index.md').unlink()
+        with self.assertRaisesRegex(publish.PublishError, 'final/index.md is missing; the posts are live, but the Published list was not written'):
+            self.run_once()
+        self.assertEqual(self.state('a')['state'], 'posted')
+
     def test_http_error_becomes_a_response_and_url_error_a_network_error(self):
         error = urllib.error.HTTPError('https://x.example', 404, 'Not Found', {}, io.BytesIO(b'missing'))
         with mock.patch.object(publish.OPENER, 'open', side_effect=error):
@@ -975,12 +1002,18 @@ class YouTubeTest(AdapterTest):
         with self.assertRaises(publish.StopItem):
             publish.youtube_item(self.ctx(self.short(), FakeHttp([(200, {}, b'<html>')]), {'youtube': YT_CONFIG}))
 
-    def test_status_answer_without_a_video_id_stops(self):
-        for answer in ((200, {}, b'<html>'), (200, {}, b'{}'), (308, {'range': 'items=0-3'}, b'')):
+    def test_status_answer_200_without_a_video_id_is_unknown(self):
+        for answer in ((200, {}, b'<html>'), (200, {}, b'{}')):
             ctx = self.ctx(self.short(), FakeHttp([self.token(), answer]), {'youtube': YT_CONFIG})
             ctx.data['session_url'] = SESSION
-            with self.subTest(answer=answer), self.assertRaises(publish.StopItem):
+            with self.subTest(answer=answer), self.assertRaises(publish.OutcomeUnknown):
                 publish.youtube_item(ctx)
+
+    def test_status_answer_with_an_odd_range_stops(self):
+        ctx = self.ctx(self.short(), FakeHttp([self.token(), (308, {'range': 'items=0-3'}, b'')]), {'youtube': YT_CONFIG})
+        ctx.data['session_url'] = SESSION
+        with self.assertRaises(publish.StopItem):
+            publish.youtube_item(ctx)
 
     def test_upload_answer_without_a_video_id_is_unknown(self):
         http = FakeHttp([self.token(), self.session(), (200, {}, b'{}')])

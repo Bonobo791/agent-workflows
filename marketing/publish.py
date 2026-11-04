@@ -290,6 +290,8 @@ def report_failure(campaign, step_dir, item, clock, kind, attempt, error):
 
 def add_published_list(campaign, plan, states):
     index = campaign / 'final' / 'index.md'
+    if not index.is_file():
+        raise PublishError(f'{campaign.name}: final/index.md is missing; the posts are live, but the Published list was not written')
     text = index.read_text()
     if '## Published' in text:
         return
@@ -300,7 +302,13 @@ def add_published_list(campaign, plan, states):
 def publish_campaign(campaign, config, http, clock=time.time, sleep=time.sleep, adapters=None):
     adapters = ADAPTERS if adapters is None else adapters
     step_dir = campaign / '09-publish'
-    approval = json.loads((step_dir / 'APPROVED').read_text())
+    try:
+        approval = json.loads((step_dir / 'APPROVED').read_text())
+        parse_time(approval['approved_at'])
+        if 'plan_sha256' not in approval:
+            raise KeyError('plan_sha256')
+    except (OSError, ValueError, KeyError, TypeError):
+        raise PublishError(f'{campaign.name}: 09-publish/APPROVED is unreadable; nothing was sent') from None
     plan_path = step_dir / 'plan.json'
     if not plan_path.is_file():
         raise PublishError(f'{campaign.name}: 09-publish/APPROVED exists but plan.json is missing; nothing was sent')
@@ -667,7 +675,7 @@ def youtube_session_position(ctx, session, headers, size):
     response = send(ctx.http, what, False, ctx.clock(), 'PUT', session,
                     headers={**headers, 'Content-Length': '0', 'Content-Range': f'bytes */{size}'}, body=b'')
     if response.status in (200, 201):
-        return 'done', dig(answer_json(response, what), what, 'id')
+        return 'done', published_field(response, 'YouTube upload', 'id')
     if response.status == 308:
         received = response.headers.get('range')
         if not received:
