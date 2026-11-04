@@ -3,18 +3,15 @@
 This module does not import run.py (run.py imports this one). Every HTTP call goes through an `http`
 callable, so tests never reach the network.
 """
-import base64
 import calendar
 import collections
 import datetime
 import email.utils
 import fcntl
 import hashlib
-import hmac
 import json
 import os
 import re
-import secrets
 import shutil
 import sys
 import time
@@ -28,7 +25,7 @@ RETRY_MINUTES = [5, 10, 20, 40]
 MAX_ATTEMPTS = 5
 HTTP_TIMEOUT = 60      # seconds, every request except the YouTube upload PUT
 UPLOAD_TIMEOUT = 900   # seconds, the YouTube upload PUT
-PLATFORM_NAMES = {'website': 'website', 'linkedin': 'LinkedIn', 'x': 'X', 'instagram': 'Instagram', 'youtube': 'YouTube'}
+PLATFORM_NAMES = {'website': 'website', 'linkedin': 'LinkedIn', 'instagram': 'Instagram', 'youtube': 'YouTube'}
 SENT_STOPPED = 'the publish request was sent but the run stopped before the answer; check the account'
 
 
@@ -488,37 +485,6 @@ def linkedin_comment(ctx, org, headers):
     return comment_id, ctx.states['linkedin-post']['url']
 
 
-def oauth_enc(text):
-    return urllib.parse.quote(text, safe='-._~')
-
-
-def oauth1_base_string(method, url, params):
-    """`params` holds every request parameter as (key, value) pairs: the oauth_ ones and the URL's query. The body is not included."""
-    parameter_string = '&'.join(f'{key}={value}' for key, value in sorted((oauth_enc(k), oauth_enc(v)) for k, v in params))
-    return '&'.join([method.upper(), oauth_enc(url.split('?', 1)[0]), oauth_enc(parameter_string)])
-
-
-def oauth1_header(method, url, api_key, api_secret, token, token_secret, nonce, timestamp):
-    oauth = {'oauth_consumer_key': api_key, 'oauth_nonce': nonce, 'oauth_signature_method': 'HMAC-SHA1',
-             'oauth_timestamp': timestamp, 'oauth_token': token, 'oauth_version': '1.0'}
-    query = urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query, keep_blank_values=True)
-    base = oauth1_base_string(method, url, list(oauth.items()) + query)
-    key = f'{oauth_enc(api_secret)}&{oauth_enc(token_secret)}'
-    oauth['oauth_signature'] = base64.b64encode(hmac.new(key.encode(), base.encode(), hashlib.sha1).digest()).decode()
-    return 'OAuth ' + ', '.join(f'{oauth_enc(k)}="{oauth_enc(v)}"' for k, v in sorted(oauth.items()))
-
-
-def multipart(fields, files):
-    """`fields` are (name, value) pairs; `files` are (name, filename, content_type, data). Returns (Content-Type, body)."""
-    boundary = secrets.token_hex(16)
-    parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode() for name, value in fields]
-    for name, filename, content_type, data in files:
-        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
-                     f'Content-Type: {content_type}\r\n\r\n'.encode() + data + b'\r\n')
-    parts.append(f'--{boundary}--\r\n'.encode())
-    return f'multipart/form-data; boundary={boundary}', b''.join(parts)
-
-
 def published_field(response, what, *keys):
     """An id from a 2xx answer to a publish call. The post is live already, so a missing id is OutcomeUnknown, never StopItem."""
     try:
@@ -528,33 +494,6 @@ def published_field(response, what, *keys):
     except (ValueError, KeyError, TypeError):
         raise OutcomeUnknown(f'{what} answered without {".".join(keys)}; check the account') from None
     return value
-
-
-def x_item(ctx):
-    settings = platform_settings(ctx, 'x', ['username', 'api_key', 'api_secret', 'access_token', 'access_token_secret'])
-
-    def auth(method, url):
-        return oauth1_header(method, url, settings['api_key'], settings['api_secret'], settings['access_token'],
-                             settings['access_token_secret'], secrets.token_hex(16), str(int(ctx.clock())))
-
-    body = {'text': ctx.item['text']}
-    if ctx.item.get('media'):
-        upload_url = 'https://api.x.com/2/media/upload'
-        content_type, data = multipart([('media_category', 'tweet_image')],
-                                       [('media', 'x.png', 'image/png', (ctx.step_dir / ctx.item['media'][0]['path']).read_bytes())])
-        upload = check(send(ctx.http, 'X media upload', False, ctx.clock(), 'POST', upload_url,
-                            headers={'Authorization': auth('POST', upload_url), 'Content-Type': content_type}, body=data),
-                       {200, 201}, 'X media upload', False, ctx.clock())
-        body['media'] = {'media_ids': [dig(answer_json(upload, 'X media upload'), 'X media upload', 'data', 'id')]}
-    if 'reply_to' in ctx.item:
-        body['reply'] = {'in_reply_to_tweet_id': ctx.states[ctx.item['reply_to']]['post_id']}
-    ctx.sent()
-    post_url = 'https://api.x.com/2/tweets'
-    answer = check(send(ctx.http, 'X post', True, ctx.clock(), 'POST', post_url,
-                        headers={'Authorization': auth('POST', post_url), 'Content-Type': 'application/json'}, body=json.dumps(body).encode()),
-                   {201}, 'X post', True, ctx.clock())
-    tweet_id = published_field(answer, 'X post', 'data', 'id')
-    return tweet_id, f"https://x.com/{settings['username']}/status/{tweet_id}"
 
 
 FORM_HEADERS = {'Content-Type': 'application/x-www-form-urlencoded'}
@@ -752,4 +691,4 @@ def youtube_item(ctx):
     return video_id, youtube_url(video_id)
 
 
-ADAPTERS = {'website': check_article, 'linkedin': linkedin_item, 'x': x_item, 'instagram': instagram_item, 'youtube': youtube_item}
+ADAPTERS = {'website': check_article, 'linkedin': linkedin_item, 'instagram': instagram_item, 'youtube': youtube_item}

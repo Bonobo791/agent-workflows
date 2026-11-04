@@ -39,10 +39,14 @@ class PublishTaskTest(unittest.TestCase):
 
     def test_unknown_platform_is_an_error(self):
         errors = run.check_task(publish_task(extra='## Publish to\nmastodon\n\n' + ARTICLE_URL))
-        self.assertIn('unknown platform "mastodon"; use any of: linkedin, x, instagram, youtube', errors)
+        self.assertIn('unknown platform "mastodon"; use any of: linkedin, instagram, youtube', errors)
 
     def test_targets_come_back_in_platform_order(self):
-        self.assertEqual(run.publish_targets(task_text() + '## Publish to\nyoutube, x\n'), ['x', 'youtube'])
+        self.assertEqual(run.publish_targets(task_text() + '## Publish to\nyoutube, linkedin\n'), ['linkedin', 'youtube'])
+
+    def test_x_in_publish_to_is_refused(self):
+        errors = run.check_task(publish_task(extra='## Publish to\nx\n\n' + ARTICLE_URL))
+        self.assertIn('x is not posted automatically, because the X API charges per post. Remove it from ## Publish to and post the thread by hand from final/05-x.md.', errors)
 
     def test_instagram_needs_images(self):
         errors = run.check_task(publish_task(deliverables='article, social, reel', extra='## Publish to\ninstagram\n\n' + ARTICLE_URL))
@@ -54,23 +58,22 @@ class PublishTaskTest(unittest.TestCase):
 
     def test_schedule_line_format(self):
         errors = run.check_task(publish_task(extra=LINKEDIN + '## Schedule\n- linkedin: 2026-11-10 14:00\n\n'))
-        self.assertIn('schedule line must look like "- x: 2026-11-10T14:00Z": - linkedin: 2026-11-10 14:00', errors)
+        self.assertIn('schedule line must look like "- linkedin: 2026-11-10T09:30Z": - linkedin: 2026-11-10 14:00', errors)
 
     def test_schedule_platform_must_be_a_target(self):
-        errors = run.check_task(publish_task(extra=LINKEDIN + '## Schedule\n- x: 2026-11-10T14:00Z\n\n'))
-        self.assertIn('schedule names x, which is not in ## Publish to', errors)
+        errors = run.check_task(publish_task(extra=LINKEDIN + '## Schedule\n- instagram: 2026-11-10T14:00Z\n\n'))
+        self.assertIn('schedule names instagram, which is not in ## Publish to', errors)
 
     def test_schedule_time_must_be_a_real_date(self):
         errors = run.check_task(publish_task(extra=LINKEDIN + '## Schedule\n- linkedin: 2026-11-31T14:00Z\n\n'))
         self.assertIn('schedule time is not a real date and time: - linkedin: 2026-11-31T14:00Z', errors)
 
     def test_schedule_times_adds_seconds(self):
-        task = publish_task(extra='## Publish to\nlinkedin, x\n\n' + ARTICLE_URL + '## Schedule\n- x: 2026-11-10T14:00Z\n- linkedin: 2026-11-10T09:30Z\n\n')
+        task = publish_task(extra='## Publish to\nlinkedin, instagram\n\n' + ARTICLE_URL + '## Schedule\n- instagram: 2026-11-10T14:00Z\n- linkedin: 2026-11-10T09:30Z\n\n')
         self.assertEqual(run.check_task(task), [])
-        self.assertEqual(run.schedule_times(task), {'x': '2026-11-10T14:00:00Z', 'linkedin': '2026-11-10T09:30:00Z'})
+        self.assertEqual(run.schedule_times(task), {'instagram': '2026-11-10T14:00:00Z', 'linkedin': '2026-11-10T09:30:00Z'})
 
-
-PUBLISH_ALL = '## Publish to\nlinkedin, x, instagram, youtube\n\n' + ARTICLE_URL
+PUBLISH_ALL = '## Publish to\nlinkedin, instagram, youtube\n\n' + ARTICLE_URL
 
 
 def fake_tool(args, cwd):
@@ -86,12 +89,11 @@ class PlanMixin:
         self.write_task(PUBLISH_ALL)
         self.write('03-article/output.md', 'Meta description: ' + 'm' * 155 + '\n# Demo title\nBody.')
         self.write('04-linkedin/output.md', '## Post\nTry it (free) #Moderaty\nLink in the first comment.\n\n## First comment\nRead it: [ARTICLE LINK]\n')
-        self.write('05-x/output.md', '1/ First post.\n\n2/ Read it: [ARTICLE LINK]\n')
         self.write('06-instagram/output.md', '## Caption\nA caption. Link in bio\n\n## Hashtags\n#a #b #c\n\n## Image text\nShort text\n')
-        for name in ('linkedin.png', 'x.png', 'instagram.png'):
+        for name in ('linkedin.png', 'instagram.png'):
             self.write(f'07-images/{name}', b'png')
         self.write('08-reel/reel.mp4', b'mp4')
-        for step in ('03-article', '04-linkedin', '05-x', '06-instagram', '07-images', '08-reel'):
+        for step in ('03-article', '04-linkedin', '06-instagram', '07-images', '08-reel'):
             self.write(f'{step}/APPROVED', '2026-11-04T10:00:00Z\n')
         self.tool = mock.Mock(side_effect=fake_tool)
         patcher = mock.patch('run.run_tool', self.tool)
@@ -116,20 +118,14 @@ class PlanMixin:
 class PlanTest(PlanMixin, unittest.TestCase):
     def test_items_follow_platform_order(self):
         ids = [item['id'] for item in self.plan()['items']]
-        self.assertEqual(ids, ['article', 'linkedin-post', 'linkedin-comment', 'x-1', 'x-2', 'instagram-post', 'youtube-short'])
+        self.assertEqual(ids, ['article', 'linkedin-post', 'linkedin-comment', 'instagram-post', 'youtube-short'])
 
     def test_article_link_is_replaced_everywhere(self):
         plan = self.plan()
         self.assertNotIn(run.LINK, json.dumps(plan, ensure_ascii=False))
         self.assertEqual(self.item(plan, 'linkedin-comment')['text'], 'Read it: https://moderaty.com/blog/demo')
-        self.assertIn('Read it: https://moderaty.com/blog/demo', self.item(plan, 'x-2')['text'])
+        self.assertTrue(self.item(plan, 'youtube-short')['text'].endswith('https://moderaty.com/blog/demo'))
 
-    def test_x_posts_reply_in_order(self):
-        plan = self.plan()
-        self.assertNotIn('reply_to', self.item(plan, 'x-1'))
-        self.assertEqual(self.item(plan, 'x-2')['reply_to'], 'x-1')
-        self.assertEqual(self.item(plan, 'x-2')['depends_on'], ['x-1'])
-        self.assertTrue(self.item(plan, 'x-2')['text'].startswith('2/ '))
 
     def test_linkedin_comment_depends_on_the_post(self):
         comment = self.item(self.plan(), 'linkedin-comment')
@@ -149,7 +145,7 @@ class PlanTest(PlanMixin, unittest.TestCase):
     def test_media_hashes_match_the_files(self):
         plan = self.plan()
         paths = sorted(media['path'] for item in plan['items'] for media in item.get('media', []))
-        self.assertEqual(paths, ['media/instagram.jpg', 'media/linkedin.png', 'media/reel.mp4', 'media/x.png'])
+        self.assertEqual(paths, ['media/instagram.jpg', 'media/linkedin.png', 'media/reel.mp4'])
         for item in plan['items']:
             for media in item.get('media', []):
                 data = (self.campaign / '09-publish' / media['path']).read_bytes()
@@ -162,10 +158,9 @@ class PlanTest(PlanMixin, unittest.TestCase):
         self.assertEqual((self.campaign / '09-publish' / 'plan.json').read_bytes(), first)
 
     def test_schedule_sets_not_before(self):
-        self.write_task(PUBLISH_ALL + '## Schedule\n- x: 2026-11-10T14:00Z\n\n')
+        self.write_task(PUBLISH_ALL + '## Schedule\n- instagram: 2026-11-10T14:00Z\n\n')
         plan = self.plan()
-        self.assertEqual(self.item(plan, 'x-1')['not_before'], '2026-11-10T14:00:00Z')
-        self.assertEqual(self.item(plan, 'x-2')['not_before'], '2026-11-10T14:00:00Z')
+        self.assertEqual(self.item(plan, 'instagram-post')['not_before'], '2026-11-10T14:00:00Z')
         self.assertIsNone(self.item(plan, 'linkedin-post')['not_before'])
 
     def test_long_youtube_title_is_an_error(self):
@@ -179,13 +174,11 @@ class PlanTest(PlanMixin, unittest.TestCase):
             self.plan()
 
     def test_platforms_not_listed_are_left_out(self):
-        self.write_task('## Publish to\nx\n\n' + ARTICLE_URL)
-        self.assertEqual([item['id'] for item in self.plan()['items']], ['article', 'x-1', 'x-2'])
+        self.write_task('## Publish to\nyoutube\n\n' + ARTICLE_URL)
+        self.assertEqual([item['id'] for item in self.plan()['items']], ['article', 'youtube-short'])
 
-    def test_preview_shows_x_cost(self):
-        preview = run.plan_preview(self.plan(), self.campaign / '09-publish')
-        self.assertIn('X cost: about $0.215', preview)
-
+    def test_no_plan_item_is_for_x(self):
+        self.assertNotIn('x', [item['platform'] for item in self.plan()['items']])
 
 def make_skills(root):
     skills = root / 'skills'
@@ -566,7 +559,7 @@ class QueueTest(unittest.TestCase):
     def test_a_body_cut_off_mid_read_is_a_network_error(self):
         with mock.patch.object(publish.OPENER, 'open', return_value=CutOffAnswer()):
             with self.assertRaises(publish.OutcomeUnknown):
-                publish.send(publish.http_request, 'X post', True, 0, 'POST', 'https://api.x.com/2/tweets', body=b'{}')
+                publish.send(publish.http_request, 'LinkedIn post', True, 0, 'POST', 'https://api.linkedin.com/rest/posts', body=b'{}')
             with self.assertRaises(publish.RetryLater):
                 publish.send(publish.http_request, 'token', False, 0, 'POST', 'https://oauth2.googleapis.com/token', body=b'x')
 
@@ -714,82 +707,6 @@ class LinkedInTest(AdapterTest):
         for settings in (without, {**LINKEDIN_CONFIG, 'version': '2611'}):
             with self.subTest(settings=settings), self.assertRaises(publish.StopItem):
                 publish.linkedin_item(self.ctx(item('linkedin-post', platform='linkedin', text='Hi'), FakeHttp([]), {'linkedin': settings}))
-
-
-X_CONFIG = {'username': 'moderaty', 'api_key': 'ck-123', 'api_secret': 'cs secret', 'access_token': 'tk-456', 'access_token_secret': 'ts/secret'}
-OAUTH_ARGS = ('POST', 'https://api.x.com/2/tweets', 'ck-123', 'cs secret', 'tk-456', 'ts/secret', 'abc123', '1700000000')
-
-
-class XTest(AdapterTest):
-    def test_oauth1_vector(self):
-        method, url, key, secret, token, token_secret, nonce, timestamp = OAUTH_ARGS
-        base = publish.oauth1_base_string(method, url, [('oauth_consumer_key', key), ('oauth_nonce', nonce),
-                                                        ('oauth_signature_method', 'HMAC-SHA1'), ('oauth_timestamp', timestamp),
-                                                        ('oauth_token', token), ('oauth_version', '1.0')])
-        self.assertEqual(base, 'POST&https%3A%2F%2Fapi.x.com%2F2%2Ftweets&oauth_consumer_key%3Dck-123%26oauth_nonce%3Dabc123'
-                               '%26oauth_signature_method%3DHMAC-SHA1%26oauth_timestamp%3D1700000000%26oauth_token%3Dtk-456%26oauth_version%3D1.0')
-        self.assertEqual(publish.oauth1_header(*OAUTH_ARGS),
-                         'OAuth oauth_consumer_key="ck-123", oauth_nonce="abc123", oauth_signature="DmDSBbC3iarel7UmSlOA%2FM8Wc1Y%3D", '
-                         'oauth_signature_method="HMAC-SHA1", oauth_timestamp="1700000000", oauth_token="tk-456", oauth_version="1.0"')
-
-    def test_query_parameters_are_signed(self):
-        plain = publish.oauth1_header(*OAUTH_ARGS)
-        with_query = publish.oauth1_header('POST', 'https://api.x.com/2/tweets?ids=1', *OAUTH_ARGS[2:])
-        self.assertNotEqual(plain, with_query)
-        base = publish.oauth1_base_string('GET', 'https://api.x.com/2/tweets?ids=1', [('oauth_consumer_key', 'ck-123'), ('ids', '1')])
-        self.assertTrue(base.startswith('GET&https%3A%2F%2Fapi.x.com%2F2%2Ftweets&'))
-        self.assertIn('ids%3D1', base)
-
-    def test_first_post_uploads_the_image_first(self):
-        (self.step / 'media' / 'x.png').write_bytes(b'png')
-        it = item('x-1', platform='x', text='First', media=[{'path': 'media/x.png', 'sha256': 'unused'}])
-        http = FakeHttp([(200, {}, json.dumps({'data': {'id': '555'}}).encode()), (201, {}, json.dumps({'data': {'id': '777'}}).encode())])
-        publish.x_item(self.ctx(it, http, {'x': X_CONFIG}))
-        self.assertEqual(http.requests[0][1], 'https://api.x.com/2/media/upload')
-        self.assertIn(b'name="media_category"', http.requests[0][3])
-        self.assertIn(b'tweet_image', http.requests[0][3])
-        self.assertEqual(json.loads(http.requests[1][3]), {'text': 'First', 'media': {'media_ids': ['555']}})
-
-    def test_reply_uses_the_previous_post_id(self):
-        it = item('x-2', platform='x', text='Second', depends=['x-1'], reply_to='x-1')
-        http = FakeHttp([(201, {}, json.dumps({'data': {'id': '888'}}).encode())])
-        result = publish.x_item(self.ctx(it, http, {'x': X_CONFIG}, {'x-1': {'post_id': '777', 'url': 'https://x.com/moderaty/status/777'}}))
-        self.assertEqual(json.loads(http.requests[0][3]), {'text': 'Second', 'reply': {'in_reply_to_tweet_id': '777'}})
-        self.assertEqual(result, ('888', 'https://x.com/moderaty/status/888'))
-
-    def test_429_waits_until_rate_limit_reset(self):
-        http = FakeHttp([(429, {'x-rate-limit-reset': str(self.epoch + 900)}, b'')])
-        with self.assertRaises(publish.RetryLater) as raised:
-            publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), http, {'x': X_CONFIG}))
-        self.assertEqual(raised.exception.wait_seconds, 900)
-
-    def test_403_duplicate_stops(self):
-        with self.assertRaises(publish.StopItem):
-            publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), FakeHttp([(403, {}, b'duplicate content')]), {'x': X_CONFIG}))
-
-    def test_post_url_uses_username(self):
-        http = FakeHttp([(201, {}, json.dumps({'data': {'id': '9'}}).encode())])
-        self.assertEqual(publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), http, {'x': X_CONFIG}))[1], 'https://x.com/moderaty/status/9')
-
-    def test_answer_without_an_id_after_posting_is_unknown(self):
-        with self.assertRaises(publish.OutcomeUnknown):
-            publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), FakeHttp([(201, {}, b'{}')]), {'x': X_CONFIG}))
-
-    def test_malformed_media_upload_answer_stops(self):
-        (self.step / 'media' / 'x.png').write_bytes(b'png')
-        it = item('x-1', platform='x', text='First', media=[{'path': 'media/x.png', 'sha256': 'unused'}])
-        with self.assertRaises(publish.StopItem):
-            publish.x_item(self.ctx(it, FakeHttp([(200, {}, b'<html>')]), {'x': X_CONFIG}))
-
-    def test_malformed_answer_after_posting_is_unknown(self):
-        with self.assertRaises(publish.OutcomeUnknown):
-            publish.x_item(self.ctx(item('x-1', platform='x', text='Hi'), FakeHttp([(201, {}, b'<html>')]), {'x': X_CONFIG}))
-
-    def test_multipart_body_has_the_fields_and_the_file(self):
-        content_type, body = publish.multipart([('media_category', 'tweet_image')], [('media', 'x.png', 'image/png', b'png-bytes')])
-        self.assertTrue(content_type.startswith('multipart/form-data; boundary='))
-        self.assertIn(b'name="media"; filename="x.png"', body)
-        self.assertIn(b'png-bytes', body)
 
 
 class InstagramTest(AdapterTest):
@@ -1041,11 +958,11 @@ class CommandTest(unittest.TestCase):
     def approved_campaign(self, events):
         campaign = self.campaigns / 'demo'
         (campaign / '09-publish').mkdir(parents=True)
-        (campaign / '00-task.md').write_text(publish_task(deliverables='article, social', extra='## Publish to\nx\n\n' + ARTICLE_URL))
+        (campaign / '00-task.md').write_text(publish_task(deliverables='article, social', extra='## Publish to\nlinkedin\n\n' + ARTICLE_URL))
         plan = {'campaign': 'demo', 'article_url': 'https://moderaty.com/blog/demo', 'items': [
             {'id': 'article', 'platform': 'website', 'action': 'check', 'url': 'https://moderaty.com/blog/demo', 'depends_on': [], 'not_before': None},
-            {'id': 'x-1', 'platform': 'x', 'action': 'post', 'text': 'One', 'media': [], 'depends_on': ['article'], 'not_before': None},
-            {'id': 'x-2', 'platform': 'x', 'action': 'post', 'text': 'Two', 'media': [], 'depends_on': ['x-1'], 'reply_to': 'x-1', 'not_before': None}]}
+            {'id': 'linkedin-post', 'platform': 'linkedin', 'action': 'post', 'text': 'One', 'media': [], 'depends_on': ['article'], 'not_before': None},
+            {'id': 'linkedin-comment', 'platform': 'linkedin', 'action': 'comment', 'text': 'Two', 'media': [], 'depends_on': ['linkedin-post'], 'not_before': None}]}
         (campaign / '09-publish' / 'plan.json').write_text(json.dumps(plan))
         (campaign / '09-publish' / 'APPROVED').write_text('{}\n')
         (campaign / '09-publish' / 'publish.jsonl').write_text(''.join(json.dumps(event) + '\n' for event in events))
@@ -1060,25 +977,27 @@ class CommandTest(unittest.TestCase):
         self.approved_campaign([
             {'time': 't', 'item': 'article', 'event': 'attempt', 'attempt': 1},
             {'time': 't', 'item': 'article', 'event': 'posted', 'attempt': 1, 'post_id': '', 'url': 'https://moderaty.com/blog/demo'},
-            {'time': 't', 'item': 'x-1', 'event': 'attempt', 'attempt': 1},
-            {'time': 't', 'item': 'x-1', 'event': 'posted', 'attempt': 1, 'post_id': '1', 'url': 'https://x.com/moderaty/status/1'},
-            {'time': 't', 'item': 'x-2', 'event': 'attempt', 'attempt': 1},
-            {'time': 't', 'item': 'x-2', 'event': 'failed', 'attempt': 1, 'error': 'HTTP 403: duplicate content'}])
+            {'time': 't', 'item': 'linkedin-post', 'event': 'attempt', 'attempt': 1},
+            {'time': 't', 'item': 'linkedin-post', 'event': 'posted', 'attempt': 1, 'post_id': 'urn:li:share:1',
+             'url': 'https://www.linkedin.com/feed/update/urn:li:share:1/'},
+            {'time': 't', 'item': 'linkedin-comment', 'event': 'attempt', 'attempt': 1},
+            {'time': 't', 'item': 'linkedin-comment', 'event': 'failed', 'attempt': 1, 'error': 'HTTP 403: duplicate content'}])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.run_main('status', 'demo')
         text = out.getvalue()
         self.assertIn('09-publish', text)
         self.assertIn('approved', text)
-        self.assertIn('https://x.com/moderaty/status/1', text)
+        self.assertIn('https://www.linkedin.com/feed/update/urn:li:share:1/', text)
         self.assertIn('failed', text)
         self.assertIn('HTTP 403: duplicate content', text)
 
     def test_retry_of_a_posted_item_is_refused(self):
-        self.approved_campaign([{'time': 't', 'item': 'x-1', 'event': 'attempt', 'attempt': 1},
-                                {'time': 't', 'item': 'x-1', 'event': 'posted', 'attempt': 1, 'post_id': '1', 'url': 'https://x.com/1'}])
+        self.approved_campaign([{'time': 't', 'item': 'linkedin-post', 'event': 'attempt', 'attempt': 1},
+                                {'time': 't', 'item': 'linkedin-post', 'event': 'posted', 'attempt': 1, 'post_id': 'urn:li:share:1',
+                                 'url': 'https://www.linkedin.com/feed/update/urn:li:share:1/'}])
         with self.assertRaises(SystemExit) as raised:
-            self.run_main('publish', '--retry', 'demo', 'x-1')
+            self.run_main('publish', '--retry', 'demo', 'linkedin-post')
         self.assertIn('its state is posted', str(raised.exception.code))
 
     def test_status_stops_when_the_plan_is_missing(self):
@@ -1089,15 +1008,14 @@ class CommandTest(unittest.TestCase):
         self.assertIn('APPROVED exists but plan.json is missing; nothing was sent', str(raised.exception.code))
 
     def test_retry_clears_a_failed_item(self):
-        campaign = self.approved_campaign([{'time': 't', 'item': 'x-2', 'event': 'attempt', 'attempt': 1},
-                                           {'time': 't', 'item': 'x-2', 'event': 'failed', 'attempt': 1, 'error': 'bad token'}])
+        campaign = self.approved_campaign([{'time': 't', 'item': 'linkedin-comment', 'event': 'attempt', 'attempt': 1},
+                                           {'time': 't', 'item': 'linkedin-comment', 'event': 'failed', 'attempt': 1, 'error': 'bad token'}])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.run_main('publish', '--retry', 'demo', 'x-2')
-        self.assertEqual(out.getvalue(), 'Reset x-2. The next publish --due sends it.\n')
-        self.assertEqual(publish.item_states(campaign / '09-publish', json.loads((campaign / '09-publish' / 'plan.json').read_text()),
-                                             0)['x-2']['state'], 'pending')
-
+            self.run_main('publish', '--retry', 'demo', 'linkedin-comment')
+        self.assertEqual(out.getvalue(), 'Reset linkedin-comment. The next publish --due sends it.\n')
+        plan = json.loads((campaign / '09-publish' / 'plan.json').read_text())
+        self.assertEqual(publish.item_states(campaign / '09-publish', plan, 0)['linkedin-comment']['state'], 'pending')
 
 if __name__ == '__main__':
     unittest.main()

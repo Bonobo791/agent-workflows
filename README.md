@@ -125,17 +125,17 @@ When every content step is approved, step 09 shows every post exactly as it will
 
 ```
 ## Publish to
-linkedin, x, instagram, youtube
+linkedin, instagram, youtube
 
 ## Article URL
 https://moderaty.com/blog/demo-article
 
 ## Schedule
 - linkedin: 2026-11-10T09:30Z
-- x: 2026-11-10T14:00Z
+- instagram: 2026-11-10T14:00Z
 ```
 
-- `## Publish to` names the platforms to post on: `linkedin`, `x`, `instagram` or `youtube`.
+- `## Publish to` names the platforms to post on: `linkedin`, `instagram` or `youtube`.
 - `## Article URL` is the live `https://` address of the article. Publish the article on your website first, then write its address here. Step 09 stops until the address answers HTTP 200. Every post gets this link, and the timer checks the address again before each post goes out.
 - `## Schedule` is optional, one line per platform, in UTC. A platform without a line goes out on the first timer run after approval.
 
@@ -144,9 +144,10 @@ https://moderaty.com/blog/demo-article
 | Platform | Needs in Deliverables | Text | Media |
 | --- | --- | --- | --- |
 | `linkedin` | `social` | the Post, then a first comment with the article link | `linkedin.png` if `images` |
-| `x` | `social` | the thread, one post per `N/` part; each post replies to the one before | `x.png` on the first post, if `images` |
 | `instagram` | `social` and `images` | the caption, a blank line, then the hashtags | `instagram.png`, converted to JPEG |
 | `youtube` | `reel` | the article title; the meta description, a blank line, the article link | `reel.mp4`, uploaded as a Short |
+
+X is not posted automatically, because its API charges per post. Post the thread by hand from `final/05-x.md`.
 
 TikTok, Instagram Reels and publishing the article to the website are not built yet.
 
@@ -161,8 +162,6 @@ chmod 600 ~/.config/agent-workflows/publish.json
 ```json
 {
   "linkedin": {"organization_id": "<page id, digits only>", "access_token": "<token>", "version": "<YYYYMM>"},
-  "x": {"username": "<your X handle>", "api_key": "<key>", "api_secret": "<secret>",
-        "access_token": "<token>", "access_token_secret": "<secret>"},
   "instagram": {"user_id": "<Instagram user id>", "access_token": "<token>", "api_version": "v26.0",
                 "media_dir": "<folder your web server serves publicly>", "media_base_url": "https://<your domain>/<folder>"},
   "youtube": {"client_id": "<id>", "client_secret": "<secret>", "refresh_token": "<token>", "category_id": "28"}
@@ -174,7 +173,6 @@ If any other user can read the file, every publish run stops. The program never 
 ### Set up each platform once
 
 - **LinkedIn**: an app with the Community Management API and the `w_organization_social` permission, and an access token for the page.
-- **X**: a developer app with read and write access, pay-per-use credits, and the OAuth 1.0a access token and secret of your account.
 - **Instagram**: a professional account, Business Login for Instagram with `instagram_business_content_publish`, and a public web folder on your own server for the images. Instagram fetches each image from `media_base_url`, so the folder must be reachable from the internet.
 - **YouTube**: a Google Cloud project with the YouTube Data API, the `youtube.upload` scope, and a refresh token for your channel.
 
@@ -200,7 +198,7 @@ Only one run at a time: a second run prints a line and exits.
 Clear a failed or unknown item with:
 
 ```sh
-python3 marketing/run.py publish --retry mc-32 x-2
+python3 marketing/run.py publish --retry mc-32 linkedin-comment
 ```
 
 The next `publish --due` sends it. `python3 marketing/run.py status mc-32` shows every item's state.

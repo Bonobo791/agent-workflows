@@ -56,10 +56,10 @@ TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Requ
 DESIGN_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]*$')
 DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not']
 PUBLISH_STEP = '09-publish'
-PLATFORMS = ['linkedin', 'x', 'instagram', 'youtube']  # also the posting order
-PLATFORM_NEEDS = {'linkedin': {'social'}, 'x': {'social'}, 'instagram': {'social', 'images'}, 'youtube': {'reel'}}
-PLATFORM_STEPS = {'linkedin': '04-linkedin', 'x': '05-x', 'instagram': '06-instagram', 'youtube': '08-reel'}
-SCHEDULE_RE = re.compile(r'^- (linkedin|x|instagram|youtube): (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)$')
+PLATFORMS = ['linkedin', 'instagram', 'youtube']  # also the posting order
+PLATFORM_NEEDS = {'linkedin': {'social'}, 'instagram': {'social', 'images'}, 'youtube': {'reel'}}
+PLATFORM_STEPS = {'linkedin': '04-linkedin', 'instagram': '06-instagram', 'youtube': '08-reel'}
+SCHEDULE_RE = re.compile(r'^- (linkedin|instagram|youtube): (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)$')
 ARTICLE_URL_RE = re.compile(r'^https://\S+$')
 YOUTUBE_TITLE_MAX = 100
 PUBLISH_CONFIG = Path.home() / '.config' / 'agent-workflows' / 'publish.json'
@@ -308,10 +308,12 @@ def publish_targets(task):
     names = [word.strip().lower() for word in sections(task)['Publish to'].split(',')]
     names = [name for name in names if name]
     if not names:
-        raise WorkflowError('## Publish to must name at least one of: linkedin, x, instagram, youtube')
+        raise WorkflowError('## Publish to must name at least one of: linkedin, instagram, youtube')
     for name in names:
+        if name == 'x':
+            raise WorkflowError('x is not posted automatically, because the X API charges per post. Remove it from ## Publish to and post the thread by hand from final/05-x.md.')
         if name not in PLATFORMS:
-            raise WorkflowError(f'unknown platform "{name}"; use any of: linkedin, x, instagram, youtube')
+            raise WorkflowError(f'unknown platform "{name}"; use any of: linkedin, instagram, youtube')
         if names.count(name) > 1:
             raise WorkflowError(f'platform "{name}" is named twice in ## Publish to')
     return [platform for platform in PLATFORMS if platform in names]
@@ -344,7 +346,7 @@ def publish_errors(task, wanted):
                 continue
             match = SCHEDULE_RE.match(line)
             if not match:
-                errors.append(f'schedule line must look like "- x: 2026-11-10T14:00Z": {line}')
+                errors.append(f'schedule line must look like "- linkedin: 2026-11-10T09:30Z": {line}')
                 continue
             platform = match.group(1)
             try:
@@ -923,7 +925,7 @@ def build_publish_plan(campaign):
     wanted = parse_deliverables(task)
     article_url = section(task, 'Article URL', 'task')
     times = schedule_times(task)
-    uses_images = 'images' in wanted and bool(set(targets) & {'linkedin', 'x', 'instagram'})
+    uses_images = 'images' in wanted and bool(set(targets) & {'linkedin', 'instagram'})
     needed = ['03-article'] + [PLATFORM_STEPS[platform] for platform in targets] + (['07-images'] if uses_images else [])
     for step in needed:
         if not (campaign / step / 'APPROVED').is_file():
@@ -948,15 +950,6 @@ def build_publish_plan(campaign):
                       'media': image('linkedin.png'), 'depends_on': ['article'], 'not_before': times.get('linkedin')})
         items.append({'id': 'linkedin-comment', 'platform': 'linkedin', 'action': 'comment', 'text': comment,
                       'media': [], 'depends_on': ['linkedin-post'], 'not_before': times.get('linkedin')})
-    if 'x' in targets:
-        for number, post in enumerate(x_posts((campaign / '05-x' / 'output.md').read_text()), 1):
-            item = {'id': f'x-{number}', 'platform': 'x', 'action': 'post', 'text': fill_link(post, article_url),
-                    'media': image('x.png') if number == 1 else [],
-                    'depends_on': ['article'] if number == 1 else [f'x-{number - 1}']}
-            if number > 1:
-                item['reply_to'] = f'x-{number - 1}'
-            item['not_before'] = times.get('x')
-            items.append(item)
     if 'instagram' in targets:
         text = (campaign / '06-instagram' / 'output.md').read_text()
         caption, hashtags = section(text, 'Caption', '06-instagram'), section(text, 'Hashtags', '06-instagram')
@@ -982,7 +975,7 @@ def build_publish_plan(campaign):
 
 
 def plan_preview(plan, step_dir):
-    lines, cost = [], 0
+    lines = []
     for item in plan['items']:
         lines.append(f"[{item['id']}] {item['platform']} {item['action']}, {item['not_before'] or 'as soon as approved'}")
         if item['action'] == 'check':
@@ -994,9 +987,6 @@ def plan_preview(plan, step_dir):
         for media in item.get('media', []):
             lines.append(f"  {media['path']} ({(step_dir / media['path']).stat().st_size / 1024:.1f} KB)")
         lines.append('')
-        if item['platform'] == 'x':
-            cost += 200 if plan['article_url'] in item['text'] else 15  # thousandths of a dollar; a post with a URL costs more
-    lines.append(f'X cost: about ${cost // 1000}.{cost % 1000:03d}')
     return '\n'.join(lines) + '\n'
 
 
