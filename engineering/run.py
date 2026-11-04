@@ -146,6 +146,131 @@ def check_tools():
         raise WorkflowError('gh is not signed in; run gh auth login')
 
 
+def parse_sections(md):
+    """Return (heading, text) pairs for each '## ' heading, in file order, up to the next '## ' heading."""
+    found, current, lines = [], None, []
+    for line in md.splitlines():
+        if line.startswith('## '):
+            if current is not None:
+                found.append((current, '\n'.join(lines).strip()))
+            current, lines = line[3:].strip(), []
+        elif current is not None:
+            lines.append(line)
+    if current is not None:
+        found.append((current, '\n'.join(lines).strip()))
+    return found
+
+
+def task_value(text, section):
+    return dict(parse_sections(text)).get(section, '')
+
+
+def check_task(text):
+    errors = []
+    parsed = parse_sections(text)
+    names = [name for name, _ in parsed]
+    bodies = dict(parsed)
+    for name in names:
+        if name not in TASK_SECTIONS:
+            errors.append(f'unknown section "## {name}"; use only these sections: {", ".join(TASK_SECTIONS)}')
+        if names.count(name) > 1:
+            errors.append(f'section "## {name}" appears more than once')
+    for name in TASK_SECTIONS:
+        if name not in names:
+            errors.append(f'missing section "## {name}"')
+    present = [name for name in names if name in TASK_SECTIONS]
+    if present != [name for name in TASK_SECTIONS if name in present]:
+        errors.append(f'sections are out of order; use this order: {", ".join(TASK_SECTIONS)}')
+    for name in TASK_SECTIONS:
+        body = bodies.get(name)
+        if body is None:
+            continue
+        if not body:
+            errors.append(f'section "## {name}" is empty')
+        elif body == 'None.' and name != 'Constraints':
+            errors.append(f'section "## {name}" needs content; "None." is allowed only in "## Constraints"')
+    repository = bodies.get('Repository', '')
+    if repository and not Path(repository).is_absolute():
+        errors.append('section "## Repository" must be an absolute path')
+    if 'Done when' in bodies and not any(line.startswith('- ') for line in bodies['Done when'].splitlines()):
+        errors.append('section "## Done when" needs at least one "- " line')
+    if 'Check commands' in bodies and not check_command_lines(text):
+        errors.append('section "## Check commands" needs at least one "- " line')
+    return errors
+
+
+def check_command_lines(text):
+    """The check commands exactly as the owner wrote them (without the leading '- ')."""
+    body = task_value(text, 'Check commands')
+    return [line[2:].strip() for line in body.splitlines() if line.startswith('- ')]
+
+
+def check_commands(text):
+    commands = []
+    for line in check_command_lines(text):
+        try:
+            argv = shlex.split(line)
+        except ValueError as error:
+            raise WorkflowError(f'check command cannot be parsed: {line} ({error})')
+        if not argv:
+            raise WorkflowError('check command line is empty')
+        commands.append(argv)
+    return commands
+
+
+def read_task(build):
+    return (build / '00-task.md').read_text()
+
+
+def load_sessions(build):
+    return json.loads((build / 'sessions.json').read_text())
+
+
+def save_sessions(build, sessions):
+    (build / 'sessions.json').write_text(json.dumps(sessions, indent=2) + '\n')
+
+
+def cmd_new(name, task_file):
+    if not NAME_RE.match(name):
+        raise WorkflowError(f'build name {name!r} must use lowercase letters, digits and hyphens')
+    build = BUILDS_DIR / name
+    if build.exists():
+        raise WorkflowError(f'build {name} already exists: {build}')
+    if not Path(task_file).is_file():
+        raise WorkflowError(f'task file not found: {task_file}')
+    text = Path(task_file).read_text()
+    errors = check_task(text)
+    if errors:
+        for error in errors:
+            print(f'error: {error}')
+        raise WorkflowError('the task file has errors; fix them and run new again')
+    repo = Path(task_value(text, 'Repository')).resolve()
+    base = task_value(text, 'Base branch')
+    branch = task_value(text, 'Branch')
+    top = run_command(['git', '-C', str(repo), 'rev-parse', '--show-toplevel'])
+    if top.returncode != 0 or top.stdout.strip() != str(repo):
+        raise WorkflowError(f'{repo} is not the top folder of a git checkout')
+    if run_command(['git', '-C', str(repo), 'rev-parse', '--verify', '--quiet', f'{base}^{{commit}}']).returncode != 0:
+        raise WorkflowError(f'base branch {base} does not exist in {repo}')
+    if run_command(['git', '-C', str(repo), 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}']).returncode == 0:
+        raise WorkflowError(f'branch {branch} already exists in {repo}')
+    build.mkdir(parents=True)
+    shutil.copyfile(task_file, build / '00-task.md')
+    with build_log(build, console=False):
+        worktree = build / 'worktree'
+        added = run_command(['git', '-C', str(repo), 'worktree', 'add', '-b', branch, str(worktree), base])
+        if added.returncode != 0:
+            raise WorkflowError(f'git worktree add failed: {added.stderr.strip()}')
+        log.info('created worktree %s on branch %s from %s', worktree, branch, base)
+        head = run_command(['git', '-C', str(worktree), 'rev-parse', 'HEAD'])
+        if head.returncode != 0:
+            raise WorkflowError(f'git rev-parse failed in {worktree}: {head.stderr.strip()}')
+        (build / 'base.txt').write_text(head.stdout.strip() + '\n')
+        save_sessions(build, {name: {'id': str(uuid.uuid4()), 'started': False} for name in SESSIONS})
+    print(f'Build folder: {build}')
+    print(f'Next: python3 engineering/run.py run {name}')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Engineering workflow with an approval gate after every step.')
     sub = parser.add_subparsers(dest='command', required=True)
