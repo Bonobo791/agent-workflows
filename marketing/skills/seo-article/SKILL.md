@@ -35,4 +35,5 @@ Rules:
 - When a fact is missing for one side, write what the reader should check, as an instruction to them. Example: "Check Studio's activity history against the records you need before you decide." Never write that something is unassessed, not covered or outside the comparison.
 - The brief is notes to you, so never reuse its wording. Write to the reader about their choice, never about how the article presents it.
 - An illustrative example needs no label. Write it as a scene, without the word "fictional".
-- Draft the opening from the brief's Reader problems list. Never invent a reader problem.
+- Draft the opening from a Reader problem in positioning.md. Never invent a reader problem.
+- Link only to the pages listed in pages.md, using their paths.

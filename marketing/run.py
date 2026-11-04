@@ -4,6 +4,7 @@ sources -> brief -> SEO article -> social copy, images and reel (as the Delivera
 Every step: a Codex writer, Python checks, then a fresh Codex reviewer, then the owner approves or rejects.
 """
 import argparse
+import difflib
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ import sys
 import time
 from collections import Counter
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -26,7 +27,9 @@ log = logging.getLogger('marketing')
 
 REPO = HERE.parent
 SKILLS_DIR = HERE / 'skills'
-DESIGN_DIR = HERE / 'design-systems'
+BRANDS_DIR = HERE / 'brands'
+BRAND_FILES = ['design-system.md', 'voice.md', 'positioning.md', 'pages.md']
+BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'positioning': 'positioning.md', 'pages': 'pages.md'}
 LIBRARY_DIR = HERE / 'skill-library'
 CAMPAIGNS_DIR = REPO / 'campaigns'
 # The owner's roles: writer "gpt6.1 sol medium", reviewer "gpt6.1 sol medium", image and video creator "gpt6.1 sol high".
@@ -42,27 +45,27 @@ NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
 URL_RE = re.compile(r'https?://\S+')
 RECHECK_RE = re.compile(r're-?check after', re.IGNORECASE)
-MIN_SEARCHES = 5  # the sources step
-MIN_URL_FACTS = 5
+MIN_SEARCHES = 3  # the sources step
+MIN_URL_FACTS = 3
 MIN_SITES = 3
-MIN_PROBLEMS = 6  # reader problems with a URL, from the sources step
+MIN_PROBLEMS = 6  # reader problems with a URL, in positioning.md
 HASHTAG_RE = re.compile(r'(?<!\w)#\w+')
 X_POST_START_RE = re.compile(r'^\d+/', re.MULTILINE)
 LINK = '[ARTICLE LINK]'
 X_LINK_LENGTH = 23
-BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Angle', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Reader problems', 'Open questions']
+BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Angle', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Open questions']
 TARGET_RE = re.compile(r'^- Target length: (\d+) words$', re.MULTILINE)
 META_MIN = 150
 META_MAX = 160
 LENGTH_TOLERANCE = 0.2
 USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 DELIVERABLES = ['article', 'social', 'images', 'reel']
-TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints', 'Voice']
+TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints', 'Brand']
 # Design system names are file names: letters, digits and hyphens. TEMPLATE is uppercase, so NAME_RE would reject it.
 DESIGN_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]*$')
 DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not']
-# Voice files are named like design systems. A section still holding its template note stops the run.
-VOICE_DIR = HERE / 'voice'
+POSITIONING_SECTIONS = ['One line', 'Audience', 'Reader problems', 'Value', 'Proof', 'Alternatives', 'Objections', 'Claims we never make', 'Call to action']
+# A brand file section still holding its template note stops the run.
 VOICE_SECTIONS = ['Personality', 'Tone', 'How we talk to the reader', 'Sentence style', 'Words we use', 'Words we never use',
                   'Posts we like', "Posts we don't like"]
 TEMPLATE_NOTE = 'Template note:'
@@ -81,21 +84,25 @@ CONTRAST_RE = re.compile(r"\b(?:is|are|was|were|isn't|aren't)?\s*\w[\w\s']{0,40}
 NOT_IT_RE = re.compile(r"\bnot (?:just |only )?\w[\w\s']{0,30}[,;]\s+(?:it[’']s|it is|but)\b", re.I)  # "not X, it's Y"
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
-SOCIAL_INPUTS = ['voice', '02-brief#Angle', '02-brief#Keywords', '02-brief#Channel ideas', '02-brief#Facts', '02-brief#Reader problems']
+SOCIAL_INPUTS = ['voice', 'positioning#Reader problems', 'positioning#Value', 'positioning#Claims we never make',
+                 '02-brief#Angle', '02-brief#Keywords', '02-brief#Channel ideas', '02-brief#Facts']
 SOCIAL_REVIEW_INPUTS = SOCIAL_INPUTS  # one list, so the writer and reviewer prompts share a prefix
-IMAGE_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram',
-                '02-brief#Reader problems']
-REEL_INPUTS = ['design-system', 'voice', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram',
-               '02-brief#Reader problems']
+IMAGE_INPUTS = ['design-system', 'voice', 'positioning#Value', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts',
+                '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
+REEL_INPUTS = ['design-system', 'voice', 'positioning#Value', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts',
+              '02-brief#Visual ideas', '06-instagram']
 STEPS = [
     {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources',
-     'inputs': ['00-task'], 'review_inputs': ['00-task'],
+     'inputs': ['00-task', 'positioning#Proof', 'positioning#Alternatives'], 'review_inputs': ['00-task', 'positioning#Proof', 'positioning#Alternatives'],
      'writer_skills': ['content-research-and-sourcing'], 'review_skills': ['content-research-and-sourcing']},
     {'id': '02-brief', 'skill': 'brief', 'kind': 'text', 'role': 'strategist', 'deliverable': 'article', 'web': False, 'check': 'brief',
-     'inputs': ['voice', '00-task', '01-sources'], 'review_inputs': ['voice', '00-task', '01-sources'],
+     'inputs': ['voice', '00-task', '01-sources', 'positioning'], 'review_inputs': ['voice', '00-task', '01-sources', 'positioning'],
      'writer_skills': ['content-brief'], 'review_skills': ['content-brief']},
     {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'article',
-     'inputs': ['voice', '00-task', '02-brief', '02-brief#Reader problems'], 'review_inputs': ['voice', '00-task', '02-brief', '02-brief#Reader problems'],
+     'inputs': ['voice', '00-task', '02-brief', 'positioning#Proof', 'positioning#Alternatives', 'positioning#Objections',
+                'positioning#Claims we never make', 'positioning#Call to action', 'pages'],
+     'review_inputs': ['voice', '00-task', '02-brief', 'positioning#Proof', 'positioning#Alternatives', 'positioning#Objections',
+                       'positioning#Claims we never make', 'positioning#Call to action', 'pages'],
      'writer_skills': ['stop-slop', 'on-page-seo', 'internal-linking', 'educational-content-and-how-to'],
      'review_skills': ['stop-slop', 'on-page-seo']},
     {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'linkedin',
@@ -117,6 +124,12 @@ STEPS = [
      'writer_skills': ['reels-script', 'instagram-reels-publishing'],
      'review_skills': ['reels-script', 'instagram-reels-publishing', 'accessibility-review']},
 ]
+
+
+# The brand command's one writer and reviewer pass: it drafts positioning.md from its One line.
+BRAND_STEP = {'id': '01-positioning', 'skill': 'positioning', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True,
+              'check': 'positioning', 'inputs': ['positioning#One line'], 'review_inputs': ['positioning#One line'],
+              'writer_skills': ['content-research-and-sourcing'], 'review_skills': ['content-research-and-sourcing']}
 
 
 class WorkflowError(Exception):
@@ -282,15 +295,14 @@ def parse_deliverables(task):
 
 
 def design_system_errors(task):
-    name = sections(task).get('Design system', '')
-    if name in ('', 'None.'):
-        return ['Deliverables include images or reel, so ## Design system must name a design system file, not None.']
-    if not DESIGN_NAME_RE.match(name):
-        return [f'design system name "{name}" must use letters, digits and hyphens only']
-    path = DESIGN_DIR / f'{name}.md'
+    brand = brand_of(task)
+    errors = brand_name_errors(brand)
+    if errors:
+        return errors
+    path = brand_file(brand, 'design-system.md')
     if not path.is_file():
         return [f'design system file not found: {path}']
-    return [f'{path.name}: {error}' for error in check_design_system(path.read_text())]
+    return [f'design-system.md: {error}' for error in check_design_system(path.read_text())]
 
 
 def check_task(task, design=True):
@@ -363,7 +375,7 @@ def site_of(fact):
 
 
 def check_sources(output, task, brief, searches=()):
-    errors = missing_sections(output, ['Facts', 'Not found', 'Reader problems'])
+    errors = missing_sections(output, ['Facts', 'Not found'])
     facts = facts_of(output)
     if not facts:
         errors.append('the Facts section needs at least one "- " line')
@@ -376,12 +388,6 @@ def check_sources(output, task, brief, searches=()):
     sites = {site_of(fact) for fact in url_facts}
     if len(sites) < MIN_SITES:
         errors.append(f'the URL facts cite {len(sites)} different sites; they need at least {MIN_SITES}')
-    problems = [line for line in bullets(sections(output).get('Reader problems', '')) if URL_RE.search(line)]
-    if len(problems) < MIN_PROBLEMS:
-        errors.append(f'the Reader problems need at least {MIN_PROBLEMS} lines with a URL; found {len(problems)}')
-    problem_sites = {site_of(line) for line in problems}
-    if len(problem_sites) < MIN_SITES:
-        errors.append(f'the Reader problems cite {len(problem_sites)} different sites; they need at least {MIN_SITES}')
     return errors
 
 
@@ -404,10 +410,12 @@ def check_brief(output, task, brief):
     if len(TARGET_RE.findall(sections(output).get('Article plan', ''))) != 1:
         errors.append('Article plan needs one line like "- Target length: 2000 words" with a whole number.')
     errors += adds_errors(sections(output).get('Article plan', ''))
-    problems = [problem_text(line) for line in bullets(sections(output).get('Reader problems', ''))]
+    found = positioning_sections(brand_of(task))
+    problems = [problem_text(line) for line in bullets(found.get('Reader problems', ''))]
+    values = [line.split('→')[0].strip() for line in bullets(found.get('Value', ''))]
     angle_line = next((line.strip() for line in sections(output).get('Angle', '').splitlines() if line.strip().startswith('- Reader problem:')), '')
     if angle_line[len('- Reader problem:'):].strip() not in problems:
-        errors.append("the Angle's Reader problem must be one line from the Reader problems section, quoted exactly")
+        errors.append("the Angle's Reader problem must be one line from the Reader problems in positioning.md, quoted exactly")
     channel = sections(output).get('Channel ideas', '')
     if 'social' in parse_deliverables(task):
         used = []
@@ -417,13 +425,13 @@ def check_brief(output, task, brief):
                 errors.append(f'Channel ideas needs a line starting "{prefix}"')
             for line in lines:
                 text = line[len(prefix):].strip()
-                match = next((problem for problem in problems if problem and text.startswith(problem)), None)
+                match = next((value for value in values if value and text.startswith(value)), None)
                 if match is None:
-                    errors.append(f'the {prefix[2:-1]} Channel idea must start with one Reader problem from the Reader problems section')
+                    errors.append(f'the {prefix[2:-1]} Channel idea must start with one Value problem from positioning.md')
                 else:
                     used.append(match)
         if len(set(used)) != len(used):
-            errors.append('the Channel ideas must use different Reader problems')
+            errors.append('the Channel ideas must use different Value problems')
         for line in channel.splitlines():
             if len(line) > CHANNEL_LIMIT:
                 errors.append(f'the {line[2:line.index(":")]} Channel idea is {len(line)} characters; the limit is {CHANNEL_LIMIT}')
@@ -453,7 +461,7 @@ def check_article(output, task, brief):
     if words * 5 < target * 4 or words * 5 > target * 6:  # the same as 0.8 and 1.2 times the target, in whole numbers
         low, high = round(target * (1 - LENGTH_TOLERANCE)), round(target * (1 + LENGTH_TOLERANCE))
         errors.append(f"article is {words} words; the brief's target is {target}, so it must be {low} to {high}")
-    errors += opening_errors(output) + repetition_errors(output)
+    errors += opening_errors(output) + repetition_errors(output) + page_link_errors(output, task)
     errors += wording_errors(output)
     return errors
 
@@ -628,25 +636,182 @@ def check_voice(text):
     for heading in VOICE_SECTIONS:
         body = found.get(heading, '')
         if not body:
-            errors.append(f'voice file: section "## {heading}" is missing or empty')
+            errors.append(f'section "## {heading}" is missing or empty')
         elif any(line.startswith(TEMPLATE_NOTE) for line in body.splitlines()):
-            errors.append(f'voice file: section "## {heading}" still has its template note')
+            errors.append(f'section "## {heading}" still has its template note')
     return errors
 
 
-def voice_errors(task):
-    name = sections(task).get('Voice', '')
-    if name in ('', 'None.'):
-        return ['the task needs a ## Voice section that names a voice file in marketing/voice/, not None.']
-    if not DESIGN_NAME_RE.match(name):
-        return [f'voice name "{name}" must use letters, digits and hyphens only']
-    path = VOICE_DIR / f'{name}.md'
-    if not path.is_file():
-        return [f'voice file not found: {path}']
-    return [f'{path.name}: {error}' for error in check_voice(path.read_text())]
+def brand_of(task):
+    return sections(task).get('Brand', '')
 
 
-CHECKS = {'sources': check_sources, 'brief': check_brief, 'article': check_article,
+def brand_file(brand, name):
+    return BRANDS_DIR / brand / name
+
+
+def brand_name_errors(brand):
+    if brand in ('', 'None.'):
+        return ['the task needs a ## Brand section that names a brand folder in marketing/brands/, not None.']
+    if not DESIGN_NAME_RE.match(brand):
+        return [f'brand name "{brand}" must use letters, digits and hyphens only']
+    if not (BRANDS_DIR / brand).is_dir():
+        return [f'brand folder not found: {BRANDS_DIR / brand}']
+    return []
+
+
+def has_template_note(text):
+    return any(line.startswith(TEMPLATE_NOTE) for line in text.splitlines())
+
+
+def check_positioning(text):
+    found = sections(text)
+    errors = []
+    for heading in POSITIONING_SECTIONS:
+        body = found.get(heading, '')
+        if not body:
+            errors.append(f'section "## {heading}" is missing or empty')
+        elif has_template_note(body):
+            errors.append(f'section "## {heading}" still has its template note')
+    with_url = [line for line in bullets(found.get('Reader problems', '')) if URL_RE.search(line)]
+    if len(with_url) < MIN_PROBLEMS:
+        errors.append(f'the Reader problems need at least {MIN_PROBLEMS} lines with a URL; found {len(with_url)}')
+    sites = {site_of(line) for line in with_url}
+    if len(sites) < MIN_SITES:
+        errors.append(f'the Reader problems cite {len(sites)} different sites; they need at least {MIN_SITES}')
+    errors += [f'every Proof line needs a URL: "{line}"' for line in bullets(found.get('Proof', '')) if not URL_RE.search(line)]
+    return errors
+
+
+def check_positioning_output(output, task, brief):
+    return check_positioning(output)
+
+
+def check_pages(text):
+    errors = ['still has its template note'] if has_template_note(text) else []
+    lines = bullets(text)
+    if not lines:
+        errors.append('lists no pages; add one line per page')
+    for line in lines:
+        fields = [field.strip() for field in line.split('|')]
+        if len(fields) != 3 or not fields[1].startswith('/'):
+            errors.append(f'line needs "- <title> | /<path> | <when>": "{line}"')
+    return errors
+
+
+def page_paths(brand):
+    if not brand or not brand_file(brand, 'pages.md').is_file():
+        return set()
+    paths = set()
+    for line in bullets(brand_file(brand, 'pages.md').read_text()):
+        fields = [field.strip() for field in line.split('|')]
+        if len(fields) == 3:
+            paths.add(fields[1])
+    return paths
+
+
+def page_link_errors(output, task):
+    allowed = page_paths(brand_of(task))
+    return [f'the link {link} is not in pages.md; link only the pages listed there'
+            for link in re.findall(r'\]\((/[^)\s#]*)', output) if link not in allowed]
+
+
+def positioning_sections(brand):
+    path = brand_file(brand, 'positioning.md') if brand else None
+    return sections(path.read_text()) if path and path.is_file() else {}
+
+
+def check_brand(brand, for_brand_run=False):
+    """Every brand file must be filled in before a campaign runs. The brand command writes positioning.md itself."""
+    errors = brand_name_errors(brand)
+    if errors:
+        return errors
+    for name in BRAND_FILES:
+        path = brand_file(brand, name)
+        if not path.is_file():
+            errors.append(f'{brand}/{name} is missing')
+            continue
+        text = path.read_text()
+        if name == 'design-system.md':
+            errors += [f'{name}: {error}' for error in check_design_system(text)]
+            if has_template_note(text):
+                errors.append(f'{name}: still has its template note')
+        elif name == 'voice.md':
+            errors += [f'{name}: {error}' for error in check_voice(text)]
+        elif name == 'positioning.md':
+            if for_brand_run:
+                one_line = sections(text).get('One line', '')
+                if not one_line or has_template_note(one_line):
+                    errors.append('positioning.md: write ## One line before the brand command runs')
+                elif not URL_RE.search(one_line):
+                    errors.append('positioning.md: ## One line needs the product URL')
+            else:
+                errors += [f'{name}: {error}' for error in check_positioning(text)]
+        elif name == 'pages.md':
+            errors += [f'{name}: {error}' for error in check_pages(text)]
+    return errors
+
+
+def warn_if_old(brand):
+    match = re.search(r'^Approved: (\d{4}-\d{2}-\d{2})', brand_file(brand, 'positioning.md').read_text(), re.MULTILINE)
+    if match:
+        age = (date.today() - date.fromisoformat(match.group(1))).days
+        if age > 90:
+            log.warning('positioning.md was approved %d days ago; run brand %s --refresh when the product or its prices change', age, brand)
+
+
+def brand_kit(client, brand, refresh, ask):
+    """Draft positioning.md with one web-search pass, then save it when the owner approves."""
+    errors = brand_name_errors(brand) or check_brand(brand, for_brand_run=True)
+    if errors:
+        raise WorkflowError('; '.join(errors))
+    campaign = CAMPAIGNS_DIR / f'brand-{brand}'
+    campaign.mkdir(parents=True, exist_ok=True)
+    (campaign / '00-task.md').write_text(
+        f"# Task: Brand kit for {brand}\n\n## Deliverables\narticle\n\n## Goal\nWrite the brand's positioning from its One line.\n\n"
+        "## Audience\nThe brand's buyers and users.\n\n## Details\nThe One line in positioning.md names the product and its URL.\n\n"
+        f"## Sources\nNone.\n\n## Required headings\nNone.\n\n## Constraints\nNone.\n\n## Brand\n{brand}\n")
+    step_dir = campaign / BRAND_STEP['id']
+    approved = brand_file(brand, 'positioning.md')
+    current = approved.read_text()
+    previous = current.split('\n', 2)[2] if current.startswith('Approved: ') else None
+    if refresh and step_dir.exists():
+        shutil.rmtree(step_dir)
+    shown = []
+
+    def ask_with_diff(prompt):
+        if refresh and previous is not None and not shown:
+            shown.append(True)
+            new = (step_dir / 'output.md').read_text()
+            print(''.join(difflib.unified_diff(previous.splitlines(keepends=True), new.splitlines(keepends=True),
+                                               'approved positioning.md', 'new research')))
+        return ask(prompt)
+
+    with campaign_log(campaign):
+        check_models(client, ROLES, [BRAND_STEP, {'role': 'reviewer'}])
+        check_skills(SKILLS_DIR, [BRAND_STEP])
+        run_step(client, ROLES, SKILLS_DIR, campaign, BRAND_STEP, ask_with_diff)
+    if not (step_dir / 'APPROVED').is_file():
+        print(f'{brand}: not approved; run the same command again to come back to this step')
+        return None
+    approved.write_text(f'Approved: {date.today().isoformat()}\n\n' + (step_dir / 'output.md').read_text().rstrip() + '\n')
+    print(f'Saved {approved}')
+    return approved
+
+
+def cmd_brand(name, refresh):
+    errors = brand_name_errors(name) or check_brand(name, for_brand_run=True)  # before any Codex process starts
+    if errors:
+        raise WorkflowError('; '.join(errors))
+    campaign = CAMPAIGNS_DIR / f'brand-{name}'
+    campaign.mkdir(parents=True, exist_ok=True)
+    with CodexClient(stderr_path=campaign / 'codex-stderr.log') as client:
+        brand_kit(client, name, refresh, input)
+    if (BRANDS_DIR / name / 'positioning.md').is_file():
+        warn_if_old(name)
+
+
+CHECKS = {'positioning': check_positioning_output, 'sources': check_sources, 'brief': check_brief, 'article': check_article,
           'linkedin': check_linkedin, 'x': check_x, 'instagram': check_instagram}
 
 
@@ -657,12 +822,10 @@ def outline(md):
 def read_input(campaign, spec):
     """`spec` is a step id or task file ('02-brief'), optionally with '#<Section>' or '#outline'."""
     input_id, _, part = spec.partition('#')
-    if input_id == 'design-system':
-        name = section((campaign / '00-task.md').read_text(), 'Design system', '00-task')
-        return (DESIGN_DIR / f'{name}.md').read_text()
-    if input_id == 'voice':
-        name = section((campaign / '00-task.md').read_text(), 'Voice', '00-task')
-        return (VOICE_DIR / f'{name}.md').read_text()
+    if input_id in BRAND_INPUTS:
+        brand = brand_of((campaign / '00-task.md').read_text())
+        text = brand_file(brand, BRAND_INPUTS[input_id]).read_text()
+        return section(text, part, input_id) if part else text
     if input_id == '00-task':
         text = (campaign / '00-task.md').read_text()
     else:
@@ -1065,11 +1228,13 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
     steps = campaign_steps(campaign, steps)
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
     check_skills(skills_dir, steps)
-    check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
-    if any('voice' in step['inputs'] + step['review_inputs'] for step in steps):
-        errors = voice_errors((campaign / '00-task.md').read_text())
+    if any(spec.partition('#')[0] in BRAND_INPUTS for step in steps for spec in step['inputs'] + step['review_inputs']):
+        brand = brand_of((campaign / '00-task.md').read_text())
+        errors = check_brand(brand)
         if errors:
             raise WorkflowError('; '.join(errors))
+        warn_if_old(brand)
+    check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
     for step in steps:
         if (campaign / step['id'] / 'APPROVED').is_file():
             log.info('[%s] already approved; skipping', step['id'])
@@ -1180,12 +1345,17 @@ def main():
     run.add_argument('name')
     status = sub.add_parser('status', help='show where a campaign is')
     status.add_argument('name')
+    brand = sub.add_parser('brand', help="draft and approve a brand's positioning.md from its One line")
+    brand.add_argument('name')
+    brand.add_argument('--refresh', action='store_true', help='research again and show the differences from the approved file')
     args = parser.parse_args()
     try:
         if args.command == 'new':
             cmd_new(args.name, args.task_file, args.issue)
         elif args.command == 'run':
             cmd_run(args.name)
+        elif args.command == 'brand':
+            cmd_brand(args.name, args.refresh)
         else:
             cmd_status(args.name)
     except WorkflowError as error:

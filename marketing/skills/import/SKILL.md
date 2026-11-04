@@ -39,7 +39,7 @@ None.
 ## Constraints
 None.
 
-## Voice
+## Brand
 None.
 ```
 
@@ -48,10 +48,9 @@ Rules:
 - Deliverables: only what the issue asks for. A website page or blog article is article. Social posts are social. Images and reel only when the issue asks for them. If the issue does not say which deliverables it wants, write article and add this line under Constraints: - Deliverables not stated in the issue; owner to confirm.
 - Start dates, due dates and "do not start before" lines go under Details as "Schedule: ...", never under Constraints.
 - If the issue asks for social, images or reel without an article, include article and add this line under Constraints: - Article added because the social posts link to it; owner to confirm.
-- If the Deliverables include images or reel, write a `## Design system` section after Constraints with the body `None.`, and add this line under Constraints: - Design system not set; owner to choose one from marketing/design-systems/. Otherwise leave the section out.
 - Leave out internal process lines: who does a step, approval routes, internal checklists, and notes to the team about how the work runs. Keep only what the campaign's content needs.
 - Leave out any "recheck after" date or line. Keep other dates.
-- Voice is always `None.`. The owner names the voice file in marketing/voice/.
+- Brand is always `None.`. The owner names the brand folder in marketing/brands/.
 - The example is a shape only. Never copy its values unless the issue states them.
 - Use no em dashes. Never invent a fact.
 - If the tracker cannot be reached, return an empty output and say why in notes.

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -34,9 +35,39 @@ META_LINE = 'Meta description: ' + 'x' * 155  # a valid meta description length
 
 PROBLEMS = ['Scam comments impersonate the creator under new uploads within minutes.',
             'Spam links in replies go unnoticed for days.',
-            'Held comments pile up with no clear review step.']
-PROBLEMS_TEXT = '\n'.join(f'- {problem} https://example.com/problem{n} (checked 2026-11-04)' for n, problem in enumerate(PROBLEMS))
+            'Held comments pile up with no clear review step.',
+            'Duplicate bot accounts copy every new comment.',
+            'Viewers stop reading when the top comments are spam.',
+            'Moderation takes an hour a day across channels.']
+PROBLEMS_TEXT = '\n'.join(f'- {problem} https://site{n % 3}.example.com/problem{n} (checked 2026-11-04)' for n, problem in enumerate(PROBLEMS))
 ANGLE_TEXT = f'- Reader problem: {PROBLEMS[0]}\n- Tension: Text.\n- Payoff: Text.\n- Voice: Text.'
+VALUE_TEXT = '\n'.join(f'- {problem} → The product holds the comment for review. Proof: https://example.com/proof' for problem in PROBLEMS)
+REPO_TEMPLATE = Path(__file__).resolve().parents[1] / 'marketing' / 'brands' / 'TEMPLATE'
+DESIGN_TEXT = ('# Design system: demo\n\n## Colors\n- background: #000000\n- text: #FFFFFF\n- accent: #3366FF\n\n'
+               '## Typography\nText.\n\n## Layout\nText.\n\n## Logo\nNone.\n\n## Imagery\nText.\n\n## Do not\nText.\n')
+VOICE_TEXT = ''.join(f'## {heading}\nFilled in.\n\n' for heading in run.VOICE_SECTIONS)
+PAGES_TEXT = '# Pages\n\n- Compare tools | /compare/x/ | when a reader chooses a tool\n'
+POSITIONING_TEXT = ('# Positioning\n\n## One line\nA demo product for demo creators. Read more at https://example.com/demo.\n\n'
+                    '## Audience\nCreators.\n\n## Reader problems\n' + PROBLEMS_TEXT + '\n\n## Value\n' + VALUE_TEXT +
+                    '\n\n## Proof\n- Holds comments for review. https://example.com/proof (checked 2026-11-04)\n\n'
+                    '## Alternatives\nText.\n\n## Objections\nText.\n\n## Claims we never make\nNone.\n\n'
+                    '## Call to action\nSign up at https://example.com/signup.\n')
+BRANDS_TMP = Path(tempfile.mkdtemp()) / 'brands'
+run.BRANDS_DIR = BRANDS_TMP
+run.CAMPAIGNS_DIR = Path(tempfile.mkdtemp()) / 'campaigns'
+
+
+def write_brand(name, **files):
+    folder = BRANDS_TMP / name
+    folder.mkdir(parents=True, exist_ok=True)
+    texts = {'design-system.md': DESIGN_TEXT, 'voice.md': VOICE_TEXT, 'positioning.md': POSITIONING_TEXT, 'pages.md': PAGES_TEXT}
+    texts.update(files)
+    for file_name, text in texts.items():
+        (folder / file_name).write_text(text)
+
+
+write_brand('demo')
+write_brand('unfilled', **{name: (REPO_TEMPLATE / name).read_text() for name in ['design-system.md', 'voice.md', 'positioning.md', 'pages.md']})
 
 
 def full_brief(plan, channel='Not needed.'):
@@ -49,7 +80,7 @@ def article_text(meta_chars=155, words=6):
     return 'Meta description: ' + 'x' * meta_chars + '\n# Title\n' + ' '.join(['word'] * (words - 1))
 
 
-def task_text(deliverables='article', without=None, design_system='None.'):
+def task_text(deliverables='article', without=None, brand='demo'):
     parts = [
         ('Deliverables', deliverables),
         ('Goal', 'Get existing users to try the export before the tax season.'),
@@ -58,8 +89,7 @@ def task_text(deliverables='article', without=None, design_system='None.'):
         ('Sources', 'None.'),
         ('Required headings', 'None.'),
         ('Constraints', 'None.'),
-        ('Voice', 'moderaty'),
-        ('Design system', design_system),
+        ('Brand', brand),
     ]
     body = ''.join(f'## {name}\n{text}\n\n' for name, text in parts if name != without)
     return '# Task: announce the new export feature\n\n' + body
@@ -293,7 +323,8 @@ class TaskFormatTest(unittest.TestCase):
         self.assertTrue(any('social' in error for error in errors))
 
     def test_sample_task_is_valid(self):
-        self.assertEqual(run.check_task(SAMPLE_TASK.read_text()), [])
+        with mock.patch.object(run, 'BRANDS_DIR', Path(__file__).resolve().parents[1] / 'marketing' / 'brands'):
+            self.assertEqual(run.check_task(SAMPLE_TASK.read_text()), [])
 
     def test_select_steps_keeps_order(self):
         ids = [step['id'] for step in run.select_steps(task_text('social, article'), run.STEPS)]
@@ -339,22 +370,21 @@ def sources_text(urls=5, sites=3, task_fact=True):
     lines = [f'- Fact {n} https://site{n % sites}.example.com/page{n} (checked 2026-11-03)' for n in range(urls)]
     if task_fact:
         lines.append('- Plans start in December (from task)')
-    problems = [f'- Problem {n} https://site{n % sites}.example.com/problem{n} (checked 2026-11-03)' for n in range(6)]
-    return '## Facts\n' + '\n'.join(lines) + '\n\n## Not found\nNone.\n\n## Reader problems\n' + '\n'.join(problems) + '\n'
+    return '## Facts\n' + '\n'.join(lines) + '\n\n## Not found\nNone.\n'
 
 
 class SourcesTest(unittest.TestCase):
     def test_enough_searches_urls_and_sites_pass(self):
         self.assertEqual(run.check_sources(sources_text(), '', None, ['q'] * 5), [])
 
-    def test_fewer_than_five_searches_fail(self):
-        errors = run.check_sources(sources_text(), '', None, ['q'] * 4)
+    def test_fewer_than_three_searches_fail(self):
+        errors = run.check_sources(sources_text(), '', None, ['q'] * 2)
         self.assertEqual(len(errors), 1)
-        self.assertIn('ran 4 web searches', errors[0])
+        self.assertIn('ran 2 web searches', errors[0])
 
     def test_task_facts_do_not_count_as_url_facts(self):
-        errors = run.check_sources(sources_text(urls=4), '', None, ['q'] * 5)
-        self.assertIn('found 4', ' '.join(errors))
+        errors = run.check_sources(sources_text(urls=2), '', None, ['q'] * 5)
+        self.assertIn('found 2', ' '.join(errors))
 
     def test_urls_must_come_from_three_sites(self):
         errors = run.check_sources(sources_text(sites=2), '', None, ['q'] * 5)
@@ -410,16 +440,15 @@ class VoiceAndAngleTest(unittest.TestCase):
         self.assertEqual([error for error in errors if 'uses' in error], ['the first line uses "may"; open on the reader\'s problem instead'])
 
     def test_voice_file_needs_every_section_filled(self):
-        template = (run.VOICE_DIR / 'TEMPLATE.md').read_text()
+        template = (REPO_TEMPLATE / 'voice.md').read_text()
         self.assertEqual(len(run.check_voice(template)), len(run.VOICE_SECTIONS))
         filled = ''.join(f'## {heading}\nFilled in.\n\n' for heading in run.VOICE_SECTIONS)
         self.assertEqual(run.check_voice(filled), [])
 
-    def test_voice_must_name_a_file(self):
-        self.assertIn('not None', ' '.join(run.voice_errors(task_text().replace('## Voice\nmoderaty\n', '## Voice\nNone.\n'))))
+    def test_brand_name_must_not_be_none(self):
+        self.assertIn('not None', ' '.join(run.check_brand('None.')))
 
 
-class StepRoleTest(unittest.TestCase):
     def test_brief_step_runs_on_the_strategist(self):
         brief = next(step for step in run.STEPS if step['id'] == '02-brief')
         self.assertEqual(run.ROLES[brief['role']], {'model': 'gpt-6.1-sol', 'effort': 'high'})
@@ -435,7 +464,7 @@ class StepRoleTest(unittest.TestCase):
 class ImageReelInputsTest(unittest.TestCase):
     def test_images_and_reel_read_the_voice_and_angle_first(self):
         for inputs in (run.IMAGE_INPUTS, run.REEL_INPUTS):
-            self.assertEqual(inputs[:3], ['design-system', 'voice', '02-brief#Angle'])
+            self.assertEqual(inputs[:3], ['design-system', 'voice', 'positioning#Value'])
 
 
 class WordingTest(unittest.TestCase):
@@ -581,30 +610,60 @@ class MinorFindingsTest(unittest.TestCase):
         self.assertEqual([model for model, _ in client.calls], ['w', 'r', 'w', 'r'])
 
 
-class ReaderProblemsTest(unittest.TestCase):
-    def test_sources_needs_six_reader_problems_from_three_sites(self):
-        self.assertEqual(run.check_sources(sources_text(), '', None, ['q'] * 5), [])
-        five = ('## Facts\n- Fact https://a.example.com (checked 2026-11-03)\n- Fact https://b.example.com/x (checked 2026-11-03)\n'
-                '- Fact https://c.example.com (checked 2026-11-03)\n- Fact https://a.example.com/y (checked 2026-11-03)\n'
-                '- Fact https://b.example.com/z (checked 2026-11-03)\n\n## Not found\nNone.\n\n## Reader problems\n'
-                + '\n'.join(f'- Problem {n} https://site{n % 3}.example.com/p{n} (checked 2026-11-03)' for n in range(5)) + '\n')
-        self.assertIn('the Reader problems need at least 6 lines with a URL; found 5', run.check_sources(five, '', None, ['q'] * 5))
-        self.assertIn('the Reader problems cite 2 different sites; they need at least 3',
-                      run.check_sources(sources_text(sites=2), '', None, ['q'] * 5))
-
+class BrandKitTest(unittest.TestCase):
     def test_brief_angle_problem_must_be_in_list(self):
         brief = full_brief('- Target length: 800 words').replace(f'- Reader problem: {PROBLEMS[0]}', '- Reader problem: Something else entirely.')
-        self.assertTrue(any('must be one line from the Reader problems section' in e for e in run.check_brief(brief, task_text(), None)))
+        self.assertTrue(any('must be one line from the Reader problems in positioning.md' in e for e in run.check_brief(brief, task_text(), None)))
         self.assertFalse(any('Reader problem' in e for e in run.check_brief(full_brief('- Target length: 800 words'), task_text(), None)))
 
     def test_brief_channel_ideas_use_different_problems(self):
         social = task_text('article, social')
         target = '- Target length: 800 words'
         same = f'- LinkedIn: {PROBLEMS[0]} Relief: x.\n- X: {PROBLEMS[0]} Relief: y.\n- Instagram: {PROBLEMS[2]} Relief: z.'
-        self.assertIn('the Channel ideas must use different Reader problems', run.check_brief(full_brief(target, same), social, None))
+        self.assertIn('the Channel ideas must use different Value problems', run.check_brief(full_brief(target, same), social, None))
         unlisted = f'- LinkedIn: {PROBLEMS[0]} Relief: x.\n- X: Nothing from the list. Relief: y.\n- Instagram: {PROBLEMS[2]} Relief: z.'
-        self.assertIn('the X Channel idea must start with one Reader problem from the Reader problems section',
+        self.assertIn('the X Channel idea must start with one Value problem from positioning.md',
                       run.check_brief(full_brief(target, unlisted), social, None))
+
+    def test_task_needs_brand(self):
+        self.assertTrue(any('Brand' in error for error in run.check_task(task_text(without='Brand'))))
+
+    def test_brand_kit_files_must_be_filled(self):
+        self.assertEqual(run.check_brand('demo'), [])
+        errors = run.check_brand('unfilled')
+        for prefix in ['design-system.md:', 'voice.md:', 'positioning.md:', 'pages.md:']:
+            self.assertTrue(any(error.startswith(prefix) for error in errors), prefix)
+
+    def test_positioning_needs_six_problems_from_three_sites(self):
+        self.assertEqual(run.check_positioning(POSITIONING_TEXT), [])
+        five = POSITIONING_TEXT.replace(PROBLEMS_TEXT, '\n'.join(PROBLEMS_TEXT.splitlines()[:5]))
+        self.assertTrue(any('at least 6 lines with a URL; found 5' in e for e in run.check_positioning(five)))
+        two = POSITIONING_TEXT.replace('site2.example.com', 'site0.example.com')
+        self.assertTrue(any('cite 2 different sites' in e for e in run.check_positioning(two)))
+
+    def test_brand_command_writes_approved_date(self):
+        draft = (REPO_TEMPLATE / 'positioning.md').read_text().replace(
+            'Template note: what the product is, for whom, and the result, in 25 words or fewer. Include the product URL.',
+            'A demo product for creators, at https://example.com/demo.')
+        write_brand('kitbrand', **{'positioning.md': draft})
+        client = FakeClient(['pass'], writer_outputs=[json.dumps({'output': POSITIONING_TEXT, 'notes': ''})],
+                            models={'gpt-6.1-sol': ['medium', 'high'], 'gpt-6-luna': ['xhigh']})
+        run.brand_kit(client, 'kitbrand', False, answers('a'))
+        saved = (BRANDS_TMP / 'kitbrand' / 'positioning.md').read_text()
+        self.assertTrue(saved.startswith(f'Approved: {date.today().isoformat()}\n'))
+        self.assertIn('## Reader problems', saved)
+
+    def test_social_inputs_use_positioning_value(self):
+        for spec in ['positioning#Reader problems', 'positioning#Value', 'positioning#Claims we never make']:
+            self.assertIn(spec, run.SOCIAL_INPUTS)
+
+    def test_article_links_only_to_pages_md(self):
+        body = 'If you export, use the button.\n\nRead [the guide](/compare/x/) first. Then [see](/not-listed/).'
+        article = META_LINE + '\n# Title\n\n' + body + '\n'
+        errors = run.check_article(article, task_text(), full_brief('- Target length: 6 words'))
+        self.assertTrue(any('the link /not-listed/ is not in pages.md' in e for e in errors))
+        self.assertFalse(any('/compare/x/' in e for e in errors))
+
 
 
 class SearchLogTest(unittest.TestCase):
@@ -635,30 +694,31 @@ class ImagesTest(unittest.TestCase):
 
 
 class DesignSystemTest(unittest.TestCase):
-    def test_design_system_is_required_for_images(self):
-        self.assertTrue(run.check_task(task_text('article, social, images', design_system='None.')))
+    def test_design_system_is_checked_for_images(self):
+        self.assertEqual(run.check_task(task_text('article, social, images')), [])
+        write_brand('nodesign', **{'design-system.md': 'None.\n'})
+        self.assertTrue(run.check_task(task_text('article, social, images', brand='nodesign')))
 
-    def test_design_system_section_is_optional_without_images_or_reel(self):
-        self.assertEqual(run.check_task(task_text('article, social', without='Design system')), [])
-        self.assertTrue(run.check_task(task_text('article, social, images', without='Design system')))
+    def test_design_system_is_not_checked_without_images_or_reel(self):
+        self.assertEqual(run.check_task(task_text('article, social', brand='nosuchbrand')), [])
 
-    def test_design_system_file_must_exist(self):
-        errors = run.check_task(task_text('article, social, images', design_system='nosuchsystem'))
-        self.assertTrue(any('not found' in error for error in errors))
+    def test_brand_folder_must_exist(self):
+        errors = run.check_task(task_text('article, social, images', brand='nosuchbrand'))
+        self.assertTrue(any('brand folder not found' in error for error in errors))
 
     def test_check_design_system(self):
-        template = (run.DESIGN_DIR / 'TEMPLATE.md').read_text()
+        template = (REPO_TEMPLATE / 'design-system.md').read_text()
         self.assertEqual(run.check_design_system(template), [])
         self.assertTrue(run.check_design_system(template.replace('- accent: #3366FF\n', '')))
 
     def test_images_get_the_design_system_first(self):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
         campaign.mkdir(parents=True)
-        (campaign / '00-task.md').write_text(task_text('article, social, images', design_system='moderaty'))
+        (campaign / '00-task.md').write_text(task_text('article, social, images', brand='demo'))
         brief = campaign / '02-brief'
         brief.mkdir()
         (brief / 'APPROVED').write_text('done\n')
-        (brief / 'output.md').write_text('## Core message\nOne idea.\n\n## Angle\nA reader problem.\n\n## Reader problems\n- A problem https://example.com (checked 2026-11-04)\n\n## Facts\n- Fact https://example.com (checked 2026-11-03)\n\n## Visual ideas\nA card.\n')
+        (brief / 'output.md').write_text('## Core message\nOne idea.\n\n## Angle\nA reader problem.\n\n## Facts\n- Fact https://example.com (checked 2026-11-03)\n\n## Visual ideas\nA card.\n')
         for step_id in ('04-linkedin', '05-x', '06-instagram'):
             step_dir = campaign / step_id
             step_dir.mkdir()
@@ -666,7 +726,7 @@ class DesignSystemTest(unittest.TestCase):
             (step_dir / 'output.md').write_text('Text.\n')
         step = next(s for s in run.STEPS if s['id'] == '07-images')
         prompt = run.writer_prompt(run.SKILLS_DIR, campaign, step)
-        self.assertLess(prompt.index('--- BEGIN design-system ---'), prompt.index('--- BEGIN 02-brief#Core message ---'))
+        self.assertLess(prompt.index('--- BEGIN design-system ---'), prompt.index('--- BEGIN voice ---'))
 
 
 class StopTest(unittest.TestCase):
