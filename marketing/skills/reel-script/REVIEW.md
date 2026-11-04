@@ -7,6 +7,7 @@ Checked:
 - No line is an internal process line.
 - No line uses a hedge word: may, might, describes, positions, offers, various.
 - No banned phrase, no contrast ("X, not Y", "not X, it's Y", "rather than"), and no more than three sentences start with the same two words.
+- The last presenter line ends with "Link in bio" (a final period is allowed).
 
 Judge the script as the character speaking to a viewer scrolling a busy feed.
 

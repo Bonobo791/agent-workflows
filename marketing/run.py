@@ -631,6 +631,8 @@ def adds_errors(plan):
                 errors.append(f'H2 "{pending}" needs an "- Adds:" line')
             pending = stripped[len('- H2:'):].strip()
         elif stripped.startswith('- Adds:'):
+            if not stripped[len('- Adds:'):].strip():
+                errors.append(f'the "- Adds:" line under H2 "{pending}" is empty' if pending is not None else 'a "- Adds:" line is empty')
             pending = None
     if pending is not None:
         errors.append(f'H2 "{pending}" needs an "- Adds:" line')
@@ -681,8 +683,9 @@ def check_linkedin(output, task, brief):
 
 def check_x(output, task, brief):
     errors = []
-    posts = x_posts(output)
-    numbers = [int(number) for number in re.findall(r'^(\d+)/', output, re.MULTILINE)]
+    post_body = sections(output).get('Post', output)  # the Post section without its heading; the posts are counted here
+    posts = x_posts(post_body)
+    numbers = [int(number) for number in re.findall(r'^(\d+)/', post_body, re.MULTILINE)]
     if numbers and numbers != list(range(1, len(numbers) + 1)):
         found = ', '.join(f'{number}/' for number in numbers)
         errors.append(f'post numbers must run 1/ to {len(numbers)}/ in order; found {found}')
@@ -874,7 +877,7 @@ def brand_kit(client, brand, refresh, ask):
     approved = brand_file(brand, 'positioning.md')
     current = approved.read_text()
     previous = current.split('\n', 2)[2] if current.startswith('Approved: ') else None
-    if refresh and step_dir.exists():
+    if refresh and (step_dir / 'APPROVED').is_file():  # an approved draft is replaced; an unapproved one resumes at the owner prompt
         shutil.rmtree(step_dir)
     shown = []
 
@@ -1179,6 +1182,8 @@ def check_reel_script(output, task, brief):
         errors.append('every presenter line id must look like p1, p2, p3')
     elif ids != [f'p{number}' for number in range(1, len(ids) + 1)]:
         errors.append('the presenter line ids must run p1, p2, p3 and so on, in order')
+    if lines and not re.search(r'Link in bio\.?$', lines[-1][1].strip()):
+        errors.append('the last presenter line must end with "Link in bio" (a final period is allowed)')
     total = 0
     for line_id, text in lines:
         words = len(re.findall(r"\b[\w'-]+\b", text))
@@ -1202,12 +1207,13 @@ def check_reel_script(output, task, brief):
 CHECKS['reel-script'] = check_reel_script
 
 
-def materialize_script(step_dir, written):
+def materialize_script(step_dir, written, presenter):
     lines = written['lines']
     if not lines:
         raise WorkflowError(f"writer returned no presenter lines. Writer notes: {written['notes'] or 'none'}")
+    written = dict(written, presenter=presenter)  # the name comes from character.md, not from the writer
     (step_dir / 'script.json').write_text(json.dumps(written, indent=2, ensure_ascii=False) + '\n')
-    text = ['# Reel script', '', f"Presenter: {written['presenter']}", '']
+    text = ['# Reel script', '', f"Presenter: {presenter}", '']
     text += [f"- {line['id']}: {line['text']}" for line in lines]
     text += ['', '## Notes', '', written['notes'] or 'None.']
     (step_dir / 'output.md').write_text('\n'.join(text) + '\n')
@@ -1267,25 +1273,34 @@ def srt_to_vtt(srt):
     return '\n'.join(lines).rstrip() + '\n'
 
 
-def render_one(line, character):
-    created = heygen_request('POST', '/v3/videos', body={
-        'type': 'avatar', 'avatar_id': character['avatar_id'], 'voice_id': character['voice_id'], 'script': line['text'],
-        'aspect_ratio': '9:16', 'resolution': '1080p', 'output_format': 'mp4', 'caption': {'file_format': 'srt'}})
-    video_id = created['data']['video_id']
+def render_one(line, character, pending):
+    """Render one presenter line. The video id is saved before polling, so a rerun polls that video instead of starting another."""
+    if pending.is_file():
+        video_id = json.loads(pending.read_text())['video_id']
+        log.info('[08-reel] %s: polling the video started earlier (%s)', line['id'], video_id)
+    else:
+        created = heygen_request('POST', '/v3/videos', body={
+            'type': 'avatar', 'avatar_id': character['avatar_id'], 'voice_id': character['voice_id'], 'script': line['text'],
+            'aspect_ratio': '9:16', 'resolution': '1080p', 'output_format': 'mp4', 'caption': {'file_format': 'srt'}})
+        video_id = created['data']['video_id']
+        pending.write_text(json.dumps({'video_id': video_id}) + '\n')
     for _ in range(HEYGEN_MAX_POLLS):
         status = heygen_request('GET', f'/v3/videos/{video_id}')
         data = status['data']
         if data.get('status') == 'completed':
             break
         if data.get('status') == 'failed':
+            pending.unlink(missing_ok=True)
             raise HeyGenError(f"HeyGen render of {line['id']} failed. Full response: {json.dumps(status)}")
         time.sleep(HEYGEN_POLL_SECONDS)
     else:
         raise HeyGenError(f"HeyGen render of {line['id']} did not finish. Last response: {json.dumps(status)}")
     if not data.get('subtitle_url'):
-        raise WorkflowError(f"HeyGen finished clip {line['id']} without a subtitle_url; the run stops at clip {line['id']}")
+        raise WorkflowError(f"HeyGen finished clip {line['id']} without a subtitle_url; the run stops at clip {line['id']}. "
+                            f'Delete {pending} to render it again.')
     if not data.get('video_url') or data.get('duration') is None:
-        raise HeyGenError(f"HeyGen finished clip {line['id']} without a video_url or duration. Full response: {json.dumps(status)}")
+        raise HeyGenError(f"HeyGen finished clip {line['id']} without a video_url or duration. Full response: {json.dumps(status)}. "
+                          f'Delete {pending} to render it again.')
     subtitles = heygen_download(data['subtitle_url']).decode('utf-8-sig')
     return float(data['duration']), heygen_download(data['video_url']), srt_to_vtt(subtitles)
 
@@ -1305,15 +1320,17 @@ def render_presenter(campaign, step_dir, character):
     for line in script['lines']:
         key = hashlib.sha256('\n'.join([line['text'], character['avatar_id'], character['voice_id']]).encode()).hexdigest()
         video, subtitles, meta = cache / f'{key}.mp4', cache / f'{key}.vtt', cache / f'{key}.json'
+        pending = cache / f'{key}.pending.json'  # the video id of a render that has started but not finished
         if video.is_file() and subtitles.is_file() and meta.is_file():
             duration = json.loads(meta.read_text())['duration']
             log.info('[08-reel] %s reused its earlier render: %.1f s of video', line['id'], duration)
         else:
             started = time.monotonic()
-            duration, mp4_bytes, vtt_text = render_one(line, character)
+            duration, mp4_bytes, vtt_text = render_one(line, character, pending)
             video.write_bytes(mp4_bytes)
             subtitles.write_text(vtt_text)
             meta.write_text(json.dumps({'duration': duration}))
+            pending.unlink(missing_ok=True)  # cached, so the video id is no longer needed
             log.info('[08-reel] rendered %s: %.1f s of video in %.0f s', line['id'], duration, time.monotonic() - started)
         shutil.copyfile(video, assets / f"{line['id']}.mp4")
         shutil.copyfile(subtitles, assets / f"{line['id']}.vtt")
@@ -1327,7 +1344,8 @@ def render_presenter(campaign, step_dir, character):
 
 
 def presenter_film_errors(files, presenter):
-    text = '\n'.join(item['content'] for item in files)
+    film = next((item['content'] for item in files if item['path'] == 'film.html'), '')
+    text = re.sub(r'<!--.*?-->', '', film, flags=re.S)  # a commented-out clip does not count
     tags = re.findall(r'<video\b[^>]*>', text)
     errors = []
     for number, clip in enumerate(presenter):
@@ -1361,7 +1379,7 @@ def materialize(step, step_dir, written, campaign):
         (step_dir / 'output.md').write_text(written['output'].rstrip() + '\n')
         return []
     if step['kind'] == 'script':
-        return materialize_script(step_dir, written)
+        return materialize_script(step_dir, written, read_character(campaign)['name'])
     if step['kind'] == 'images':
         return materialize_images(step_dir, written)
     character = read_character(campaign)
@@ -1415,7 +1433,7 @@ def materialize_video(step_dir, written, character, presenter):
     mp4 = step_dir / 'reel.mp4'
     if mp4.exists():
         mp4.unlink()
-    run_tool(['openfilm', 'render', '--out', str(mp4)], project_dir)
+    run_tool(['openfilm', 'render', '--subtitles', '--out', str(mp4)], project_dir)
     if not mp4.is_file():
         raise WorkflowError(f'openfilm render did not create {mp4}')
     frames, seconds = sample_frames(mp4, step_dir / 'frames')
@@ -1565,14 +1583,19 @@ def decide(step, step_dir, review, ask):
             print('Type a, r or q.')
 
 
-def fingerprint(step, skills_dir):
-    """What an approval depends on: the step's skills, its library skills and its check function."""
+def fingerprint(step, skills_dir, campaign):
+    """What an approval depends on: the step's skills, its library skills, its check function and every input block it received."""
     digest = hashlib.sha256()
     parts = [load_skill(skills_dir, step['skill'], 'SKILL.md'), load_skill(skills_dir, step['skill'], 'REVIEW.md')]
     for name in step['writer_skills'] + step['review_skills']:
         path = LIBRARY_DIR / name / 'SKILL.md'
         parts.append(path.read_text() if path.is_file() else '')
     parts.append(inspect.getsource(CHECKS[step['check']]) if step.get('check') else '')
+    for spec in dict.fromkeys(step['inputs'] + step['review_inputs']):
+        try:
+            parts.append(spec + '\n' + read_input(campaign, spec))
+        except (WorkflowError, OSError):
+            parts.append(spec + '\nmissing: not approved or not written yet')  # the approval stays stale until the input exists
     for part in parts:
         digest.update(part.encode() + b'\0')
     return digest.hexdigest()
@@ -1585,7 +1608,7 @@ def stale_steps(campaign, steps, skills_dir):
         if not approved.is_file():
             continue
         recorded = re.search(r'^fingerprint: ([0-9a-f]+)$', approved.read_text(), re.MULTILINE)
-        if recorded is None or recorded.group(1) != fingerprint(step, skills_dir):
+        if recorded is None or recorded.group(1) != fingerprint(step, skills_dir, campaign):
             stale.append(step)
     return stale
 
@@ -1638,7 +1661,7 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
         notes = decide(step, step_dir, review, ask)
         if not notes:
             log.info('[%s] approved by the owner', step['id'])
-            (step_dir / 'APPROVED').write_text(f"{now()}\nfingerprint: {fingerprint(step, skills_dir)}\n")
+            (step_dir / 'APPROVED').write_text(f"{now()}\nfingerprint: {fingerprint(step, skills_dir, campaign)}\n")
             return
         log.info('[%s] owner rejected; notes: %s', step['id'], notes)
         revision = (review, notes)
@@ -1689,7 +1712,7 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
         errors = check_character(brand_of((campaign / '00-task.md').read_text()))
         if errors:
             raise WorkflowError('; '.join(errors))
-        if not os.environ.get('HEYGEN_API_KEY'):
+        if not os.environ.get('HEYGEN_API_KEY') and not (campaign / '08-reel' / 'APPROVED').is_file():
             raise WorkflowError('HEYGEN_API_KEY is not set; set it in the environment before a reel run')
     recheck_approved(campaign, steps)  # before any Codex call
     check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed

@@ -12,5 +12,6 @@ Rules:
 - Use only facts from the brief's Facts section. Never invent a fact. Keep to the Claims we never make in positioning.md.
 - Write each line as the character would say it aloud: short sentences, plain words, no stage directions, no emoji.
 - One idea per reel. Say what the reader should do once, near the end.
+- The last line ends with "Link in bio" (a final period is allowed).
 - The disclosure is not part of the script; the reel notes carry it.
 - No em dashes.

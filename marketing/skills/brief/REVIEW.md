@@ -16,7 +16,7 @@ Check the brief against the task and the sources step.
 Blocking findings:
 - A section, goal or channel idea that needs a file the task doesn't supply.
 - Reader problems that do not copy positioning.md's Reader problems word for word.
-- Facts that differ from the sources step's Facts, or that are missing or added.
+- Facts that differ from the sources step's Facts or from positioning.md's Proof lines, or that are missing or added.
 - A fact the sources step did not confirm.
 - A working title over 60 characters or without the primary keyword.
 - Required headings from the task that are missing, reworded or out of order.

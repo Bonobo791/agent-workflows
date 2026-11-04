@@ -41,7 +41,7 @@ If the Deliverables include social: one line each, starting `- LinkedIn:`, `- X:
 If the Deliverables include images: what the three images show. If the Deliverables include reel: what the reel shows. Otherwise: Not needed.
 
 ## Facts
-Copy every fact from the sources step's Facts section, word for word, with its source. Add no fact.
+Copy every fact from the sources step's Facts section, word for word, with its source. Also copy every line of positioning.md's Proof section that has a URL, word for word with its URL. Add no other fact.
 
 ## Reader problems
 Copy every line of positioning.md's Reader problems word for word, with its URL. Add none.
