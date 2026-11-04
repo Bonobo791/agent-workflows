@@ -53,6 +53,13 @@ TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Requ
 # Design system names are file names: letters, digits and hyphens. TEMPLATE is uppercase, so NAME_RE would reject it.
 DESIGN_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]*$')
 DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not']
+PUBLISH_STEP = '09-publish'
+PLATFORMS = ['linkedin', 'x', 'instagram', 'youtube']  # also the posting order
+PLATFORM_NEEDS = {'linkedin': {'social'}, 'x': {'social'}, 'instagram': {'social', 'images'}, 'youtube': {'reel'}}
+SCHEDULE_RE = re.compile(r'^- (linkedin|x|instagram|youtube): (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)$')
+ARTICLE_URL_RE = re.compile(r'^https://\S+$')
+YOUTUBE_TITLE_MAX = 100
+PUBLISH_CONFIG = Path.home() / '.config' / 'agent-workflows' / 'publish.json'
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
 SOCIAL_INPUTS = ['02-brief', '03-article#outline']
@@ -278,6 +285,7 @@ def check_task(task, design=True):
         else:
             if design and wanted & {'images', 'reel'}:
                 errors += design_system_errors(task)
+            errors += publish_errors(task, wanted)
     return errors
 
 
@@ -289,6 +297,71 @@ def check_design_system(text):
         if not re.search(rf'^- {role}: #[0-9A-Fa-f]{{6}}$', colors, re.MULTILINE):
             errors.append(f'## Colors needs a line "- {role}: #RRGGBB" with a six-digit hex colour')
     return errors
+
+
+def publish_targets(task):
+    if 'Publish to' not in sections(task):
+        return []
+    names = [word.strip().lower() for word in sections(task)['Publish to'].split(',')]
+    names = [name for name in names if name]
+    if not names:
+        raise WorkflowError('## Publish to must name at least one of: linkedin, x, instagram, youtube')
+    for name in names:
+        if name not in PLATFORMS:
+            raise WorkflowError(f'unknown platform "{name}"; use any of: linkedin, x, instagram, youtube')
+        if names.count(name) > 1:
+            raise WorkflowError(f'platform "{name}" is named twice in ## Publish to')
+    return [platform for platform in PLATFORMS if platform in names]
+
+
+def publish_errors(task, wanted):
+    found = sections(task)
+    if 'Publish to' not in found:
+        if 'Article URL' in found or 'Schedule' in found:
+            return ['## Article URL and ## Schedule are only used with ## Publish to']
+        return []
+    errors = []
+    try:
+        targets = publish_targets(task)
+    except WorkflowError as error:
+        errors.append(str(error))
+        targets = []
+    for platform in targets:
+        errors += [f'{platform} needs {need} in Deliverables' for need in sorted(PLATFORM_NEEDS[platform]) if need not in wanted]
+    url = found.get('Article URL', '')
+    if not url:
+        errors.append('## Publish to needs ## Article URL: the live https:// address of the article')
+    elif not ARTICLE_URL_RE.match(url):
+        errors.append('## Article URL must be one https:// address')
+    schedule = found.get('Schedule', '')
+    if schedule and schedule != 'None.':
+        named = []
+        for line in schedule.splitlines():
+            if not line.strip():
+                continue
+            match = SCHEDULE_RE.match(line)
+            if not match:
+                errors.append(f'schedule line must look like "- x: 2026-11-10T14:00Z": {line}')
+                continue
+            platform = match.group(1)
+            if platform not in targets:
+                errors.append(f'schedule names {platform}, which is not in ## Publish to')
+            if platform in named:
+                errors.append(f'schedule names {platform} twice')
+            named.append(platform)
+    return errors
+
+
+def schedule_times(task):
+    schedule = sections(task).get('Schedule', '')
+    if schedule in ('', 'None.'):
+        return {}
+    times = {}
+    for line in schedule.splitlines():
+        if line.strip():
+            match = SCHEDULE_RE.match(line)
+            times[match.group(1)] = match.group(2)[:-1] + ':00Z'
+    return times
 
 
 def required_headings(task):
