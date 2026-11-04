@@ -27,3 +27,11 @@ Rules:
 - Make one sharp point per post. Cut any sentence that only lists features.
 - Take the tone from the voice file. Facts still come only from the brief: the tone changes, the facts don't.
 - Never mention the brief, supplied facts or supplied evidence in the copy. Readers don't know they exist.
+- Each H2 section delivers only the Adds line from the brief's Article plan. Nothing else goes in it.
+- The decision advice appears twice: once in the opening paragraph, as the answer, and once in the close, as one concrete next step.
+- The first paragraph after the title is 3 sentences or fewer, and gives the conditional answer with "if" or "when".
+- No more than three sentences may start with the same two words. Vary the openings.
+- Say each point once. Do not repeat a six-word phrase.
+- When a fact is missing for one side, write what the reader should check, as an instruction to them. Example: "Check Studio's activity history against the records you need before you decide." Never write that something is unassessed, not covered or outside the comparison.
+- The brief is notes to you, so never reuse its wording. Write to the reader about their choice, never about how the article presents it.
+- An illustrative example needs no label. Write it as a scene, without the word "fictional".

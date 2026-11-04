@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,7 +70,12 @@ SOCIAL_BANNED = ['fictional', 'says it', 'stated', 'describes', 'positions', 'wi
 LINKEDIN_LIMIT = 1000  # characters, hashtags excluded
 X_POST_LIMIT = 3
 CHANNEL_LIMIT = 200  # characters per Channel idea line
-BANNED_PHRASES = ['supplied facts', 'supplied evidence', 'the brief', 'provided facts', 'based on the facts']
+BANNED_PHRASES = ['supplied facts', 'supplied evidence', 'the brief', 'provided facts', 'based on the facts',
+                  'in this comparison', 'unassessed', 'the cited', 'cited documentation', 'this article', 'fictional', 'editorial', 'left unassessed']
+RHYTHM_LIMIT = 3  # sentences that may start with the same two words
+OPENING_SENTENCES = 3
+REPEAT_WORDS = 6
+REPEAT_LIMIT = 3
 CONTRAST_RE = re.compile(r"\b(?:is|are|was|were|isn't|aren't)?\s*\w[\w\s']{0,40},\s+not\s+\w", re.I)  # "X, not Y"
 NOT_IT_RE = re.compile(r"\bnot (?:just |only )?\w[\w\s']{0,30}[,;]\s+(?:it[’']s|it is|but)\b", re.I)  # "not X, it's Y"
 
@@ -383,6 +389,7 @@ def check_brief(output, task, brief):
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts_of(output) if not has_source(fact)]
     if len(TARGET_RE.findall(sections(output).get('Article plan', ''))) != 1:
         errors.append('Article plan needs one line like "- Target length: 2000 words" with a whole number.')
+    errors += adds_errors(sections(output).get('Article plan', ''))
     channel = sections(output).get('Channel ideas', '')
     if 'social' in parse_deliverables(task):
         for prefix in ('- LinkedIn:', '- X:', '- Instagram:'):
@@ -417,6 +424,7 @@ def check_article(output, task, brief):
     if words * 5 < target * 4 or words * 5 > target * 6:  # the same as 0.8 and 1.2 times the target, in whole numbers
         low, high = round(target * (1 - LENGTH_TOLERANCE)), round(target * (1 + LENGTH_TOLERANCE))
         errors.append(f"article is {words} words; the brief's target is {target}, so it must be {low} to {high}")
+    errors += opening_errors(output) + repetition_errors(output)
     errors += wording_errors(output)
     return errors
 
@@ -438,6 +446,68 @@ def sentences(text):
     return [sentence.strip() for sentence in re.split(r'(?<=[.!?])\s+|\n+', text) if sentence.strip()]
 
 
+def rhythm_errors(text):
+    openings = {}
+    for sentence in sentences(text):
+        if sentence[:1] in '#-|*>0123456789' or sentence.startswith('Meta description:'):
+            continue
+        words = re.findall(r"[\w']+", sentence)[:2]
+        if len(words) == 2:
+            openings.setdefault(' '.join(words).lower(), []).append(' '.join(words))
+    return [f'{len(forms)} sentences start with "{forms[0]}"; vary the openings (limit {RHYTHM_LIMIT})'
+            for forms in openings.values() if len(forms) > RHYTHM_LIMIT]
+
+
+def repetition_errors(text):
+    words = re.findall(r"[a-z0-9']+", URL_RE.sub(' ', text).lower())  # a link is not repeated prose
+    grams = [' '.join(words[i:i + REPEAT_WORDS]) for i in range(len(words) - REPEAT_WORDS + 1)]
+    counts = Counter(grams)
+    repeated = [gram for gram, count in counts.items() if count >= REPEAT_LIMIT]
+    # a longer repeated phrase already covers its shorter parts
+    keep = [gram for gram in repeated if not any(gram != other and gram in other for other in repeated)]
+    return [f'this phrase appears {counts[gram]} times; say it once: "{gram}"' for gram in keep]
+
+
+def opening_errors(output):
+    lines = output.splitlines()
+    title = next((index for index, line in enumerate(lines) if line.startswith('# ')), None)
+    if title is None:
+        return []  # check_article reports the missing title
+    paragraph = []
+    for line in lines[title + 1:]:
+        if not line.strip():
+            if paragraph:
+                break
+            continue
+        if line.startswith('#'):
+            break
+        paragraph.append(line.strip())
+    text = ' '.join(paragraph)
+    if not text:
+        return ['the article has no opening paragraph after the title']
+    errors = []
+    if len([sentence for sentence in re.split(r'(?<=[.!?])\s+', text) if sentence.strip()]) > OPENING_SENTENCES:
+        errors.append(f'the opening paragraph must answer the question in {OPENING_SENTENCES} sentences or fewer')
+    if not re.search(r'\b(?:if|when)\b', text, re.IGNORECASE):
+        errors.append('the opening paragraph must give the conditional answer, with "if" or "when"')
+    return errors
+
+
+def adds_errors(plan):
+    errors, pending = [], None
+    for line in plan.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('- H2:'):
+            if pending is not None:
+                errors.append(f'H2 "{pending}" needs an "- Adds:" line')
+            pending = stripped[len('- H2:'):].strip()
+        elif stripped.startswith('- Adds:'):
+            pending = None
+    if pending is not None:
+        errors.append(f'H2 "{pending}" needs an "- Adds:" line')
+    return errors
+
+
 def wording_errors(text):
     errors = []
     for sentence in sentences(text):
@@ -446,7 +516,7 @@ def wording_errors(text):
                 errors.append(f'remove "{phrase}" from: "{sentence}"')
         if CONTRAST_RE.search(sentence) or NOT_IT_RE.search(sentence):
             errors.append(f'rewrite this contrast as a direct statement: "{sentence}"')
-    return errors
+    return errors + rhythm_errors(text)
 
 
 def hedge_errors(line):
@@ -615,7 +685,7 @@ def writer_prompt(skills_dir, campaign, step):
 
 
 def revision_prompt(step, review, notes):
-    parts = ['This is a revision of your last answer in this thread. Fix every blocking finding below and follow the owner notes, if any. '
+    parts = ['This is a revision of your last answer in this thread. Fix every finding below, blocking and minor, and follow the owner notes, if any. '
              'Return the complete new version in the same JSON shape, not a list of changes.',
              '', block('review of your last answer', review_markdown(review))]
     if notes:
@@ -900,6 +970,7 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
         log.info('[%s] resuming at the decision prompt', step['id'])
     revision = None
     auto_left = MAX_AUTO_REVISIONS
+    minor_fix_left = True  # one automatic pass on minor findings per draft
     while True:
         if review is None:
             _, images = write(client, roles, skills_dir, campaign, step, step_dir, revision)
@@ -908,6 +979,13 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
             if review['verdict'] == 'revise' and auto_left > 0:
                 auto_left -= 1
                 log.info('[%s] reviewer said revise; automatic rewrite %d of %d', step['id'], MAX_AUTO_REVISIONS - auto_left, MAX_AUTO_REVISIONS)
+                revision = (review, '')
+                review = None
+                continue
+            if review['verdict'] == 'pass' and review['findings'] and auto_left > 0 and minor_fix_left:
+                auto_left -= 1
+                minor_fix_left = False
+                log.info('[%s] fixing minor findings; automatic rewrite %d of %d', step['id'], MAX_AUTO_REVISIONS - auto_left, MAX_AUTO_REVISIONS)
                 revision = (review, '')
                 review = None
                 continue
@@ -921,6 +999,7 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
         revision = (review, notes)
         review = None
         auto_left = MAX_AUTO_REVISIONS
+        minor_fix_left = True
 
 
 def build_final(campaign, steps):

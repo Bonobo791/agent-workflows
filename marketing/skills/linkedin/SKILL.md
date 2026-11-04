@@ -34,3 +34,6 @@ Rules:
 - Write to "you". Use short sentences, mix their lengths, and give one concrete example per post.
 - Take the tone from the voice file. Facts still come only from the brief.
 - Never mention the brief, supplied facts or supplied evidence in the copy. Readers don't know they exist.
+- When a fact is missing for one side, write what the reader should check, as an instruction to them. Example: "Check Studio's activity history against the records you need before you decide." Never write that something is unassessed, not covered or outside the comparison.
+- The brief is notes to you, so never reuse its wording. Write to the reader about their choice, never about how the article presents it.
+- An illustrative example needs no label. Write it as a scene, without the word "fictional".

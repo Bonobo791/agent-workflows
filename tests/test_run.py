@@ -83,7 +83,10 @@ class FakeClient:
         thread_id = thread_id or f'thread-{len(self.prompts)}'
         if output_schema is run.REVIEW_SCHEMA:
             verdict = self.verdicts.pop(0)
-            findings = [] if verdict == 'pass' else [{'severity': 'blocking', 'issue': 'too short', 'fix': 'make it longer'}]
+            if verdict == 'minor':
+                verdict, findings = 'pass', [{'severity': 'minor', 'issue': 'wordy', 'fix': 'trim'}]
+            else:
+                findings = [] if verdict == 'pass' else [{'severity': 'blocking', 'issue': 'too short', 'fix': 'make it longer'}]
             text = json.dumps({'verdict': verdict, 'summary': 'Checked.', 'findings': findings})
         elif self.writer_outputs:
             text = self.writer_outputs.pop(0)
@@ -315,9 +318,10 @@ class ChecksTest(unittest.TestCase):
 
     def test_article_required_headings_in_order(self):
         task = task_text().replace('## Required headings\nNone.', '## Required headings\n- Pricing\n- Setup')
-        brief = full_brief('- Target length: 6 words')
-        good = META_LINE + '\n\n# Export guide\n\n## Pricing\nText.\n\n## Setup\nText.\n'
-        bad = META_LINE + '\n\n# Export guide\n\n## Setup\nText.\n\n## Pricing\nText.\n'
+        brief = full_brief('- Target length: 14 words')
+        opening = 'If you export often, use the export button.\n\n'
+        good = META_LINE + '\n\n# Export guide\n\n' + opening + '## Pricing\nText.\n\n## Setup\nText.\n'
+        bad = META_LINE + '\n\n# Export guide\n\n' + opening + '## Setup\nText.\n\n## Pricing\nText.\n'
         self.assertEqual(run.check_article(good, task, brief), [])
         self.assertTrue(run.check_article(bad, task, brief))
 
@@ -498,6 +502,68 @@ class SocialLimitsTest(unittest.TestCase):
         long_brief = full_brief('- Target length: 800 words', channel=at_limit + 'x' + others)
         self.assertIn('the LinkedIn Channel idea is 201 characters; the limit is 200',
                       run.check_brief(long_brief, task_text('article, social'), None))
+
+
+def article_with(body):
+    return META_LINE + '\n# Export guide\n\n' + body + '\n'
+
+
+class ArticleRulesTest(unittest.TestCase):
+    def article_errors(self, body):
+        return run.check_article(article_with(body), task_text(), full_brief('- Target length: 6 words'))
+
+    def test_sentence_openings_limit(self):
+        four = self.article_errors('If you export, use the button. I\'d compare A. I\'d compare B. I\'d compare C. I\'d compare D.')
+        self.assertIn('4 sentences start with "I\'d compare"; vary the openings (limit 3)', four)
+        three = self.article_errors('If you export, use the button. I\'d compare A. I\'d compare B. I\'d compare C.')
+        self.assertFalse(any('start with' in e for e in three))
+
+    def test_repeated_phrase_is_reported_once(self):
+        body = 'If you export, read on.\n\nOne export file holds every invoice. Next. One export file holds every invoice. Last. One export file holds every invoice.'
+        self.assertIn('this phrase appears 3 times; say it once: "one export file holds every invoice"', self.article_errors(body))
+
+    def test_repeated_source_links_are_not_phrases(self):
+        body = 'If you export, read on.\n\nSee https://support.google.com/youtube/answer/1 for details. Then see https://support.google.com/youtube/answer/1 again. And https://support.google.com/youtube/answer/1 once more.'
+        self.assertFalse(any('appears' in e for e in self.article_errors(body)))
+
+    def test_opening_answers_in_three_sentences_with_if_or_when(self):
+        self.assertIn('the opening paragraph must answer the question in 3 sentences or fewer',
+                      self.article_errors('If you export. Then open it. Then check it. Then send it.'))
+        self.assertIn('the opening paragraph must give the conditional answer, with "if" or "when"',
+                      self.article_errors('Use the export button. It is quick.'))
+        good = self.article_errors('If you export often, use the button. Otherwise, the menu works.')
+        self.assertFalse(any('opening paragraph' in e for e in good))
+
+    def test_each_new_banned_phrase_is_an_error(self):
+        for phrase in ['in this comparison', 'unassessed', 'the cited', 'cited documentation', 'this article', 'fictional', 'editorial', 'left unassessed']:
+            with self.subTest(phrase=phrase):
+                self.assertIn(f'remove "{phrase}" from: "Studio is {phrase} today."', run.wording_errors(f'Studio is {phrase} today.'))
+
+
+class BriefAddsTest(unittest.TestCase):
+    def test_every_h2_needs_an_adds_line(self):
+        plan = '- Target length: 800 words\n- H2: One\n- H2: Two\n  - Adds: the second thing'
+        self.assertIn('H2 "One" needs an "- Adds:" line', run.check_brief(full_brief(plan), task_text(), None))
+        good = '- Target length: 800 words\n- H2: One\n  - Adds: the first thing\n- H2: Two\n  - Adds: the second thing'
+        self.assertFalse(any('Adds' in e for e in run.check_brief(full_brief(good), task_text(), None)))
+
+
+class MinorFindingsTest(unittest.TestCase):
+    def run_with(self, verdicts):
+        campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        campaign.mkdir(parents=True)
+        (campaign / '00-task.md').write_text(task_text())
+        client = FakeClient(verdicts)
+        run.run_campaign(campaign, client, ask=answers('a'), steps=[dict(TEXT_STEPS[0])], skills_dir=run.SKILLS_DIR, roles=ROLES)
+        return client
+
+    def test_minor_findings_get_one_rewrite(self):
+        client = self.run_with(['minor', 'pass'])
+        self.assertEqual([model for model, _ in client.calls], ['w', 'r', 'w', 'r'])  # writer, reviewer, writer, reviewer, then the owner
+
+    def test_second_minor_findings_go_to_the_owner(self):
+        client = self.run_with(['minor', 'minor'])
+        self.assertEqual([model for model, _ in client.calls], ['w', 'r', 'w', 'r'])
 
 
 class SearchLogTest(unittest.TestCase):

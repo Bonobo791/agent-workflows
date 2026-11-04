@@ -23,9 +23,11 @@ Blocking findings:
 - A banned hedge word in the hook (may, might, describes, positions, offers, various).
 - Copy that mentions the brief, supplied facts or supplied evidence.
 - A "not X, it's Y" or "X, not Y" contrast.
-- Meta talk about sources, such as "based on the facts".
+- Meta talk about sources or the comparison, such as "based on the facts" or "in this comparison".
+- An instruction to the writer in the copy, such as "Give the native workflow a clear recommendation".
+- The same advice repeated in more than two sections.
 
 Minor findings:
-- Passive voice, filler, adverbs, flow or repetition.
+- Passive voice, filler, adverbs, flow.
 
 Pass only when there are no blocking findings.
