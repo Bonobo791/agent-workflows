@@ -8,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'marketing'))
 import run  # noqa: E402
-from test_run import task_text  # noqa: E402
+from test_run import task_text, FakeClient, answers, ROLES, TEXT_STEPS  # noqa: E402
 
 ARTICLE_URL = '## Article URL\nhttps://moderaty.com/blog/demo\n\n'
 LINKEDIN = '## Publish to\nlinkedin\n\n' + ARTICLE_URL
@@ -175,6 +175,61 @@ class PlanTest(PlanMixin, unittest.TestCase):
     def test_preview_shows_x_cost(self):
         preview = run.plan_preview(self.plan(), self.campaign / '09-publish')
         self.assertIn('X cost: about $0.215', preview)
+
+
+def make_skills(root):
+    skills = root / 'skills'
+    for skill in ('brief', 'seo-article', 'x'):
+        (skills / skill).mkdir(parents=True)
+        (skills / skill / 'SKILL.md').write_text(f'write {skill}')
+        (skills / skill / 'REVIEW.md').write_text(f'review {skill}')
+    return skills
+
+
+class GateTest(PlanMixin, unittest.TestCase):
+    def test_approve_writes_the_plan_hash(self):
+        run.publish_gate(self.campaign, answers('a'))
+        approval = json.loads((self.campaign / '09-publish' / 'APPROVED').read_text())
+        self.assertEqual(approval['plan_sha256'], hashlib.sha256((self.campaign / '09-publish' / 'plan.json').read_bytes()).hexdigest())
+        self.assertTrue(approval['approved_at'].endswith('Z'))
+
+    def test_quit_writes_no_approval(self):
+        with self.assertRaises(SystemExit):
+            run.publish_gate(self.campaign, answers('q'))
+        self.assertFalse((self.campaign / '09-publish' / 'APPROVED').exists())
+
+    def test_approved_gate_does_not_rebuild(self):
+        (self.campaign / '09-publish').mkdir()
+        (self.campaign / '09-publish' / 'APPROVED').write_text('{}\n')
+        with mock.patch('run.build_publish_plan') as build:
+            run.publish_gate(self.campaign, answers())
+        build.assert_not_called()
+
+    def test_publish_log_without_approval_is_refused(self):
+        (self.campaign / '09-publish').mkdir()
+        (self.campaign / '09-publish' / 'publish.jsonl').write_text('')
+        with self.assertRaisesRegex(run.WorkflowError, 'has a publish log but no APPROVED file'):
+            run.publish_gate(self.campaign, answers('a'))
+
+    def test_campaign_without_publish_to_has_no_gate(self):
+        root = Path(tempfile.mkdtemp())
+        skills = make_skills(root)
+        campaign = root / 'campaigns' / 'demo'
+        campaign.mkdir(parents=True)
+        (campaign / '00-task.md').write_text(task_text())
+        run.run_campaign(campaign, FakeClient(['pass', 'pass']), ask=answers('a', 'a'), steps=TEXT_STEPS, skills_dir=skills, roles=ROLES)
+        self.assertFalse((campaign / '09-publish').exists())
+
+    def test_publish_to_calls_the_gate_after_the_final_package(self):
+        skills = make_skills(Path(tempfile.mkdtemp()))
+        (self.campaign / '00-task.md').write_text(publish_task(extra=PUBLISH_ALL))
+        for step in ('01-brief', '02-article', '03-x'):
+            self.write(f'{step}/output.md', 'Text.\n')
+            self.write(f'{step}/APPROVED', 'ok\n')
+        with mock.patch('run.publish_gate') as gate:
+            run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=TEXT_STEPS, skills_dir=skills, roles=ROLES)
+        gate.assert_called_once()
+        self.assertTrue((self.campaign / 'final' / 'index.md').is_file())
 
 
 if __name__ == '__main__':

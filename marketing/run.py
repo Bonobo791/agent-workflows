@@ -993,6 +993,35 @@ def plan_preview(plan, step_dir):
     return '\n'.join(lines) + '\n'
 
 
+def publish_gate(campaign, ask):
+    step_dir = campaign / PUBLISH_STEP
+    step_dir.mkdir(exist_ok=True)
+    if (step_dir / 'APPROVED').is_file():
+        log.info('[%s] already approved; skipping', PUBLISH_STEP)
+        return
+    if (step_dir / 'publish.jsonl').is_file():
+        raise WorkflowError('09-publish has a publish log but no APPROVED file. Posts may already be live, so the plan is not rebuilt. '
+                            'Restore 09-publish/APPROVED, or move 09-publish away only if you are sure nothing was posted.')
+    plan = build_publish_plan(campaign)
+    print('\n' + '=' * 70)
+    print(f'Step {PUBLISH_STEP} is ready for your decision. Folder: {step_dir}')
+    print('-' * 70)
+    print(plan_preview(plan, step_dir))
+    print('-' * 70)
+    while True:
+        answer = ask('[a]pprove and queue for posting, [q]uit: ').strip().lower()
+        if answer == 'a':
+            approval = {'approved_at': now(), 'plan_sha256': file_sha256(step_dir / 'plan.json')}
+            (step_dir / 'APPROVED').write_text(json.dumps(approval) + '\n')
+            log.info('[%s] approved by the owner; %d items queued', PUBLISH_STEP, len(plan['items']))
+            print(f"Queued {len(plan['items'])} items. They are sent by: python3 marketing/run.py publish --due")
+            return
+        if answer == 'q':
+            log.info('[%s] owner quit at the decision prompt', PUBLISH_STEP)
+            raise SystemExit('Stopped. Run the same command again to come back to 09-publish.')
+        print('Type a or q.')
+
+
 def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES):
     steps = campaign_steps(campaign, steps)
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
@@ -1005,6 +1034,8 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
             run_step(client, roles, skills_dir, campaign, step, ask)
     final = build_final(campaign, steps)
     log.info('final package written: %s', final / 'index.md')
+    if publish_targets((campaign / '00-task.md').read_text()):
+        publish_gate(campaign, ask)
     print(f"\nAll steps approved. Final package: {final / 'index.md'}")
     return final
 
