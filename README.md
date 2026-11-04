@@ -115,7 +115,7 @@ Each step uses one of three roles. The roles are set in `ROLES` at the top of `m
 | --- | --- | --- | --- |
 | writer | steps 01, 03 to 06, and the import | `gpt-6.1-sol` | `medium` |
 | strategist | the brief (step 02) | `gpt-6.1-sol` | `high` |
-| reviewer | the review of every step | `gpt-6.1-sol` | `medium` |
+| reviewer | the review of every step | `gpt-6.1-sol` | `high` |
 | creator | images and reel | `gpt-6.1-sol` | `high` |
 
 Before any step runs, the program checks that each model and effort is in your Codex model list. If one is not, it stops with an `error:` message.
