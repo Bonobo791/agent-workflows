@@ -1903,7 +1903,8 @@ def publish_gate(campaign, ask, http=publish.http_request):
         answer = ask('[a]pprove and queue for posting, [q]uit: ').strip().lower()
         if answer == 'a':
             approval = {'approved_at': now(), 'plan_sha256': file_sha256(step_dir / 'plan.json')}
-            (step_dir / 'APPROVED').write_text(json.dumps(approval) + '\n')
+            (step_dir / 'APPROVED.tmp').write_text(json.dumps(approval) + '\n')
+            os.replace(step_dir / 'APPROVED.tmp', step_dir / 'APPROVED')  # a --due run never reads half a file
             log.info('[%s] approved by the owner; %d items queued', PUBLISH_STEP, len(plan['items']))
             print(f"Queued {len(plan['items'])} items. They are sent by: python3 marketing/run.py publish --due")
             return

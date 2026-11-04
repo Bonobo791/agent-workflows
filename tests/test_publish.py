@@ -3,6 +3,7 @@ import fcntl
 import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -259,6 +260,13 @@ class GateTest(PlanMixin, unittest.TestCase):
             run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=[], skills_dir=skills, roles=ROLES)
         build.assert_not_called()
         self.assertIn('- linkedin-post: https://www.linkedin.com/feed/update/urn:li:share:1/', (self.campaign / 'final' / 'index.md').read_text())
+
+    def test_approval_is_written_then_renamed_into_place(self):
+        with mock.patch('run.os.replace', wraps=os.replace) as replace:
+            run.publish_gate(self.campaign, answers('a'), FakeHttp([(200, {}, b'')]))
+        source, target = replace.call_args.args
+        self.assertEqual((Path(source).name, Path(target).name), ('APPROVED.tmp', 'APPROVED'))
+        self.assertFalse((self.campaign / '09-publish' / 'APPROVED.tmp').exists())
 
     def test_campaign_without_publish_to_has_no_gate(self):
         root = Path(tempfile.mkdtemp())
