@@ -664,6 +664,15 @@ class QueueTest(unittest.TestCase):
         text = (self.campaign / 'final' / 'index.md').read_text()
         self.assertIn('- a: posted (id m1); the link could not be read, find it on the account', text)
 
+    def test_reset_keeps_a_youtube_session_url(self):
+        self.approve([item('a')])
+        publish.append_event(self.step, self.clock, 'a', 'attempt', attempt=1)
+        publish.append_event(self.step, self.clock, 'a', 'progress', attempt=1,
+                             data={'session_url': 'https://upload.example/session/1', 'container_id': 'c1'})
+        publish.append_event(self.step, self.clock, 'a', 'failed', attempt=1, error='bad token')
+        publish.reset_item(self.campaign, 'a', clock=self.clock)
+        self.assertEqual(self.state('a')['data'], {'session_url': 'https://upload.example/session/1'})
+
     def test_http_error_becomes_a_response_and_url_error_a_network_error(self):
         error = urllib.error.HTTPError('https://x.example', 404, 'Not Found', {}, io.BytesIO(b'missing'))
         with mock.patch.object(publish.OPENER, 'open', side_effect=error):

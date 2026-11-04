@@ -202,7 +202,9 @@ def item_states(step_dir, plan, epoch):
             elif kind == 'unknown':
                 state.update(state='unknown', error=event['error'])
             elif kind == 'reset':
-                state.update(state='pending', attempts=0, data={}, error=None)
+                # a YouTube session is kept, so the next run resumes it instead of uploading the video again
+                kept = {key: value for key, value in state['data'].items() if key == 'session_url'}
+                state.update(state='pending', attempts=0, data=kept, error=None)
         if mine and mine[-1]['event'] == 'sent':
             state.update(state='unknown', error=SENT_STOPPED)
         elif mine and mine[-1]['event'] in ('attempt', 'progress'):
