@@ -3,6 +3,7 @@ __pycache__/
 .env
 .env.*
 campaigns/
+builds/
 
 # agent harness directories
 .agents/
