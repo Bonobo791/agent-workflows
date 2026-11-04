@@ -1,4 +1,4 @@
-> Condensed from social-media-skills:short-form-video-script, copied 2026-11-04. The owner may replace this file.
+> Copied from social-media-skills:short-form-video-script, copied 2026-11-04. The owner may replace this file.
 
 ---
 name: short-form-video-script

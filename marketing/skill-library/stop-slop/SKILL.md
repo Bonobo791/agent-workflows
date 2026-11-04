@@ -1,4 +1,4 @@
-> Condensed from anthropic-skills:stop-slop, copied 2026-11-03. The owner may replace this file.
+> Copied from anthropic-skills:stop-slop, copied 2026-11-03. The owner may replace this file.
 
 ---
 name: stop-slop

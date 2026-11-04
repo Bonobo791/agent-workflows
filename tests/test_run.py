@@ -354,7 +354,7 @@ class ChecksTest(unittest.TestCase):
 
     def test_instagram_image_text_word_limit(self):
         def instagram(words):
-            return f'## Post\nHook. Link in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\n{words}\n'
+            return f'## Post\nHook.\nLink in bio\n\n## Hashtags\n#one #two #three\n\n## Image text\n{words}\n'
         self.assertEqual(run.check_instagram(instagram('one two three four five six seven eight'), '', None), [])
         self.assertTrue(run.check_instagram(instagram('one two three four five six seven eight nine'), '', None))
 
@@ -865,14 +865,14 @@ class FilmLookTest(unittest.TestCase):
 
     def test_video_steps_load_openfilm_manual(self):
         images = next(step for step in run.STEPS if step['id'] == '07-images')
-        self.assertEqual(images['writer_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics', 'platform-specs-and-validation'])
-        self.assertEqual(images['review_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics', 'accessibility-review'])
+        self.assertEqual(images['writer_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics'])
+        self.assertEqual(images['review_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics'])
         self.assertTrue((run.LIBRARY_DIR / 'openfilm-manual' / 'SKILL.md').is_file())
 
     def test_reel_skill_list(self):
         reel = next(step for step in run.STEPS if step['id'] == '08-reel')
         self.assertEqual(reel['writer_skills'], ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'])
-        self.assertEqual(reel['review_skills'], ['openfilm-manual', 'short-form-video-script', 'reels-script', 'accessibility-review'])
+        self.assertEqual(reel['review_skills'], ['openfilm-manual', 'short-form-video-script', 'reels-script'])
 
 
 class RecheckTest(unittest.TestCase):
@@ -891,7 +891,7 @@ class RecheckTest(unittest.TestCase):
         return run.run_campaign(self.campaign, client, ask=ask, steps=[self.brief_step], skills_dir=run.SKILLS_DIR, roles=ROLES)
 
     def approve_brief(self):
-        client = FakeClient(['pass'], writer_outputs=[json.dumps({'output': full_brief('- Target length: 800 words'), 'notes': ''})])
+        client = FakeClient(['pass'], writer_outputs=[json.dumps({'output': full_brief('- Content type: guide\n- Target length: 1600 words'), 'notes': ''})])
         self.run_brief(client, answers('a'))
 
     def test_run_rechecks_approved_steps(self):
@@ -1058,6 +1058,16 @@ class HeyGenReelTest(unittest.TestCase):
         self.assertEqual([clip['id'] for clip in presenter], ['p1', 'p2', 'p3'])
         self.assertTrue((step_dir / 'assets' / 'p2.mp4').is_file())
         self.assertTrue((step_dir / 'assets' / 'p2.vtt').is_file())
+
+    def test_presenter_total_over_the_reel_length_stops_with_the_commands(self):
+        campaign, step_dir = self.make_campaign()
+        with self.heygen(FakeHeyGen(durations=(12.0, 12.0, 12.0))):
+            with self.assertRaises(run.WorkflowError) as caught:
+                run.render_presenter(campaign, step_dir, CHARACTER)
+        message = str(caught.exception)
+        self.assertIn('the presenter clips total 36.0 s; the reel limit is 30 s', message)
+        self.assertIn(f"rm -r {campaign / '08-reel-script'} {step_dir}", message)
+        self.assertFalse((step_dir / 'presenter.json').exists())
 
     def test_failed_render_stops_with_response(self):
         campaign, step_dir = self.make_campaign()
@@ -1337,7 +1347,7 @@ class LengthTest(unittest.TestCase):
     def test_brief_needs_one_target_length(self):
         self.assertTrue(any('needs one line' in e for e in run.check_brief(full_brief('- Content type: guide.'), task_text(), None)))
         self.assertTrue(any('needs one line' in e for e in run.check_brief(full_brief('- Target length: 800 words\n- Target length: 900 words'), task_text(), None)))
-        self.assertEqual(run.check_brief(full_brief('- Target length: 800 words'), task_text(), None), [])
+        self.assertEqual(run.check_brief(full_brief('- Content type: guide\n- Target length: 1600 words'), task_text(), None), [])
 
     def test_article_meta_description_length(self):
         brief = full_brief('- Target length: 6 words')
@@ -1369,7 +1379,7 @@ class LengthTest(unittest.TestCase):
 class ChannelIdeasTest(unittest.TestCase):
     def test_brief_needs_all_three_channel_ideas(self):
         social = task_text('article, social')
-        target = '- Target length: 800 words'
+        target = '- Content type: guide\n- Target length: 1600 words'
         all_three = f'- LinkedIn: {PROBLEMS[0]} Relief: one idea.\n- X: {PROBLEMS[1]} Relief: one idea.\n- Instagram: {PROBLEMS[2]} Relief: one idea.'
         self.assertEqual(run.check_brief(full_brief(target, all_three), social, None), [])
         missing = f'- LinkedIn: {PROBLEMS[0]} Relief: one idea.\n- X: {PROBLEMS[1]} Relief: one idea.'
@@ -1493,6 +1503,73 @@ class SkillFilesTest(unittest.TestCase):
     def test_every_step_has_skill_files(self):
         run.check_skills(run.SKILLS_DIR, run.STEPS)
         run.load_skill(run.SKILLS_DIR, 'import', 'SKILL.md')
+
+
+
+class NewRulesTest(unittest.TestCase):
+    def script(self, *pairs):
+        return '# Reel script\n\nPresenter: Ada\n\n' + ''.join(f'- {line_id}: {text}\n' for line_id, text in pairs) + '\n## Notes\n\nNone.\n'
+
+    def test_script_ids_must_be_p_numbers_in_order(self):
+        self.assertEqual(run.check_reel_script(self.script(('p1', 'One.'), ('p2', 'Two.')), '', None), [])
+        self.assertTrue(any('must look like p1' in e for e in run.check_reel_script(self.script(('../clip', 'One.')), '', None)))
+        self.assertTrue(any('in order' in e for e in run.check_reel_script(self.script(('p2', 'One.'), ('p1', 'Two.')), '', None)))
+        self.assertTrue(any('line x9 has 26 words' in e for e in run.check_reel_script(self.script(('x9', ' '.join(['word'] * 26))), '', None)))
+
+    def test_rhythm_is_checked_across_the_script(self):
+        lines = [('p1', 'The reader sees it first.'), ('p2', 'The reader saves it later.'),
+                 ('p3', 'The reader shares it now.'), ('p4', 'The reader acts today.')]
+        self.assertTrue(any('4 sentences start with "The reader"' in e for e in run.check_reel_script(self.script(*lines), '', None)))
+
+    def test_duplicate_script_ids_are_a_check_error_not_a_crash(self):
+        step_dir = Path(tempfile.mkdtemp())
+        run.materialize_script(step_dir, {'presenter': 'Ada', 'lines': [{'id': 'p1', 'text': 'One.'}, {'id': 'p1', 'text': 'Two.'}], 'notes': ''})
+        self.assertTrue(any('in order' in e for e in run.check_reel_script((step_dir / 'output.md').read_text(), '', None)))
+
+    def test_network_failures_become_heygen_errors_with_the_url(self):
+        with mock.patch.dict(os.environ, {'HEYGEN_API_KEY': 'test-key'}), \
+                mock.patch.object(run.urllib.request, 'urlopen', side_effect=run.urllib.error.URLError('dns failure')):
+            with self.assertRaisesRegex(run.HeyGenError, r'POST https://api\.heygen\.com/v3/videos could not be reached'):
+                run.heygen_request('POST', '/v3/videos', body={})
+            with self.assertRaisesRegex(run.HeyGenError, r'download from https://cdn\.example/v1\.mp4 failed'):
+                run.heygen_download('https://cdn.example/v1.mp4')
+        with mock.patch.object(run.urllib.request, 'urlopen', side_effect=TimeoutError('timed out')):
+            with self.assertRaises(run.HeyGenError):
+                run.heygen_download('https://cdn.example/v1.mp4')
+
+    def test_instagram_post_must_end_with_the_exact_link_line(self):
+        def instagram(last_line):
+            return f'## Post\nHook.\n{last_line}\n\n## Hashtags\n#one #two #three\n\n## Image text\nSave hours\n'
+        self.assertFalse(any('Link in bio' in e for e in run.check_instagram(instagram('Link in bio'), '', None)))
+        self.assertTrue(any('must end with "Link in bio"' in e for e in run.check_instagram(instagram('Tap Link in bio'), '', None)))
+
+    def test_positioning_sections_must_follow_the_skill_order(self):
+        in_order = '\n\n'.join(f'## {name}\nText.' for name in run.POSITIONING_SECTIONS)
+        shuffled = '\n\n'.join(f'## {name}\nText.' for name in reversed(run.POSITIONING_SECTIONS))
+        self.assertFalse(any('order' in e for e in run.check_positioning(in_order)))
+        self.assertTrue(any('in this order' in e for e in run.check_positioning(shuffled)))
+
+    def test_target_length_follows_the_content_type(self):
+        def errors(plan, task=None):
+            return run.check_brief(full_brief(plan), task or task_text(), None)
+        self.assertFalse(any('outside' in e for e in errors('- Content type: how-to\n- Target length: 1800 words')))
+        self.assertTrue(any('outside 1000 to 1800 for a how-to' in e for e in errors('- Content type: how-to\n- Target length: 1900 words')))
+        self.assertTrue(any('outside 1200 to 2000 for a review' in e for e in errors('- Content type: review\n- Target length: 2100 words')))
+        self.assertTrue(any('names one of' in e for e in errors('- Content type (how-to, guide, comparison or review).\n- Target length: 1600 words')))
+        task_with_length = task_text().replace('## Constraints\nNone.\n', '## Constraints\nLength: 1900 words.\n')
+        self.assertFalse(any('outside' in e for e in errors('- Content type: how-to\n- Target length: 1900 words', task_with_length)))
+
+    def test_channel_line_without_a_colon_is_reported_not_raised(self):
+        plain = '- ' + ' '.join(['word'] * 60)
+        errors = run.check_brief(full_brief('- Content type: guide\n- Target length: 1600 words', plain), task_text('article, social'), None)
+        self.assertTrue(any('Channel idea is' in e for e in errors))
+
+    def test_library_preface_and_step_lists(self):
+        self.assertIn('Files these skills point to under references/', run.LIBRARY_PREFACE)
+        for step in run.STEPS:
+            for key in ('writer_skills', 'review_skills'):
+                self.assertNotIn('accessibility-review', step[key])
+                self.assertNotIn('platform-specs-and-validation', step[key])
 
 
 if __name__ == '__main__':

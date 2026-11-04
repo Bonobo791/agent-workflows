@@ -55,7 +55,9 @@ Moderaty (https://moderaty.com) is comment protection for YouTube creators: your
 
 ## Claims we never make
 
-None
+- It stops every scam comment.
+- It gives unlimited AI usage.
+- It replies as you.
 
 ## Call to action
 

@@ -27,7 +27,7 @@ Rules:
 
 - One idea per post: the brief's Channel idea for this platform. Every line serves it. Everything else is in the article, and the link sends readers there.
 - At most 2 facts. Choose the ones that make the idea land.
-- An illustrative scene in the second person ("A bot drops a crypto link under your newest upload at 2 a.m.") is not a factual claim. Don't label it as fictional, and don't name an invented account.
+- An illustrative scene in the second person ("A bot drops a crypto link under your newest upload.") adds no number, time, outcome, or claim about the product, a market or a real person. Don't label it as fictional, and don't name an invented account.
 - State facts plainly. Name a source only for a price or a number, for example "$5 a month on Moderaty's pricing page".
 - No technical identifiers (API scopes, field names) in social posts.
 - Take a position. Say what you would do and why, in the voice file's words.

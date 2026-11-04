@@ -1,4 +1,4 @@
-> Condensed from social-media-skills:educational-content-and-how-to, copied 2026-11-03. The owner may replace this file.
+> Copied from social-media-skills:educational-content-and-how-to, copied 2026-11-03. The owner may replace this file.
 
 ---
 name: educational-content-and-how-to

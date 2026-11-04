@@ -1,4 +1,4 @@
-> Condensed from searchfit-seo:internal-linking, copied 2026-11-03. The owner may replace this file.
+> Copied from searchfit-seo:internal-linking, copied 2026-11-03. The owner may replace this file.
 
 ---
 description: Analyze and improve internal linking strategy for a website. Use when the user asks about "internal links", "link structure", "site architecture", "link strategy", "orphan pages", "link equity", "page authority distribution", or wants to improve how pages connect to each other.

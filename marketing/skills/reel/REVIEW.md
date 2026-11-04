@@ -5,8 +5,8 @@ The attached images are up to 10 frames spread evenly across the video, at half 
 The program has already checked the items listed under Checked. Do not report those.
 
 Checked:
-- openfilm look accepts film.html before the reel renders; a problem it reports goes back to you as a finding. openfilm render makes the reel, and a failed render stops the run before the reviewer sees the frames.
-- The presenter clips sit at the at values in presenter.json, p1 is on screen in the first 2 seconds, and every presenter line is in the film.
+- openfilm look accepts film.html before the reel renders; a problem it reports goes back to the writer as a revision, so it does not reach the frames you review. openfilm render makes the reel, and a failed render stops the run before the reviewer sees the frames.
+- The program checked that each presenter clip is referenced at its at value in presenter.json, and that p1 starts at 0.
 
 Blocking findings:
 - Headline text that names a product or feature instead of the reader's problem.
@@ -14,7 +14,9 @@ Blocking findings:
 - Two frames more than 4 seconds apart that show the same screen.
 - No hook in the first frame, or an intro or logo before the hook.
 - A hook that the scenes after it do not deliver.
-- A presenter clip that does not match the approved script.
+- The presenter is hidden, covered or too small in a frame.
+- The message does not come through with the sound off.
+- Text on screen too briefly to read, or any flashing.
 - A colour, font, layout or logo use that breaks the design system block.
 - A claim that is not in the brief's Facts.
 - No call to action at the end.

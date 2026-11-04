@@ -89,7 +89,7 @@ Deliverables is a comma-separated list of `article`, `social`, `images` and `ree
 
 ## Brand kit
 
-Each brand has a folder, `marketing/brands/<brand>/`, with four files that every campaign reads:
+Each brand has a folder, `marketing/brands/<brand>/`, with five files. Every campaign reads the first four; `character.md` is read only for reels:
 
 - `design-system.md`: colours, fonts and layout for images and reel.
 - `voice.md`: how the brand sounds.
@@ -97,7 +97,7 @@ Each brand has a folder, `marketing/brands/<brand>/`, with four files that every
 - `pages.md`: the pages the article may link to.
 - `character.md`: the reel presenter's name, personality, HeyGen avatar and voice ids, what they do and don't do on camera, and the disclosure line. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
 
-Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. Replace each `Template note:` line with your text. A run stops before any Codex call if a file is missing or still has a template note.
+Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. `character.md` is needed only for reels. Replace each `Template note:` line with your text. A run stops before any Codex call if a file is missing or still has a template note.
 
 Write `## One line` in `positioning.md` first: what the product is, for whom, the result, and the product URL. Then run:
 
@@ -110,7 +110,7 @@ The draft goes to the a/r/q prompt. On approval, `positioning.md` is saved with 
 
 ## Models
 
-Each step uses one of three roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
+Each step uses one of four roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
 
 | Role | Used for | Model | Effort |
 | --- | --- | --- | --- |

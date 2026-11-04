@@ -9,7 +9,7 @@ Checked:
 - Image text has 8 words or fewer.
 - The first line of the Post uses none of: may, might, describes, positions, offers, various.
 - The post uses none of: fictional, says it, stated, describes, positions, within that scope, supplied.
-- No banned phrase (the brief, supplied facts, supplied evidence, provided facts, based on the facts, in this comparison, unassessed, the cited, cited documentation, this article, fictional, editorial, left unassessed); no "X, not Y", "not X, it's Y" or "rather than" contrast; and no sentence starts with the same two words as more than three others.
+- No banned phrase (the brief, supplied facts, supplied evidence, provided facts, based on the facts, in this comparison, unassessed, the cited, cited documentation, this article, fictional, editorial, left unassessed); no "X, not Y", "not X, it's Y" or "rather than" contrast; and no more than three sentences start with the same two words.
 
 Judge as the target reader scrolling a busy feed. Passing the rules is not enough; a post that is accurate but forgettable is a revise.
 
@@ -29,11 +29,7 @@ Blocking findings:
 - Any em dash.
 - The first line of the caption names a product or feature, not the reader's problem or a concrete moment.
 - The post is mainly a feature list with no example or scene.
-- A banned hedge word in the hook (may, might, describes, positions, offers, various).
-- Copy that mentions the brief, supplied facts or supplied evidence.
 - A hook or opening built on a problem that is not in positioning.md's Reader problems.
-- A "not X, it's Y" or "X, not Y" contrast.
-- Meta talk about sources or the comparison, such as "based on the facts" or "in this comparison".
 - An instruction to the writer in the copy, such as "Give the native workflow a clear recommendation".
 - The same advice repeated in more than two sections.
 

@@ -71,6 +71,8 @@ LINK = '[ARTICLE LINK]'
 X_LINK_LENGTH = 23
 BRIEF_SECTIONS = ['Goal', 'Audience', 'Core message', 'Angle', 'Keywords', 'Article plan', 'Channel ideas', 'Visual ideas', 'Facts', 'Reader problems', 'Open questions']
 TARGET_RE = re.compile(r'^- Target length: (\d+) words$', re.MULTILINE)
+TARGET_RANGES = {'comparison': (1500, 2500), 'guide': (1500, 2500), 'how-to': (1000, 1800), 'review': (1200, 2000)}  # words, by content type
+TASK_LENGTH_RE = re.compile(r'\b(?:article\s+)?length\b[^\n]*\b\d[\d,]*\s*words?\b', re.IGNORECASE)  # a task that gives its own length
 META_MIN = 150
 META_MAX = 160
 LENGTH_TOLERANCE = 0.2
@@ -126,18 +128,18 @@ STEPS = [
      'review_skills': ['stop-slop', 'on-page-seo']},
     {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'linkedin',
      'inputs': SOCIAL_INPUTS, 'review_inputs': SOCIAL_REVIEW_INPUTS,
-     'writer_skills': ['stop-slop', 'hook-writer', 'linkedin-post-writer'], 'review_skills': ['stop-slop', 'platform-specs-and-validation']},
+     'writer_skills': ['stop-slop', 'hook-writer', 'linkedin-post-writer'], 'review_skills': ['stop-slop']},
     {'id': '05-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'x',
      'inputs': SOCIAL_INPUTS, 'review_inputs': SOCIAL_REVIEW_INPUTS,
-     'writer_skills': ['stop-slop', 'hook-writer', 'thread-writer'], 'review_skills': ['stop-slop', 'platform-specs-and-validation']},
+     'writer_skills': ['stop-slop', 'hook-writer', 'thread-writer'], 'review_skills': ['stop-slop']},
     {'id': '06-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'instagram',
      'inputs': SOCIAL_INPUTS, 'review_inputs': SOCIAL_REVIEW_INPUTS,
      'writer_skills': ['stop-slop', 'hook-writer', 'caption-writer', 'hashtag-strategy', 'instagram-seo'],
-     'review_skills': ['stop-slop', 'platform-specs-and-validation']},
+     'review_skills': ['stop-slop']},
     {'id': '07-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'deliverable': 'images', 'web': False, 'check': None,
      'inputs': IMAGE_INPUTS, 'review_inputs': IMAGE_INPUTS,
-     'writer_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'platform-specs-and-validation'],
-     'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'accessibility-review']},
+     'writer_skills': ['openfilm-manual', 'quote-cards-and-text-graphics'],
+     'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics']},
     {'id': '08-reel-script', 'skill': 'reel-script', 'kind': 'script', 'role': 'writer', 'deliverable': 'reel', 'web': False, 'check': 'reel-script',
      'inputs': REEL_SCRIPT_INPUTS, 'review_inputs': REEL_SCRIPT_INPUTS,
      'writer_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script'],
@@ -145,7 +147,7 @@ STEPS = [
     {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'check': None,
      'inputs': REEL_INPUTS, 'review_inputs': REEL_INPUTS,
      'writer_skills': ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'],
-     'review_skills': ['openfilm-manual', 'short-form-video-script', 'reels-script', 'accessibility-review']},
+     'review_skills': ['openfilm-manual', 'short-form-video-script', 'reels-script']},
 ]
 
 
@@ -468,6 +470,15 @@ def target_words(brief):
     return int(found[0])
 
 
+def content_type(plan):
+    """The one content type the Content type line of an Article plan names, or None."""
+    for line in plan.splitlines():
+        if line.startswith('- Content type'):
+            named = [kind for kind in TARGET_RANGES if re.search(rf'\b{re.escape(kind)}\b', line)]
+            return named[0] if len(named) == 1 else None
+    return None
+
+
 def quoted(lines):
     return '; '.join(f'"{line}"' for line in lines)
 
@@ -475,8 +486,17 @@ def quoted(lines):
 def check_brief(output, task, brief):
     errors = missing_sections(output, BRIEF_SECTIONS)
     errors += [f'fact has no source (a URL or "(from task)"): {fact}' for fact in facts_of(output) if not has_source(fact)]
-    if len(TARGET_RE.findall(sections(output).get('Article plan', ''))) != 1:
-        errors.append('Article plan needs one line like "- Target length: 2000 words" with a whole number.')
+    plan = sections(output).get('Article plan', '')
+    if len(TARGET_RE.findall(plan)) != 1:
+        errors.append('Article plan needs one line like "- Target length: 1600 words" with a whole number.')
+    kind = content_type(plan)
+    if kind is None:
+        errors.append('Article plan needs one "- Content type" line that names one of: how-to, guide, comparison, review')
+    elif not TASK_LENGTH_RE.search(task) and TARGET_RE.search(plan):
+        low, high = TARGET_RANGES[kind]
+        target = int(TARGET_RE.search(plan).group(1))
+        if not low <= target <= high:
+            errors.append(f'Target length {target} words is outside {low} to {high} for a {kind}; use a length in that range, or give a length in the task')
     errors += adds_errors(sections(output).get('Article plan', ''))
     errors += [f'this is a process note, not a fact; remove it: "{fact}"' for fact in facts_of(output) if PROCESS_RE.search(fact)]
     found = positioning_sections(brand_of(task))
@@ -485,7 +505,6 @@ def check_brief(output, task, brief):
     angle_line = next((line.strip() for line in sections(output).get('Angle', '').splitlines() if line.strip().startswith('- Reader problem:')), '')
     if angle_line[len('- Reader problem:'):].strip() not in problems:
         errors.append(f"the Angle's Reader problem must be one of these lines, quoted exactly: {quoted(problems)}")
-    copied = [problem_text(line) for line in bullets(sections(output).get('Reader problems', ''))]
     if [line.strip() for line in bullets(sections(output).get('Reader problems', ''))] != \
             [line.strip() for line in bullets(found.get('Reader problems', ''))]:
         errors.append("the brief's Reader problems must copy positioning.md's Reader problems word for word")
@@ -507,7 +526,7 @@ def check_brief(output, task, brief):
             errors.append('the Channel ideas must use different Value problems')
         for line in channel.splitlines():
             if len(line) > CHANNEL_LIMIT:
-                errors.append(f'the {line[2:line.index(":")]} Channel idea is {len(line)} characters; the limit is {CHANNEL_LIMIT}')
+                errors.append(f'the {line.partition(":")[0][2:]} Channel idea is {len(line)} characters; the limit is {CHANNEL_LIMIT}')
     elif channel != 'Not needed.':
         errors.append('Channel ideas must say "Not needed." when Deliverables do not include social')
     return errors
@@ -689,7 +708,7 @@ def check_instagram(output, task, brief):
     errors = missing_sections(output, ['Post', 'Hashtags', 'Image text'])
     found = sections(output)
     caption_lines = [line.strip() for line in found.get('Post', '').splitlines() if line.strip()]
-    if not caption_lines or not caption_lines[-1].endswith('Link in bio'):
+    if not caption_lines or caption_lines[-1] != 'Link in bio':
         errors.append('the Post must end with "Link in bio"')
     hashtags = len(HASHTAG_RE.findall(found.get('Hashtags', '')))
     if not 3 <= hashtags <= 5:
@@ -746,6 +765,10 @@ def check_positioning(text):
             errors.append(f'section "## {heading}" is missing or empty')
         elif has_template_note(body):
             errors.append(f'section "## {heading}" still has its template note')
+    headings = [line[3:].strip() for line in text.splitlines() if line.startswith('## ')]
+    order = [heading for heading in headings if heading in POSITIONING_SECTIONS]
+    if set(POSITIONING_SECTIONS) <= set(headings) and order != POSITIONING_SECTIONS:
+        errors.append(f'the sections must appear in this order: {", ".join(POSITIONING_SECTIONS)}')
     with_url = [line for line in bullets(found.get('Reader problems', '')) if URL_RE.search(line)]
     if len(with_url) < MIN_PROBLEMS:
         errors.append(f'the Reader problems need at least {MIN_PROBLEMS} lines with a URL; found {len(with_url)}')
@@ -923,7 +946,8 @@ def block(name, content):
 
 
 LIBRARY_PREFACE = ('These skills were written for an interactive assistant. Use their craft advice. '
-                   'Ignore any step that asks the user a question, calls a tool, or names another product. The step contract below wins.')
+                   'Ignore any step that asks the user a question, calls a tool, or names another product. The step contract below wins. '
+                   'Files these skills point to under references/, and brand-profile.md or audience.md, are not available. Use the brand blocks in this prompt instead.')
 
 
 def library_block(names):
@@ -1146,10 +1170,15 @@ def reel_seconds():
 
 def check_reel_script(output, task, brief):
     body = output.split('\n## Notes')[0]
-    lines = re.findall(r'^- (p\d+): (.*)$', body, re.MULTILINE)
+    lines = re.findall(r'^- (.*?): (.*)$', body, re.MULTILINE)
     errors = []
     if not lines:
         errors.append('the script has no presenter lines; write each one as "- p1: <text>"')
+    ids = [line_id for line_id, _ in lines]
+    if any(not re.fullmatch(r'p\d+', line_id) for line_id in ids):
+        errors.append('every presenter line id must look like p1, p2, p3')
+    elif ids != [f'p{number}' for number in range(1, len(ids) + 1)]:
+        errors.append('the presenter line ids must run p1, p2, p3 and so on, in order')
     total = 0
     for line_id, text in lines:
         words = len(re.findall(r"\b[\w'-]+\b", text))
@@ -1162,6 +1191,7 @@ def check_reel_script(output, task, brief):
         if hedge:
             errors.append(f'line {line_id} uses "{hedge}"; open on the reader\'s problem instead')
         errors += wording_errors(text)
+    errors += rhythm_errors(' '.join(text for _, text in lines))  # the whole script, joined
     seconds = reel_seconds()
     limit = int(WORDS_PER_SECOND * seconds)
     if total > limit:
@@ -1176,8 +1206,6 @@ def materialize_script(step_dir, written):
     lines = written['lines']
     if not lines:
         raise WorkflowError(f"writer returned no presenter lines. Writer notes: {written['notes'] or 'none'}")
-    if len({line['id'] for line in lines}) != len(lines):
-        raise WorkflowError(f"duplicate script line ids: {[line['id'] for line in lines]}")
     (step_dir / 'script.json').write_text(json.dumps(written, indent=2, ensure_ascii=False) + '\n')
     text = ['# Reel script', '', f"Presenter: {written['presenter']}", '']
     text += [f"- {line['id']}: {line['text']}" for line in lines]
@@ -1202,11 +1230,16 @@ def heygen_request(method, path, body=None, query=None):
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as error:
         raise HeyGenError(f"HeyGen {method} {path} returned HTTP {error.code}: {error.read().decode(errors='replace')}") from None
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise HeyGenError(f'HeyGen {method} {url} could not be reached: {error}') from None
 
 
 def heygen_download(url):
-    with urllib.request.urlopen(url, timeout=HEYGEN_TIMEOUT) as response:
-        return response.read()
+    try:
+        with urllib.request.urlopen(url, timeout=HEYGEN_TIMEOUT) as response:
+            return response.read()
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise HeyGenError(f'HeyGen download from {url} failed: {error}') from None
 
 
 def heygen_list(path, query):
@@ -1260,6 +1293,10 @@ def render_one(line, character):
 def render_presenter(campaign, step_dir, character):
     """Render each presenter line once, cache it by its text and the character, and write presenter.json."""
     script = json.loads((campaign / '08-reel-script' / 'script.json').read_text())
+    for line in script['lines']:
+        if not re.fullmatch(r'p\d+', line['id']):
+            raise WorkflowError(f"presenter line id {line['id']!r} is not p1, p2, p3 ...; fix the reel script first")
+    seconds = reel_seconds()
     cache = step_dir / 'heygen-cache'
     cache.mkdir(parents=True, exist_ok=True)
     assets = step_dir / 'assets'
@@ -1282,6 +1319,9 @@ def render_presenter(campaign, step_dir, character):
         shutil.copyfile(subtitles, assets / f"{line['id']}.vtt")
         clips.append({'id': line['id'], 'text': line['text'], 'duration': duration, 'at': round(at, 2)})
         at += duration
+        if at > seconds:
+            raise WorkflowError(f"the presenter clips total {at:.1f} s; the reel limit is {seconds} s. "
+                                f"Shorten the script, then run: rm -r {campaign / '08-reel-script'} {step_dir}")
     (step_dir / 'presenter.json').write_text(json.dumps(clips, indent=2, ensure_ascii=False) + '\n')
     return clips
 

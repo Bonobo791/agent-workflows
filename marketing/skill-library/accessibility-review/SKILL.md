@@ -1,4 +1,4 @@
-> Condensed from design:accessibility-review, copied 2026-11-03. The owner may replace this file.
+> Copied from design:accessibility-review, copied 2026-11-03. The owner may replace this file.
 
 ---
 name: accessibility-review

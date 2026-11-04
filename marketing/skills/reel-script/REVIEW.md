@@ -6,7 +6,7 @@ Checked:
 - Every line is 25 words or fewer, and the whole script is at most 2.5 words per second of the reel length.
 - No line is an internal process line.
 - No line uses a hedge word: may, might, describes, positions, offers, various.
-- No banned phrase, no contrast ("X, not Y", "not X, it's Y", "rather than"), and no sentence starts with the same two words as more than three others.
+- No banned phrase, no contrast ("X, not Y", "not X, it's Y", "rather than"), and no more than three sentences start with the same two words.
 
 Judge the script as the character speaking to a viewer scrolling a busy feed.
 

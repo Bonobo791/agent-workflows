@@ -1,4 +1,4 @@
-> Condensed from openfilm 0.2.6:skills/motion-graphics/SKILL.md, copied 2026-11-04. The owner may replace this file.
+> Copied from openfilm 0.2.6:skills/motion-graphics/SKILL.md, copied 2026-11-04. The owner may replace this file.
 
 ---
 name: motion-graphics

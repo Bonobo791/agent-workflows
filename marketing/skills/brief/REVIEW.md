@@ -5,7 +5,7 @@ The program has already checked the items listed under Checked. Do not report th
 Checked:
 - The eleven brief sections exist and are not empty.
 - Every fact under Facts has a URL or ends with "(from task)", and no fact is a process line: issue or tracker text, a due or start date, the earliest start, shared capacity, prerequisites, publication approval, a parent, an accountable owner, a tracker owner, a canonical placement, a recheck-after date, the step contract, or "research is permitted".
-- The Article plan has exactly one "- Target length: 2000 words" line, with a whole number.
+- The Article plan has exactly one "- Target length: 1600 words" line, with a whole number, and one "- Content type" line naming one type. The length is in that type's range unless the task gives a length.
 - Every H2 in the Article plan has an "- Adds:" line.
 - The Angle's Reader problem is one of the lines in positioning.md's Reader problems, quoted exactly.
 - The Reader problems section copies positioning.md's Reader problems word for word.

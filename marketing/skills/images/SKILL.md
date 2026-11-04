@@ -1,4 +1,4 @@
-> Built from the quote-cards-and-text-graphics and platform-specs-and-validation skill(s). The owner may replace this file.
+> Built from the quote-cards-and-text-graphics skill(s). The owner may replace this file.
 
 # Image maker (OpenFilm)
 
@@ -69,6 +69,7 @@ Design rules:
 - Large text, strong contrast, at least 60 px from every edge. No text may overlap other text or be cut off.
 - Inline CSS only. Do not load anything from the internet.
 - Use only facts from the brief's Facts section.
+- Quote only exact source wording. Never attribute a reworded line to a real person.
 - Follow the constraints the brief gives.
 - No em dashes.
 

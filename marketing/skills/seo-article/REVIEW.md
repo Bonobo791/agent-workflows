@@ -9,7 +9,7 @@ Checked:
 - The word count is within 20% of the brief's target.
 - The opening paragraph after the title is 3 sentences or fewer and gives the answer with "if" or "when".
 - No six-word phrase appears three or more times.
-- No sentence starts with the same two words as more than three others.
+- No more than three sentences start with the same two words.
 - No banned phrase (the brief, supplied facts, supplied evidence, provided facts, based on the facts, in this comparison, unassessed, the cited, cited documentation, this article, fictional, editorial, left unassessed) in the article.
 - No "X, not Y", "not X, it's Y" or "rather than" contrast.
 - Every link to a page (a path starting with "/") is listed in pages.md.

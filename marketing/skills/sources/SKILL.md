@@ -20,7 +20,7 @@ Output Markdown with exactly these two sections, in this order:
 
 ## Facts
 - Ledgerly exports one tax year of invoices to one CSV file https://example.com/help/export (checked 2026-11-03)
-- Plans start in December (from task)
+- Ledgerly sends invoice reminders by email (from task)
 
 The two lines show the form. A URL-backed fact and its URL come only from a page you opened in this run. The checked date is the day you opened it, in YYYY-MM-DD form.
 

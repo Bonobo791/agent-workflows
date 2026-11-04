@@ -63,4 +63,4 @@ We send `caption` as `{"file_format": "srt"}`, so that `subtitle_url` is returne
 - The docs do not say whether those captions have word-level timings, and they do not say how fine the timing is.
 - Word timings appear only in `POST` generate speech, as `data.word_timestamps` (a `word`, `start` and `end` in seconds for each word). That is a separate audio call, not part of an avatar video.
 
-Result: the avatar video API does not return word-timed captions as documented. WebVTT subtitles cannot be built from its output.
+Result: word timings are not available for avatar video. The SRT file from `subtitle_url` is still converted to WebVTT, with one cue for each SRT cue and no word timings.

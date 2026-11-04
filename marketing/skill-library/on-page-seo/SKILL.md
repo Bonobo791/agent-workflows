@@ -1,4 +1,4 @@
-> Condensed from searchfit-seo:on-page-seo, copied 2026-11-03. The owner may replace this file.
+> Copied from searchfit-seo:on-page-seo, copied 2026-11-03. The owner may replace this file.
 
 ---
 description: Optimize a specific page for on-page SEO. Use when the user asks to "optimize this page", "improve SEO for this page", "on-page optimization", "optimize meta tags", "improve rankings for [keyword]", or wants to make a specific page rank better.

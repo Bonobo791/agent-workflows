@@ -16,6 +16,7 @@ Who they are, what they care about, and how they search.
 One sentence, then three supporting points.
 
 ## Angle
+Example (shape only; take every line from this task's brand files):
 - Reader problem: Scam comments impersonate the creator under new uploads within minutes.
 - Tension: You think the platform's built-in filter is enough, so you skip a second tool, and the spam still reaches your viewers before you clean it up.
 - Payoff: After reading, you know which control to switch on this week and when a second tool is worth paying for.
@@ -28,13 +29,13 @@ The primary search phrase for the article, its search intent (informational, com
 
 ## Article plan
 - Working title: 60 characters or fewer, with the primary keyword.
-- Content type (how-to, listicle, guide or comparison).
-- Target length: 2000 words
+- Content type (how-to, guide, comparison or review).
+- Target length: 1600 words
   Write a real whole number, never a placeholder. Choose it from the content type: a comparison or guide is 1500 to 2500, a how-to is 1000 to 1800, and a review page is 1200 to 2000. Use the task's length when it gives one.
 - H2 list. For each H2, write `- H2: <heading>`, then on the next line `  - Adds: <the one thing this section teaches the reader>`. Example: `- H2: How each tool records a decision`, then `  - Adds: the reader learns how each tool records a decision after it is made.` If the task gives Required headings, use each one exactly as written, in the same order, as an H2 entry. Other H2s may go around them.
 
 ## Channel ideas
-If the Deliverables include social: one line each, starting `- LinkedIn:`, `- X:` and `- Instagram:`, 200 characters or fewer. Each line is one sentence. It starts with one Value problem from positioning.md, copied exactly, then names the emotion it answers (for example annoyance, relief or surprise), then leads with a benefit the product delivers and backs it with one fact. Each platform uses a different Value problem. Limits, exclusions and caveats go in the article only; a social line never states one. Example: `- LinkedIn: Scam comments impersonate the creator under new uploads within minutes. Relief: a held comment waits for your review, so no viewer sees it.` Otherwise: Not needed.
+If the Deliverables include social: one line each, starting `- LinkedIn:`, `- X:` and `- Instagram:`, 200 characters or fewer. Each line is one sentence. It starts with one Value problem from positioning.md, copied exactly, then names the emotion it answers (for example annoyance, relief or surprise), then leads with a benefit the product delivers and backs it with one fact. Each platform uses a different Value problem. Limits, exclusions and caveats go in the article only; a social line never states one. Example: `- LinkedIn: Scam comments impersonate the creator under new uploads within minutes, and relief comes when a held comment waits for your review, so no viewer sees it.` Otherwise: Not needed.
 
 ## Visual ideas
 If the Deliverables include images: what the three images show. If the Deliverables include reel: what the reel shows. Otherwise: Not needed.
