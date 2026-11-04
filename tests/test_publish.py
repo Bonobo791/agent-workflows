@@ -48,6 +48,12 @@ class PublishTaskTest(unittest.TestCase):
         errors = run.check_task(publish_task(extra='## Publish to\nlinkedin\n\n'))
         self.assertIn('## Publish to needs ## Article URL: the live https:// address of the article', errors)
 
+    def test_article_url_must_have_a_host(self):
+        for url in ('https:///blog/demo', 'https://[moderaty.com/blog/demo'):
+            with self.subTest(url=url):
+                errors = run.check_task(publish_task(extra='## Publish to\nlinkedin\n\n## Article URL\n' + url + '\n\n'))
+                self.assertIn('## Article URL must be one https:// address', errors)
+
     def test_article_url_must_be_https(self):
         errors = run.check_task(publish_task(extra='## Publish to\nlinkedin\n\n## Article URL\nhttp://moderaty.com/blog/demo\n\n'))
         self.assertIn('## Article URL must be one https:// address', errors)

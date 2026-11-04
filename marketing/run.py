@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -403,6 +404,17 @@ def publish_targets(task):
     return [platform for platform in PLATFORMS if platform in names]
 
 
+def article_url_ok(url):
+    """One https:// address with a host. urlsplit reads the parts, so a malformed address fails here, not at publish time."""
+    if not ARTICLE_URL_RE.match(url):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme == 'https' and bool(parts.hostname)
+
+
 def publish_errors(task, wanted):
     found = sections(task)
     if 'Publish to' not in found:
@@ -420,7 +432,7 @@ def publish_errors(task, wanted):
     url = found.get('Article URL', '')
     if not url:
         errors.append('## Publish to needs ## Article URL: the live https:// address of the article')
-    elif not ARTICLE_URL_RE.match(url):
+    elif not article_url_ok(url):
         errors.append('## Article URL must be one https:// address')
     schedule = found.get('Schedule', '')
     if schedule and schedule != 'None.':
