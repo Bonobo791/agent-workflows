@@ -771,6 +771,87 @@ class SourceFactRulesTest(unittest.TestCase):
         self.assertFalse(any(word in ' '.join(errors) for word in ['opinion', 'forum', 'more than one sentence']))
 
 
+MC15_LOOK_STDOUT = ('✗ film.html has 3 problems:\n'
+                    '  film.html:9: style is not an attribute of a track — a <section> takes hidden, muted and locked (and id, class, title, data-*, aria-*, which say nothing to the film).\n'
+                    '  film.html:10: <iframe src="scenes/card.html#t=0,3">: position would move the clip — a picture is placed by left, top, width, height and rotate in its style.\n'
+                    '  film.html:10: <iframe src="scenes/card.html#t=0,3">: display would move the clip — a picture is placed by left, top, width, height and rotate in its style.\n')
+
+
+class FilmLookTest(unittest.TestCase):
+    def setUp(self):
+        self.campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        self.campaign.mkdir(parents=True)
+        (self.campaign / '00-task.md').write_text(task_text('article, social, images', brand='demo'))
+        brief = self.campaign / '02-brief'
+        brief.mkdir()
+        (brief / 'APPROVED').write_text('done\n')
+        (brief / 'output.md').write_text('## Core message\nOne idea.\n\n## Angle\nA reader problem.\n\n## Facts\n- Fact https://example.com (checked 2026-11-03)\n\n## Visual ideas\nA card.\n')
+        for step_id in ('04-linkedin', '05-x', '06-instagram'):
+            step_dir = self.campaign / step_id
+            step_dir.mkdir()
+            (step_dir / 'APPROVED').write_text('done\n')
+            (step_dir / 'output.md').write_text('Text.\n')
+        self.step = next(s for s in run.STEPS if s['id'] == '07-images')
+
+    def projects(self):
+        files = [{'path': 'film.html', 'content': '<!doctype html><html><body><section></section></body></html>'},
+                 {'path': 'scenes/card.html', 'content': '<!doctype html><html><body>card</body></html>'}]
+        return json.dumps({'projects': [{'name': name, 'look_time': 2.8, 'files': files} for name in ['linkedin', 'x', 'instagram']], 'notes': ''})
+
+    def fake_tools(self, look_failures, look_stdout=MC15_LOOK_STDOUT):
+        state = {'looks': 0}
+
+        def fake(args, cwd):
+            if args[:2] == ['openfilm', 'look']:
+                state['looks'] += 1
+                if state['looks'] <= look_failures:
+                    raise run.ToolFailed(f'openfilm look failed in {cwd} (exit 1):\nstdout:\n{look_stdout}\nstderr:\n', 1, look_stdout, '')
+                cache = Path(cwd) / '.film' / 'cache' / 'look'
+                cache.mkdir(parents=True, exist_ok=True)
+                (cache / 'still.png').write_bytes(b'png')
+                return
+            if args[0] == 'ffmpeg':
+                Path(args[-1]).write_bytes(b'png')
+                return
+            raise AssertionError(f'unexpected tool: {args}')
+        return fake
+
+    def run_images(self, client, look_failures, look_stdout=MC15_LOOK_STDOUT):
+        with mock.patch.object(run, 'run_tool', self.fake_tools(look_failures, look_stdout)):
+            return run.run_step(client, ROLES, run.SKILLS_DIR, self.campaign, self.step, answers('a'))
+
+    def test_look_problems_become_check_errors(self):
+        client = FakeClient(['pass'], writer_outputs=[self.projects(), self.projects()])
+        self.run_images(client, look_failures=1)
+        self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with the problems, reviewer
+        revision = client.prompts[1]
+        for problem in ['film.html:9: style is not an attribute of a track',
+                        'film.html:10: <iframe src="scenes/card.html#t=0,3">: position would move the clip',
+                        'film.html:10: <iframe src="scenes/card.html#t=0,3">: display would move the clip']:
+            self.assertIn(f'[blocking] {problem}', revision)
+
+    def test_look_still_failing_after_rewrite_stops(self):
+        client = FakeClient([], writer_outputs=[self.projects(), self.projects()])
+        with self.assertRaisesRegex(run.WorkflowError, 'film.html has 3 problems') as caught:
+            self.run_images(client, look_failures=99)
+        self.assertEqual(len(client.prompts), 2)  # no reviewer call after the second failure
+        self.assertIn('stderr:', str(caught.exception))
+
+    def test_other_look_failure_stops_at_once(self):
+        client = FakeClient([], writer_outputs=[self.projects(), self.projects()])
+        with self.assertRaises(run.WorkflowError):
+            self.run_images(client, look_failures=99, look_stdout='segmentation fault')
+        self.assertEqual(len(client.prompts), 1)
+
+    def test_film_rules_in_images_and_reel_skills(self):
+        for step in ['images', 'reel']:
+            with self.subTest(step=step):
+                text = (run.SKILLS_DIR / step / 'SKILL.md').read_text()
+                self.assertIn('## film.html rules', text)
+                self.assertIn('<meta name="viewport" content="width=1080, height=1080">', text)
+                self.assertIn('Never use position, display, inset', text)
+
+
 class SearchLogTest(unittest.TestCase):
     def test_each_web_search_is_logged_and_returned(self):
         client = FakeClient([], searches=['ledgerly csv export', 'instagram alt text rules'])

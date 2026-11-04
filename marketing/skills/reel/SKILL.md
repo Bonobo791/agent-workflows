@@ -44,3 +44,30 @@ How to build it:
 - No em dashes.
 
 Follow the design system block exactly: use only its colours, its font stack and sizes, its layout and its logo. Use no colour that is not in its Colors section. Follow its Do not list.
+
+## film.html rules
+
+- The frame is the viewport meta, for example `<meta name="viewport" content="width=1080, height=1080">`.
+- The head holds only the meta tags and an optional `<style>`. No script anywhere.
+- The body holds only `<section>` tracks. A section takes only `hidden`, `muted` and `locked` (plus `id`, `class`, `title`, `data-*` and `aria-*`). Never put `style` on a section.
+- A clip is an empty `<iframe>` (page), `<img>` (still), `<video>` or `<audio>`. It takes only `id`, `src`, `at`, `speed`, `volume`, `muted`, `size`, `class`, `style` and `overrides`.
+- A clip's style places it only with `left`, `top`, `width` and `height` in px, and `rotate` in deg. Never use position, display, inset, right, bottom, margin, transform, translate, scale, z-index, visibility, animation or transition.
+- A still, or a page with no duration, needs `#t=0,<seconds>` on its `src`.
+- All layout, colours and type go inside the scene HTML file, not in `film.html`.
+
+Valid example:
+
+```html
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1080, height=1080">
+</head>
+<body>
+<section>
+  <iframe id="card" src="scenes/card.html#t=0,3" style="left: 0px; top: 0px; width: 1080px; height: 1080px"></iframe>
+</section>
+</body>
+</html>
+```

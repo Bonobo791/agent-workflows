@@ -141,6 +141,19 @@ class WorkflowError(Exception):
     pass
 
 
+class ToolFailed(WorkflowError):
+    def __init__(self, message, returncode, stdout, stderr):
+        super().__init__(message)
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+class FilmProblems(WorkflowError):
+    """openfilm look rejected film.html; each problem line is for the writer."""
+    def __init__(self, problems, message):
+        super().__init__(message)
+        self.problems = problems
+
+
 def _obj(props):
     return {'type': 'object', 'additionalProperties': False, 'required': list(props), 'properties': props}
 
@@ -1008,19 +1021,34 @@ def run_tool(args, cwd):
     except subprocess.TimeoutExpired:
         raise WorkflowError(f"{' '.join(args)} did not finish within 900 s in {cwd}") from None
     if proc.returncode != 0:
-        raise WorkflowError(f"{' '.join(args)} failed in {cwd} (exit {proc.returncode}):\n"
-                            f"stdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}")
+        raise ToolFailed(f"{' '.join(args)} failed in {cwd} (exit {proc.returncode}):\n"
+                         f"stdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}",
+                         proc.returncode, proc.stdout, proc.stderr)
 
 
 def half_size(png, out_png):
     run_tool(['ffmpeg', '-loglevel', 'error', '-y', '-i', str(png), '-vf', 'scale=iw/2:ih/2', str(out_png)], png.parent)
 
 
+def film_problems(stdout):
+    """The problem lines of openfilm's "✗ film.html has N problems" report; empty for any other output."""
+    lines = stdout.lstrip().splitlines()
+    if not lines or not lines[0].startswith('✗ film.html has'):
+        return []
+    return [line.strip() for line in lines[1:] if line.startswith('  ')]
+
+
 def capture_still(project_dir, look_time, out_png):
     cache = project_dir / '.film' / 'cache' / 'look'
     if cache.exists():
         shutil.rmtree(cache)
-    run_tool(['openfilm', 'look', str(look_time)], project_dir)
+    try:
+        run_tool(['openfilm', 'look', str(look_time)], project_dir)
+    except ToolFailed as error:
+        problems = film_problems(error.stdout) if error.returncode == 1 else []
+        if problems:
+            raise FilmProblems(problems, str(error)) from None
+        raise
     pngs = sorted(cache.glob('*.png'))
     if len(pngs) != 1:
         raise WorkflowError(f'expected exactly one PNG in {cache}, found {len(pngs)}')
@@ -1257,7 +1285,16 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
     minor_fix_left = True  # one automatic pass on minor findings per draft
     while True:
         if review is None:
-            _, images = write(client, roles, skills_dir, campaign, step, step_dir, revision)
+            try:
+                _, images = write(client, roles, skills_dir, campaign, step, step_dir, revision)
+            except FilmProblems as error:
+                if auto_left == 0:
+                    raise  # the full openfilm output is in the message
+                auto_left -= 1
+                log.info('[%s] openfilm look found problems; automatic rewrite %d of %d', step['id'], MAX_AUTO_REVISIONS - auto_left, MAX_AUTO_REVISIONS)
+                findings = [{'severity': 'blocking', 'issue': problem, 'fix': 'Fix exactly this.'} for problem in error.problems]
+                revision = ({'verdict': 'revise', 'summary': 'openfilm look rejected film.html.', 'findings': findings}, '')
+                continue
             review = review_step(client, roles, skills_dir, campaign, step, step_dir, images)
             archive(step_dir)
             if review['verdict'] == 'revise' and auto_left > 0:
