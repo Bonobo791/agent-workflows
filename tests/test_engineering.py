@@ -721,5 +721,17 @@ class SkillFileTest(unittest.TestCase):
                     eng.check_skills()
 
 
+class RulesTest(unittest.TestCase):
+    def test_role_rules_name_every_allowed_bash_command(self):
+        for role in eng.SESSIONS:
+            for entry in eng.ROLES[role]['allowed']:
+                if not entry.startswith('Bash('):
+                    continue
+                command = ' '.join(entry[len('Bash('):-1].split()[:2])
+                self.assertIn(command, eng.SYSTEM_RULES[role], f'the {role} rule does not name {command!r}')
+        for role in eng.SESSIONS:
+            self.assertIn('one command per Bash call', eng.SYSTEM_RULES[role])
+
+
 if __name__ == '__main__':
     unittest.main()

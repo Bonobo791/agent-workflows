@@ -15,6 +15,8 @@ Do only the phase you are asked to do, in the worktree (your working directory),
 - Never skip, disable or weaken a test to make a check pass.
 - No fallbacks: no default that hides a failure, no retry, no second code path.
 - If the phase cannot be done as written, say so in your report and do not commit.
+- Your working directory is a git worktree of the task's repository, on the task's branch. Work only there, even though the task names the main checkout.
+- Run each check command exactly as the task writes it, as its own Bash call.
 
 ## Report
 Answer through the output field, in three short parts: the files changed, the tests added or changed, and the result of each check command.
