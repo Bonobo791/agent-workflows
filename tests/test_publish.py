@@ -779,5 +779,95 @@ class InstagramTest(AdapterTest):
         self.assertEqual(publish.instagram_item(self.ctx(self.insta_item(), http, self.config)), ('m1', ''))
 
 
+YT_CONFIG = {'client_id': 'cid', 'client_secret': 'csec', 'refresh_token': 'rt', 'category_id': '28'}
+SESSION = 'https://upload.example/session/1'
+
+
+class YouTubeTest(AdapterTest):
+    def setUp(self):
+        super().setUp()
+        (self.step / 'media' / 'reel.mp4').write_bytes(b'0123456789')  # 10 bytes
+
+    def short(self):
+        return item('youtube-short', platform='youtube', action='upload', title='Demo title', text='Meta\n\nhttps://moderaty.com/blog/demo',
+                    media=[{'path': 'media/reel.mp4', 'sha256': 'unused'}])
+
+    def token(self):
+        return (200, {}, json.dumps({'access_token': 'at'}).encode())
+
+    def session(self, location=SESSION):
+        return (200, {'location': location}, b'')
+
+    def done(self, video_id='vid1'):
+        return (200, {}, json.dumps({'id': video_id}).encode())
+
+    def test_refresh_token_is_exchanged_first(self):
+        http = FakeHttp([self.token(), self.session(), self.done()])
+        publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
+        self.assertEqual(http.requests[0][:2], ('POST', 'https://oauth2.googleapis.com/token'))
+        self.assertIn(b'grant_type=refresh_token', http.requests[0][3])
+        method, url, headers, body = http.requests[1]
+        self.assertEqual(headers['Authorization'], 'Bearer at')
+        self.assertEqual(headers['X-Upload-Content-Length'], '10')
+        self.assertEqual(json.loads(body), {'snippet': {'title': 'Demo title', 'description': 'Meta\n\nhttps://moderaty.com/blog/demo',
+                                                        'categoryId': '28'},
+                                            'status': {'privacyStatus': 'public', 'selfDeclaredMadeForKids': False}})
+
+    def test_new_session_is_saved_before_the_upload(self):
+        http = FakeHttp([self.token(), self.session(), publish.NetworkError('reset')])
+        ctx = self.ctx(self.short(), http, {'youtube': YT_CONFIG})
+        with self.assertRaises(publish.RetryLater):
+            publish.youtube_item(ctx)
+        self.assertEqual(ctx.data['session_url'], SESSION)
+
+    def test_saved_session_resumes_after_the_range(self):
+        http = FakeHttp([self.token(), (308, {'range': 'bytes=0-3'}, b''), self.done()])
+        ctx = self.ctx(self.short(), http, {'youtube': YT_CONFIG})
+        ctx.data['session_url'] = SESSION
+        publish.youtube_item(ctx)
+        method, url, headers, body = http.requests[2]
+        self.assertEqual(body, b'456789')
+        self.assertEqual(headers['Content-Range'], 'bytes 4-9/10')
+
+    def test_saved_session_without_range_starts_at_zero(self):
+        http = FakeHttp([self.token(), (308, {}, b''), self.done()])
+        ctx = self.ctx(self.short(), http, {'youtube': YT_CONFIG})
+        ctx.data['session_url'] = SESSION
+        publish.youtube_item(ctx)
+        self.assertEqual(http.requests[2][3], b'0123456789')
+        self.assertEqual(http.requests[2][2]['Content-Range'], 'bytes 0-9/10')
+
+    def test_finished_upload_found_by_the_status_check_is_posted(self):
+        http = FakeHttp([self.token(), self.done('vid2')])
+        ctx = self.ctx(self.short(), http, {'youtube': YT_CONFIG})
+        ctx.data['session_url'] = SESSION
+        self.assertEqual(publish.youtube_item(ctx), ('vid2', 'https://www.youtube.com/shorts/vid2'))
+        self.assertEqual(len(http.requests), 2)
+
+    def test_expired_session_starts_over(self):
+        http = FakeHttp([self.token(), (404, {}, b''), self.session('https://upload.example/session/new'), self.done()])
+        ctx = self.ctx(self.short(), http, {'youtube': YT_CONFIG})
+        ctx.data['session_url'] = SESSION
+        publish.youtube_item(ctx)
+        self.assertEqual(http.requests[3][1], 'https://upload.example/session/new')
+        self.assertEqual(http.requests[3][2]['Content-Range'], 'bytes 0-9/10')
+
+    def test_network_error_during_upload_retries(self):
+        http = FakeHttp([self.token(), self.session(), publish.NetworkError('reset')])
+        with self.assertRaises(publish.RetryLater):
+            publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
+
+    def test_upload_limit_exceeded_retries(self):
+        limit = (403, {}, json.dumps({'error': {'errors': [{'reason': 'uploadLimitExceeded'}]}}).encode())
+        http = FakeHttp([self.token(), self.session(), limit])
+        with self.assertRaises(publish.RetryLater):
+            publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
+
+    def test_refused_refresh_token_stops(self):
+        for status in (400, 401):
+            with self.subTest(status=status), self.assertRaises(publish.StopItem):
+                publish.youtube_item(self.ctx(self.short(), FakeHttp([(status, {}, b'invalid_grant')]), {'youtube': YT_CONFIG}))
+
+
 if __name__ == '__main__':
     unittest.main()

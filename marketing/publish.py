@@ -619,4 +619,105 @@ def instagram_permalink(ctx, base, token, media_id):
         return ''
 
 
-ADAPTERS = {'website': check_article, 'linkedin': linkedin_item, 'x': x_item, 'instagram': instagram_item}
+YOUTUBE_UPLOAD_URL = 'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status'
+
+
+def youtube_url(video_id):
+    return f'https://www.youtube.com/shorts/{video_id}'
+
+
+def youtube_token(ctx, settings):
+    body = urllib.parse.urlencode({'client_id': settings['client_id'], 'client_secret': settings['client_secret'],
+                                   'refresh_token': settings['refresh_token'], 'grant_type': 'refresh_token'})
+    response = send(ctx.http, 'YouTube token', False, ctx.clock(), 'POST', 'https://oauth2.googleapis.com/token',
+                    headers=FORM_HEADERS, body=body.encode())
+    if response.status in (400, 401):
+        raise StopItem('YouTube refused the refresh token; get a new one and put it in publish.json')
+    check(response, {200}, 'YouTube token', False, ctx.clock())
+    return dig(answer_json(response, 'YouTube token'), 'YouTube token', 'access_token')
+
+
+def youtube_session_position(ctx, session, headers, size):
+    """Ask YouTube how far an upload got. Returns ('done', video id), ('resume', next byte) or ('expired', None)."""
+    what = 'YouTube upload status'
+    response = send(ctx.http, what, False, ctx.clock(), 'PUT', session,
+                    headers={**headers, 'Content-Length': '0', 'Content-Range': f'bytes */{size}'}, body=b'')
+    if response.status in (200, 201):
+        return 'done', published_field(response, 'YouTube upload', 'id')
+    if response.status == 308:
+        received = response.headers.get('range')
+        if not received:
+            return 'resume', 0
+        match = re.fullmatch(r'bytes=0-(\d+)', received)
+        if not match:
+            raise StopItem(f'{what}: unexpected Range header {received!r}')
+        return 'resume', int(match.group(1)) + 1
+    if response.status == 404:
+        ctx.save({'session_url': None})
+        return 'expired', None
+    check(response, (), what, False, ctx.clock())  # 429 and 5xx wait; any other status stops the item
+
+
+def youtube_new_session(ctx, headers, size, settings):
+    body = {'snippet': {'title': ctx.item['title'], 'description': ctx.item['text'], 'categoryId': settings['category_id']},
+            'status': {'privacyStatus': 'public', 'selfDeclaredMadeForKids': False}}
+    response = check(send(ctx.http, 'YouTube session', False, ctx.clock(), 'POST', YOUTUBE_UPLOAD_URL,
+                          headers={**headers, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'video/mp4',
+                                   'X-Upload-Content-Length': str(size)},
+                          body=json.dumps(body).encode()), {200}, 'YouTube session', False, ctx.clock())
+    location = response.headers.get('location')
+    if not location:
+        raise StopItem('YouTube answered the session request without a Location header')
+    ctx.save({'session_url': location})
+    return location
+
+
+def youtube_quota_reason(response):
+    try:
+        reason = json.loads(response.body)['error']['errors'][0]['reason']
+    except (ValueError, KeyError, IndexError, TypeError):
+        return False
+    return reason in ('quotaExceeded', 'uploadLimitExceeded')
+
+
+def youtube_upload(ctx, session, headers, path, start, size):
+    what = 'YouTube upload'
+    data = path.read_bytes()[start:]
+    response = send(ctx.http, what, False, ctx.clock(), 'PUT', session,
+                    headers={**headers, 'Content-Length': str(len(data)), 'Content-Range': f'bytes {start}-{size - 1}/{size}'},
+                    body=data, timeout=UPLOAD_TIMEOUT)
+    if response.status in (200, 201):
+        return published_field(response, what, 'id')
+    if response.status == 308:
+        raise RetryLater('upload incomplete')
+    if response.status == 404:
+        ctx.save({'session_url': None})
+        raise RetryLater('upload session expired')
+    if response.status == 403 and youtube_quota_reason(response):
+        raise RetryLater('the YouTube channel reached its daily upload limit; it will be retried')
+    check(response, (), what, False, ctx.clock())  # 429 and 5xx wait; any other status stops the item
+
+
+def youtube_item(ctx):
+    settings = platform_settings(ctx, 'youtube', ['client_id', 'client_secret', 'refresh_token', 'category_id'])
+    headers = {'Authorization': f'Bearer {youtube_token(ctx, settings)}'}
+    path = ctx.step_dir / ctx.item['media'][0]['path']
+    size = path.stat().st_size
+    session, start = ctx.data.get('session_url'), 0
+    if session:
+        state, value = youtube_session_position(ctx, session, headers, size)
+        if state == 'done':
+            return value, youtube_url(value)
+        if state == 'resume':
+            start = value
+            if start >= size:
+                raise RetryLater('YouTube has every byte but has not finished the upload; asking again')
+        else:
+            session = None
+    if session is None:
+        session = youtube_new_session(ctx, headers, size, settings)
+    video_id = youtube_upload(ctx, session, headers, path, start, size)
+    return video_id, youtube_url(video_id)
+
+
+ADAPTERS = {'website': check_article, 'linkedin': linkedin_item, 'x': x_item, 'instagram': instagram_item, 'youtube': youtube_item}
