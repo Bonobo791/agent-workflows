@@ -1,1 +1,0 @@
-Independently review channel copy against exact approved source and applicable evidence; block unknown destination, rules, rights or missing media.
