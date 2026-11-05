@@ -1,1 +1,0 @@
-Independently inspect the actual supplied source snapshots. Check each registered claim and draft coverage; flag omissions or unsupported claims.

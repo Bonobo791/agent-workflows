@@ -19,3 +19,8 @@ builds/
 .trae/
 .vibe/
 .windsurf/
+
+# run data: kept on disk, not tracked
+/data/
+/tools/
+/mc15-task.md

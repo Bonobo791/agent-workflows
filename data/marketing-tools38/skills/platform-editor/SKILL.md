@@ -1,1 +1,0 @@
-Compare the exact asset with the current official source and specified posting surface; do not infer absent requirements.
