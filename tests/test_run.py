@@ -1996,6 +1996,67 @@ class SessionsTest(unittest.TestCase):
         self.assertTrue(any('context ' in line and ' tokens' in line for line in logs.output))
 
 
+class ArticleSecondReviewTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.campaign = self.tmp / 'campaigns' / 'demo'
+        self.campaign.mkdir(parents=True)
+        (self.campaign / '00-task.md').write_text(task_text())
+        self.private = self.tmp / 'private'
+        (self.private / 'plan-seo-geo-growth').mkdir(parents=True)
+        (self.private / 'plan-seo-geo-growth' / 'SKILL.md').write_text('Check that the article answers the question first.')
+        patcher = mock.patch.object(run, 'PRIVATE_SKILLS_DIR', self.private)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.step = dict(next(s for s in run.STEPS if s['id'] == '03-article'), check=None, inputs=[], review_inputs=[],
+                         writer_skills=[], review_skills=[])
+        self.step_dir = self.campaign / '03-article'
+        self.step_dir.mkdir()
+        (self.step_dir / 'output.md').write_text('# Article\nText.\n')
+
+    def review(self, client, step=None, step_dir=None):
+        return run.review_step(client, run.ROLES, run.SKILLS_DIR, self.campaign, step or self.step, step_dir or self.step_dir, [])
+
+    def saved(self, role):
+        return json.loads((self.campaign / 'sessions.json').read_text())[role]
+
+    def test_the_article_is_reviewed_a_second_time_on_the_same_reviewer_session(self):
+        client = FakeClient(['pass', 'pass'])
+        review = self.review(client)
+        first, second = client.argvs
+        reviewer_id = self.saved('reviewer')['id']
+        self.assertEqual(first[-2:], ['--session-id', reviewer_id])
+        self.assertEqual(second[-2:], ['--resume', reviewer_id])
+        self.assertEqual(core_flags(first), core_flags(second))  # the same flags, so the prompt cache is shared
+        self.assertEqual(client.cwds, [self.campaign, self.campaign])
+        self.assertIn('--- BEGIN skill: plan-seo-geo-growth ---', client.prompts[1])
+        self.assertNotIn('--- BEGIN skill: plan-seo-geo-growth ---', client.prompts[0])  # separate from the first review
+        self.assertEqual([extra['skill'] for extra in review['second_reviews']], ['plan-seo-geo-growth'])
+        self.assertTrue((self.step_dir / 'review-plan-seo-geo-growth.json').is_file())
+
+    def test_a_blocking_finding_from_the_second_review_sends_the_article_back(self):
+        client = FakeClient(['pass', 'revise'])
+        review = self.review(client)
+        self.assertEqual(review['verdict'], 'revise')
+        self.assertIn('Second review against plan-seo-geo-growth. Verdict: revise', run.review_markdown(review))
+
+    def test_other_steps_get_no_second_review(self):
+        client = FakeClient(['pass'])
+        folder = self.campaign / '04-linkedin'
+        folder.mkdir()
+        (folder / 'output.md').write_text('# Post\nText.\n')
+        step = dict(next(s for s in run.STEPS if s['id'] == '04-linkedin'), check=None, inputs=[], review_inputs=[],
+                    writer_skills=[], review_skills=[])
+        review = self.review(client, step=step, step_dir=folder)
+        self.assertEqual(len(client.argvs), 1)
+        self.assertEqual(review['second_reviews'], [])
+
+    def test_a_missing_private_skill_stops_before_any_call(self):
+        (self.private / 'plan-seo-geo-growth' / 'SKILL.md').unlink()
+        with self.assertRaisesRegex(run.WorkflowError, 'missing private skill'):
+            run.check_skills(run.SKILLS_DIR, [self.step])
+
+
 class SampleLinesTest(unittest.TestCase):
     def test_character_needs_three_to_five_sample_lines(self):
         def check(lines):

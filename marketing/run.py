@@ -39,6 +39,7 @@ BRANDS_DIR = HERE / 'brands'
 BRAND_FILES = ['design-system.md', 'voice.md', 'positioning.md', 'pages.md']
 BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'positioning': 'positioning.md', 'pages': 'pages.md', 'character': 'character.md'}
 LIBRARY_DIR = HERE / 'skill-library'
+PRIVATE_SKILLS_DIR = Path.home() / '.config' / 'agent-workflows' / 'private' / 'skills'  # private copies of external skills, kept out of the repo
 CAMPAIGNS_DIR = REPO / 'campaigns'
 # The owner's roles: the writer uses Haiku 5.5 at xhigh; the strategist Opus 5.5 at high, the reviewer Opus 5.5 at medium,
 # and the image and video creator Opus 5.5 at high. The importer (new --issue) has its own budget: one live import cost $0.69.
@@ -138,6 +139,7 @@ STEPS = [
      'inputs': ['voice', '00-task', '01-sources', 'positioning'], 'review_inputs': ['voice', '00-task', '01-sources', 'positioning'],
      'writer_skills': ['content-brief'], 'review_skills': ['content-brief']},
     {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'article',
+     'second_review_skills': ['plan-seo-geo-growth'],
      'inputs': ['voice', '00-task', '02-brief', 'positioning#Proof', 'positioning#Alternatives', 'positioning#Objections',
                 'positioning#Claims we never make', 'positioning#Call to action', 'pages'],
      'review_inputs': ['voice', '00-task', '02-brief', 'positioning#Proof', 'positioning#Alternatives', 'positioning#Objections',
@@ -286,6 +288,7 @@ def check_skills(skills_dir, steps):
         load_skill(skills_dir, step['skill'], 'SKILL.md')
         load_skill(skills_dir, step['skill'], 'REVIEW.md')
         library_block(step['writer_skills'] + step['review_skills'])  # raises if a library skill is missing
+        private_skill_block(step.get('second_review_skills', []))  # raises if a private skill is missing
 
 
 def check_tools(client, roles):
@@ -1055,6 +1058,17 @@ LIBRARY_PREFACE = ('These skills were written for an interactive assistant. Use 
                    'Files these skills point to under references/, and brand-profile.md or audience.md, are not available. Use the brand blocks in this prompt instead.')
 
 
+def private_skill_block(names):
+    """A private skill's SKILL.md in the same block form as library skills. Private copies stay out of the repo."""
+    parts = []
+    for name in names:
+        path = PRIVATE_SKILLS_DIR / name / 'SKILL.md'
+        if not path.is_file():
+            raise WorkflowError(f'missing private skill: {path}')
+        parts.append(block(f'skill: {name}', path.read_text()))
+    return '\n\n'.join(parts)
+
+
 def library_block(names):
     parts = []
     for name in names:
@@ -1071,6 +1085,10 @@ def review_markdown(review):
     lines = [f"Verdict: {review['verdict']}", '', review['summary'], '']
     for number, finding in enumerate(review['findings'], 1):
         lines.append(f"{number}. [{finding['severity']}] {finding['issue']} Fix: {finding['fix']}")
+    for extra in review.get('second_reviews', []):  # each is a separate review, shown apart from the first
+        lines += ['', f"Second review against {extra['skill']}. Verdict: {extra['verdict']}", '', extra['summary'], '']
+        for number, finding in enumerate(extra['findings'], 1):
+            lines.append(f"{number}. [{finding['severity']}] {finding['issue']} Fix: {finding['fix']}")
     return '\n'.join(lines).rstrip() + '\n'
 
 
@@ -1816,6 +1834,24 @@ def recheck_approved(campaign, steps):
                             f"Delete them and every later step to redo them: rm -r {' '.join(redo)}")
 
 
+SECOND_REVIEW_RULE = ('This is step {step}: the current draft. Review it against the skill below, separately from your other reviews of this step. '
+                      'Judge it only on what the skill asks of a finished article. The skill refers to reference files you cannot open, and it may '
+                      'name tools or questions you do not have here; skip those parts. Return the complete review in the same JSON shape.')
+
+
+def second_review(client, roles, campaign, step, step_dir, skill):
+    """One more review of the same draft against one private skill: a separate call on the reviewer's session, with the same flags."""
+    sessions = Sessions(campaign)
+    prompt = '\n\n'.join([SECOND_REVIEW_RULE.format(step=step['id']), private_skill_block([skill]),
+                          block('deliverable', (step_dir / 'output.md').read_text())])
+    session = sessions.start('reviewer', step['id'], 'second review')
+    review, session_id, _ = call_model(client, roles, 'reviewer', prompt, step_dir, REVIEW_SCHEMA, step_dir / f'review-{skill}.json',
+                                       'second-review', web=step['web'], cwd=campaign, session=session,
+                                       resume_note=sessions.resume_note('reviewer'))
+    sessions.record('reviewer', step['id'], session_id)
+    return dict(review, skill=skill)
+
+
 def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
     errors = []
     if step['check'] is not None:
@@ -1842,6 +1878,13 @@ def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
         (step_dir / REVIEW_STARTED).write_text(session_id + '\n')
         if any(finding['severity'] == 'blocking' for finding in review['findings']):
             review['verdict'] = 'revise'
+        review['second_reviews'] = []
+        for skill in step.get('second_review_skills', []):  # a separate review of the same draft, against one more skill
+            extra = second_review(client, roles, campaign, step, step_dir, skill)
+            review['second_reviews'].append(extra)
+            log.info('[%s] second review against %s: %s', step['id'], skill, extra['verdict'])
+            if any(finding['severity'] == 'blocking' for finding in extra['findings']):
+                review['verdict'] = 'revise'
     blocking = sum(finding['severity'] == 'blocking' for finding in review['findings'])
     log.info('[%s] review verdict %s: %d blocking, %d minor findings', step['id'], review['verdict'], blocking, len(review['findings']) - blocking)
     (step_dir / 'review.json').write_text(json.dumps(review, indent=2, ensure_ascii=False))
@@ -1898,6 +1941,9 @@ def fingerprint(step, skills_dir, campaign):
     for name in step['writer_skills'] + step['review_skills']:
         path = LIBRARY_DIR / name / 'SKILL.md'
         parts.append(path.read_text() if path.is_file() else '')
+    for name in step.get('second_review_skills', []):
+        path = PRIVATE_SKILLS_DIR / name / 'SKILL.md'
+        parts.append(path.read_text() if path.is_file() else 'missing')  # a missing private skill keeps the approval stale
     parts.append(inspect.getsource(CHECKS[step['check']]) if step.get('check') else '')
     for spec in dict.fromkeys(step['inputs'] + step['review_inputs']):
         try:
