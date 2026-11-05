@@ -24,9 +24,9 @@ from pathlib import Path
 
 RETRY_MINUTES = [5, 10, 20, 40]
 MAX_ATTEMPTS = 5
-HTTP_TIMEOUT = 60      # seconds, every request except the YouTube upload PUT
-UPLOAD_TIMEOUT = 900   # seconds, the YouTube upload PUT
-PLATFORM_NAMES = {'website': 'website', 'linkedin': 'LinkedIn', 'instagram': 'Instagram', 'youtube': 'YouTube'}
+HTTP_TIMEOUT = 60      # seconds, every request except the YouTube and TikTok upload PUTs
+UPLOAD_TIMEOUT = 900   # seconds, the YouTube and TikTok upload PUTs
+PLATFORM_NAMES = {'website': 'website', 'linkedin': 'LinkedIn', 'instagram': 'Instagram', 'youtube': 'YouTube', 'tiktok': 'TikTok'}
 SENT_STOPPED = 'the publish request was sent but the run stopped before the answer; check the account'
 
 
@@ -736,4 +736,162 @@ def youtube_item(ctx):
     return video_id, youtube_url(video_id)
 
 
-ADAPTERS = {'website': check_article, 'linkedin': linkedin_item, 'instagram': instagram_item, 'youtube': youtube_item}
+TIKTOK_TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/'
+TIKTOK_CREATOR_URL = 'https://open.tiktokapis.com/v2/post/publish/creator_info/query/'
+TIKTOK_INIT_URL = 'https://open.tiktokapis.com/v2/post/publish/video/init/'
+TIKTOK_STATUS_URL = 'https://open.tiktokapis.com/v2/post/publish/status/fetch/'
+TIKTOK_CHUNK = 10_000_000  # bytes per upload chunk; confirm live that TikTok takes this size
+TIKTOK_POLLS = 60          # status checks, 10 s apart: about ten minutes
+JSON_UTF8 = 'application/json; charset=UTF-8'
+
+
+def read_tiktok_token(path):
+    if not path.is_file():
+        raise StopItem(f'no TikTok token file at {path}; see the README')
+    if path.stat().st_mode & 0o077:
+        raise StopItem(f'{path} must be readable only by you: chmod 600 {path}')
+    try:
+        token = json.loads(path.read_text()).get('refresh_token')
+    except (ValueError, AttributeError):
+        token = None
+    if not isinstance(token, str) or not token:
+        raise StopItem(f'{path} must hold {{"refresh_token": "..."}}')
+    return token
+
+
+def write_tiktok_token(path, refresh_token):
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.unlink(missing_ok=True)  # an old .tmp could have other permissions
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as handle:
+        handle.write(json.dumps({'refresh_token': refresh_token}))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def tiktok_token(ctx, settings):
+    path = Path(settings['token_file'])
+    stored = read_tiktok_token(path)
+    refused = f'TikTok refused the refresh token; log in again and put the new refresh token in {path}'
+    body = urllib.parse.urlencode({'client_key': settings['client_key'], 'client_secret': settings['client_secret'],
+                                   'grant_type': 'refresh_token', 'refresh_token': stored})
+    response = send(ctx.http, 'TikTok token', False, ctx.clock(), 'POST', TIKTOK_TOKEN_URL, headers=FORM_HEADERS, body=body.encode())
+    if response.status in (400, 401):
+        raise StopItem(refused)
+    check(response, {200}, 'TikTok token', False, ctx.clock())
+    answer = answer_json(response, 'TikTok token')
+    if not isinstance(answer, dict) or 'error' in answer:
+        raise StopItem(refused)
+    new_token = answer.get('refresh_token')
+    if new_token and new_token != stored:  # TikTok may replace the token; keep the new one before anything else can fail
+        write_tiktok_token(path, new_token)
+    return dig(answer, 'TikTok token', 'access_token')
+
+
+def tiktok_answer(response, what, epoch):
+    """A TikTok answer: {"error": {"code", "message"}, "data": {...}}. Only code "ok" with a 2xx status carries data."""
+    if response.status == 429 or response.status >= 500:
+        check(response, (), what, False, epoch)  # always raises RetryLater
+    answer = answer_json(response, what)
+    error = answer.get('error') if isinstance(answer, dict) else None
+    if not isinstance(error, dict):
+        raise StopItem(f'{what}: the answer has no "error" object')
+    code, message = error.get('code'), error.get('message')
+    if code == 'ok' and 200 <= response.status < 300:
+        return dig(answer, what, 'data')
+    if code == 'spam_risk_too_many_posts':
+        raise RetryLater(f'{what}: {message}', DAY_SECONDS)
+    if code == 'unaudited_client_can_only_post_to_private_accounts':
+        raise StopItem("TikTok has not audited this app: set the TikTok account to private and privacy_level to SELF_ONLY, or pass TikTok's audit")
+    raise StopItem(f'{what}: {code}: {message}')
+
+
+def tiktok_creator_info(ctx, headers, privacy_level):
+    what = 'TikTok creator info'
+    info = tiktok_answer(send(ctx.http, what, False, ctx.clock(), 'POST', TIKTOK_CREATOR_URL,
+                              headers={**headers, 'Content-Type': JSON_UTF8}, body=b'{}'), what, ctx.clock())
+    options = dig(info, what, 'privacy_level_options')
+    if privacy_level not in options:
+        raise StopItem(f"TikTok allows {', '.join(options)} for this account; set privacy_level in publish.json to one of them")
+    return info
+
+
+def tiktok_chunks(size):
+    """(chunk size, chunk count). The last chunk carries the remainder, so no chunk is shorter than TIKTOK_CHUNK except a small file."""
+    if size < TIKTOK_CHUNK:
+        return size, 1
+    return TIKTOK_CHUNK, size // TIKTOK_CHUNK
+
+
+def tiktok_init(ctx, headers, info, settings, size):
+    what = 'TikTok init'
+    chunk, count = tiktok_chunks(size)
+    creator = 'TikTok creator info'
+    body = {'post_info': {'title': ctx.item['text'], 'privacy_level': settings['privacy_level'],
+                          'disable_comment': dig(info, creator, 'comment_disabled'), 'disable_duet': dig(info, creator, 'duet_disabled'),
+                          'disable_stitch': dig(info, creator, 'stitch_disabled')},
+            'source_info': {'source': 'FILE_UPLOAD', 'video_size': size, 'chunk_size': chunk, 'total_chunk_count': count}}
+    answer = tiktok_answer(send(ctx.http, what, False, ctx.clock(), 'POST', TIKTOK_INIT_URL,
+                                headers={**headers, 'Content-Type': JSON_UTF8}, body=json.dumps(body).encode()), what, ctx.clock())
+    return dig(answer, what, 'publish_id'), dig(answer, what, 'upload_url')
+
+
+def tiktok_upload(ctx, upload_url, path, size, publish_id):
+    what = 'TikTok upload'
+    chunk, count = tiktok_chunks(size)
+    with path.open('rb') as handle:
+        for number in range(count):
+            start = number * chunk
+            end = size - 1 if number == count - 1 else start + chunk - 1
+            last = number == count - 1
+            handle.seek(start)
+            data = handle.read(end - start + 1)
+            if last:  # from here a failure may mean the post is live, so the item must not be retried from the start
+                ctx.save({'publish_id': publish_id})
+                ctx.sent()
+            response = send(ctx.http, what, last, ctx.clock(), 'PUT', upload_url, timeout=UPLOAD_TIMEOUT,
+                            headers={'Content-Type': 'video/mp4', 'Content-Length': str(len(data)),
+                                     'Content-Range': f'bytes {start}-{end}/{size}'}, body=data)
+            check(response, range(200, 300), what, last, ctx.clock())  # confirm live: 206 for a partial chunk, 201 for the last
+
+
+def tiktok_wait_for_post(ctx, headers, publish_id, username):
+    what = 'TikTok status'
+    for number in range(TIKTOK_POLLS):
+        if number:
+            ctx.sleep(10)
+        try:
+            data = tiktok_answer(send(ctx.http, what, False, ctx.clock(), 'POST', TIKTOK_STATUS_URL,
+                                      headers={**headers, 'Content-Type': JSON_UTF8}, body=json.dumps({'publish_id': publish_id}).encode()),
+                                 what, ctx.clock())
+            status = dig(data, what, 'status')
+        except RetryLater:
+            continue  # a read: a refused check says nothing about the post, so ask again
+        except StopItem as error:
+            raise OutcomeUnknown(f'{error}; the post may be live, so check the account') from None
+        if status == 'PUBLISH_COMPLETE':
+            ids = data.get('publicaly_available_post_id') or []  # TikTok's spelling; confirm live
+            return publish_id, (f'https://www.tiktok.com/@{username}/video/{ids[0]}' if ids else '')
+        if status == 'FAILED':
+            reason = data.get('fail_reason') or 'no reason given'
+            if reason == 'spam_risk_too_many_posts':
+                raise RetryLater(f'TikTok: {reason}', DAY_SECONDS)
+            raise StopItem(f'TikTok did not post the video: {reason}')
+    raise OutcomeUnknown(f'TikTok is still processing {publish_id} after ten minutes; check the account')
+
+
+def tiktok_item(ctx):
+    settings = platform_settings(ctx, 'tiktok', ['client_key', 'client_secret', 'privacy_level', 'token_file'])
+    headers = {'Authorization': f'Bearer {tiktok_token(ctx, settings)}'}
+    info = tiktok_creator_info(ctx, headers, settings['privacy_level'])
+    username = dig(info, 'TikTok creator info', 'creator_username')
+    path = ctx.step_dir / ctx.item['media'][0]['path']
+    size = path.stat().st_size
+    publish_id, upload_url = tiktok_init(ctx, headers, info, settings, size)
+    tiktok_upload(ctx, upload_url, path, size, publish_id)
+    return tiktok_wait_for_post(ctx, headers, publish_id, username)
+
+
+ADAPTERS = {'website': check_article, 'linkedin': linkedin_item, 'instagram': instagram_item, 'youtube': youtube_item,
+            'tiktok': tiktok_item}

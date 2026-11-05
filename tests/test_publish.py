@@ -60,7 +60,7 @@ class PublishTaskTest(unittest.TestCase):
 
     def test_unknown_platform_is_an_error(self):
         errors = run.check_task(publish_task(extra='## Publish to\nmastodon\n\n' + ARTICLE_URL))
-        self.assertIn('unknown platform "mastodon"; use any of: linkedin, instagram, youtube', errors)
+        self.assertIn('unknown platform "mastodon"; use any of: linkedin, instagram, youtube, tiktok', errors)
 
     def test_targets_come_back_in_platform_order(self):
         self.assertEqual(run.publish_targets(task_text() + '## Publish to\nyoutube, linkedin\n'), ['linkedin', 'youtube'])
@@ -76,6 +76,17 @@ class PublishTaskTest(unittest.TestCase):
     def test_youtube_needs_reel(self):
         errors = run.check_task(publish_task(deliverables='article, social, images', extra='## Publish to\nyoutube\n\n' + ARTICLE_URL))
         self.assertIn('youtube needs reel in Deliverables', errors)
+
+    def test_tiktok_is_a_target_that_needs_social_and_reel(self):
+        task = publish_task(deliverables='article, social, reel', extra='## Publish to\ntiktok\n\n' + ARTICLE_URL + '## Schedule\n- tiktok: 2026-11-10T14:00Z\n\n')
+        self.assertEqual(run.check_task(task), [])
+        self.assertEqual(run.publish_targets(task), ['tiktok'])
+        self.assertEqual(run.PLATFORM_NEEDS['tiktok'], {'social', 'reel'})
+        self.assertEqual(run.schedule_times(task), {'tiktok': '2026-11-10T14:00:00Z'})
+
+    def test_tiktok_needs_reel(self):
+        errors = run.check_task(publish_task(deliverables='article, social', extra='## Publish to\ntiktok\n\n' + ARTICLE_URL))
+        self.assertIn('tiktok needs reel in Deliverables', errors)
 
     def test_schedule_line_format(self):
         errors = run.check_task(publish_task(extra=LINKEDIN + '## Schedule\n- linkedin: 2026-11-10 14:00\n\n'))
@@ -192,6 +203,21 @@ class PlanTest(PlanMixin, unittest.TestCase):
     def test_unapproved_step_is_an_error(self):
         (self.campaign / '04-linkedin' / 'APPROVED').unlink()
         with self.assertRaisesRegex(run.WorkflowError, '04-linkedin is not approved yet'):
+            self.plan()
+
+    def test_tiktok_posts_the_instagram_text_and_the_reel(self):
+        self.write_task('## Publish to\ninstagram, tiktok\n\n' + ARTICLE_URL)
+        plan = self.plan()
+        self.assertEqual([item['id'] for item in plan['items']], ['article', 'instagram-post', 'tiktok-video'])
+        tiktok = self.item(plan, 'tiktok-video')
+        self.assertEqual((tiktok['platform'], tiktok['action'], tiktok['depends_on']), ('tiktok', 'upload', ['article']))
+        self.assertEqual(tiktok['text'], self.item(plan, 'instagram-post')['text'])
+        self.assertEqual([media['path'] for media in tiktok['media']], ['media/reel.mp4'])
+
+    def test_tiktok_waits_for_the_reel_approval(self):
+        self.write_task('## Publish to\ntiktok\n\n' + ARTICLE_URL)
+        (self.campaign / '08-reel' / 'APPROVED').unlink()
+        with self.assertRaisesRegex(run.WorkflowError, '08-reel is not approved yet'):
             self.plan()
 
     def test_platforms_not_listed_are_left_out(self):
@@ -1097,6 +1123,156 @@ class YouTubeTest(AdapterTest):
         for status in (400, 401):
             with self.subTest(status=status), self.assertRaises(publish.StopItem):
                 publish.youtube_item(self.ctx(self.short(), FakeHttp([(status, {}, b'invalid_grant')]), {'youtube': YT_CONFIG}))
+
+
+TIKTOK_OK = {'error': {'code': 'ok', 'message': ''}}
+
+
+def tiktok_answer(data, status=200):
+    return (status, {}, json.dumps({**TIKTOK_OK, 'data': data}).encode())
+
+
+def tiktok_error(code, status=400):
+    return (status, {}, json.dumps({'error': {'code': code, 'message': 'details'}}).encode())
+
+
+class TikTokTest(AdapterTest):
+    def setUp(self):
+        super().setUp()
+        self.token_path = Path(tempfile.mkdtemp()) / 'tiktok-token.json'
+        self.token_path.write_text(json.dumps({'refresh_token': 'old'}))
+        self.token_path.chmod(0o600)
+        self.config = {'client_key': 'ck', 'client_secret': 'cs', 'privacy_level': 'SELF_ONLY', 'token_file': str(self.token_path)}
+        self.reel(10)
+
+    def reel(self, size):
+        (self.step / 'media' / 'reel.mp4').write_bytes(b'0' * size)
+
+    def short(self):
+        return item('tiktok-video', platform='tiktok', action='upload', text='Caption\n\n#a',
+                    media=[{'path': 'media/reel.mp4', 'sha256': 'unused'}])
+
+    def ctx_for(self, http):
+        return self.ctx(self.short(), http, {'tiktok': self.config})
+
+    def token(self, refresh=None):
+        data = {'access_token': 'at', **({'refresh_token': refresh} if refresh else {})}
+        return (200, {}, json.dumps(data).encode())
+
+    def creator(self, options=('SELF_ONLY', 'PUBLIC_TO_EVERYONE')):
+        return tiktok_answer({'creator_username': 'demo', 'privacy_level_options': list(options), 'comment_disabled': False,
+                              'duet_disabled': True, 'stitch_disabled': False})
+
+    def init(self):
+        return tiktok_answer({'publish_id': 'pub1', 'upload_url': 'https://upload.example/chunks'})
+
+    def status(self, status='PUBLISH_COMPLETE', **fields):
+        return tiktok_answer({'status': status, **fields})
+
+    def test_new_refresh_token_is_saved_before_the_creator_info_call(self):
+        http = FakeHttp([self.token(refresh='new'), publish.NetworkError('reset')])
+        with self.assertRaises(publish.RetryLater):
+            publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(json.loads(self.token_path.read_text()), {'refresh_token': 'new'})
+        self.assertEqual(self.token_path.stat().st_mode & 0o777, 0o600)
+
+    def test_refused_refresh_token_stops_with_instructions(self):
+        for answer in ((400, {}, b'{"error": "invalid_grant"}'), (200, {}, b'{"error": "invalid_grant"}')):
+            with self.subTest(answer=answer), self.assertRaises(publish.StopItem) as raised:
+                publish.tiktok_item(self.ctx_for(FakeHttp([answer])))
+            self.assertEqual(str(raised.exception), f'TikTok refused the refresh token; log in again and put the new refresh token in {self.token_path}')
+
+    def test_token_file_readable_by_others_stops_before_any_request(self):
+        self.token_path.chmod(0o644)
+        http = FakeHttp([])
+        with self.assertRaises(publish.StopItem):
+            publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(http.requests, [])
+
+    def test_privacy_level_must_be_one_the_account_allows(self):
+        http = FakeHttp([self.token(), self.creator(options=('PUBLIC_TO_EVERYONE',))])
+        with self.assertRaises(publish.StopItem) as raised:
+            publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(str(raised.exception), 'TikTok allows PUBLIC_TO_EVERYONE for this account; set privacy_level in publish.json to one of them')
+
+    def test_unaudited_app_stops_with_the_audit_message(self):
+        http = FakeHttp([self.token(), self.creator(), tiktok_error('unaudited_client_can_only_post_to_private_accounts', 403)])
+        with self.assertRaises(publish.StopItem) as raised:
+            publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(str(raised.exception), "TikTok has not audited this app: set the TikTok account to private and privacy_level to SELF_ONLY, or pass TikTok's audit")
+
+    def test_init_spam_limit_waits_a_day(self):
+        http = FakeHttp([self.token(), self.creator(), tiktok_error('spam_risk_too_many_posts', 403)])
+        with self.assertRaises(publish.RetryLater) as raised:
+            publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(raised.exception.wait_seconds, publish.DAY_SECONDS)
+
+    def test_small_file_is_one_chunk(self):
+        self.reel(3_000_000)
+        http = FakeHttp([self.token(), self.creator(), self.init(), (201, {}, b''), self.status()])
+        publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(json.loads(http.requests[2][3])['source_info'],
+                         {'source': 'FILE_UPLOAD', 'video_size': 3000000, 'chunk_size': 3000000, 'total_chunk_count': 1})
+        self.assertEqual(http.requests[3][2]['Content-Range'], 'bytes 0-2999999/3000000')
+
+    def test_large_file_is_split_and_the_last_chunk_takes_the_remainder(self):
+        self.reel(25_000_123)
+        http = FakeHttp([self.token(), self.creator(), self.init(), (206, {}, b''), (201, {}, b''), self.status()])
+        publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(json.loads(http.requests[2][3])['source_info'],
+                         {'source': 'FILE_UPLOAD', 'video_size': 25000123, 'chunk_size': 10000000, 'total_chunk_count': 2})
+        method, url, headers, body = http.requests[4]
+        self.assertEqual(headers['Content-Range'], 'bytes 10000000-25000122/25000123')
+        self.assertEqual((headers['Content-Length'], headers['Content-Type'], len(body)), ('15000123', 'video/mp4', 15000123))
+        self.assertNotIn('Authorization', headers)
+
+    def test_network_error_on_an_earlier_chunk_waits(self):
+        self.reel(25_000_123)
+        http = FakeHttp([self.token(), self.creator(), self.init(), publish.NetworkError('reset')])
+        with self.assertRaises(publish.RetryLater):
+            publish.tiktok_item(self.ctx_for(http))
+
+    def test_network_error_on_the_last_chunk_is_unknown_and_publish_id_is_kept(self):
+        self.reel(25_000_123)
+        http = FakeHttp([self.token(), self.creator(), self.init(), (206, {}, b''), publish.NetworkError('reset')])
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.tiktok_item(self.ctx_for(http))
+        events = publish.read_events(self.step)
+        self.assertEqual([event['event'] for event in events], ['progress', 'sent'])
+        self.assertEqual(events[0]['data'], {'publish_id': 'pub1'})
+
+    def test_completed_post_returns_its_url(self):
+        http = FakeHttp([self.token(), self.creator(), self.init(), (201, {}, b''), self.status(publicaly_available_post_id=[7001])])
+        self.assertEqual(publish.tiktok_item(self.ctx_for(http)), ('pub1', 'https://www.tiktok.com/@demo/video/7001'))
+
+    def test_completed_post_without_a_public_id_has_an_empty_url(self):
+        http = FakeHttp([self.token(), self.creator(), self.init(), (201, {}, b''), self.status(publicaly_available_post_id=[])])
+        self.assertEqual(publish.tiktok_item(self.ctx_for(http)), ('pub1', ''))
+
+    def test_failed_post_stops_with_the_reason(self):
+        http = FakeHttp([self.token(), self.creator(), self.init(), (201, {}, b''), self.status('FAILED', fail_reason='video_too_long')])
+        with self.assertRaises(publish.StopItem) as raised:
+            publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(str(raised.exception), 'TikTok did not post the video: video_too_long')
+
+    def test_failed_post_from_the_spam_limit_waits_a_day(self):
+        http = FakeHttp([self.token(), self.creator(), self.init(), (201, {}, b''), self.status('FAILED', fail_reason='spam_risk_too_many_posts')])
+        with self.assertRaises(publish.RetryLater) as raised:
+            publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(raised.exception.wait_seconds, publish.DAY_SECONDS)
+
+    def test_refused_status_check_is_asked_again(self):
+        http = FakeHttp([self.token(), self.creator(), self.init(), (201, {}, b''), (429, {}, b''), self.status(publicaly_available_post_id=[7])])
+        self.assertEqual(publish.tiktok_item(self.ctx_for(http)), ('pub1', 'https://www.tiktok.com/@demo/video/7'))
+        self.assertEqual(self.sleeps, [10])
+
+    def test_still_processing_after_ten_minutes_is_unknown(self):
+        answers = [self.token(), self.creator(), self.init(), (201, {}, b'')] + [self.status('PROCESSING_UPLOAD')] * 60
+        http = FakeHttp(answers)
+        with self.assertRaises(publish.OutcomeUnknown):
+            publish.tiktok_item(self.ctx_for(http))
+        self.assertEqual(len(http.requests), len(answers))
+        self.assertEqual(self.sleeps, [10] * 59)
 
 
 class CommandTest(unittest.TestCase):
