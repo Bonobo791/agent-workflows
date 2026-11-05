@@ -1,0 +1,56 @@
+BRIEF — TOOLS-38: How to Automate Blog Creation With AI
+Status: ready for drafting and independent source review. This is a brief, not an approved article or evidence of source verification.
+
+Assignment
+Write a practical English article for small marketing teams, independent publishers and business owners who know blogging but are new to automated workflows. Aim for 1,500–2,000 words as an editorial target, not an SEO rule. Give readers a repeatable path from idea to human decision. Use plain language and a concrete, hypothetical example. Do not assert traffic, rankings, savings, search demand or algorithm effects without approved, verified evidence. Search demand, target site, market, conversion and Search Console data are unavailable; do not invent them. Keep production instructions and internal notes out of public copy.
+
+Reader outcome
+A reader can define a bounded assignment, assemble an approved source set, use AI to assist with an outline and draft, verify each factual claim, quotation and citation, resolve rights and evidence gaps, and route a versioned package to a person for a documented decision. Treat automation as assistance, with a named person accountable for editorial decisions. Describe this as the recommended workflow, not an empirical promise.
+
+Proposed structure
+1. Introduce the workflow and its boundaries. Distinguish assistance with organizing, outlining and drafting from human accountability for accuracy, rights, relevance and approval.
+2. Choose an idea and define the audience, purpose, scope, exclusions and intended decision. Explain that no unprovided demand data is available.
+3. Create a bounded brief and approved source set. Give each source an ID, URL, version or retrieval date and permitted scope. Exclude unsupported material; record missing evidence as a blocker.
+4. Generate an outline and draft using only the approved brief and source set. Ask for claim-to-source references and visible gaps; do not treat generated citations as verified.
+5. Verify every factual claim, quotation and citation against the actual source, including context and exact quotation. Record evidence and version; correct or remove unsupported statements. Block missing evidence and unresolved rights. A source reviewer must fetch the approved URLs and check contents before claims are accepted.
+6. Review for usefulness, scope, readability, rights and consistency. Show how a person records corrections and the final approve, revise or reject decision. Preserve linked versions of brief, sources, draft, review, channel assets, package and decision.
+7. Include the reusable template, illustrative prompts, tracker example and checklist below, adapted into reader-facing copy.
+
+Reusable brief template
+Title and working idea: [ ]
+Audience and existing knowledge: [ ]
+Reader goal and intended action: [ ]
+Scope and exclusions: [ ]
+Key questions and proposed sections: [ ]
+Approved sources: [source ID, URL, version/date, permitted scope]
+Claims requiring evidence and rights questions: [ ]
+Voice, format and editorial length target: [ ]
+Human owner, reviewer and decision criteria: [ ]
+Deliverables and linked version IDs: [ ]
+Open questions and blockers: [ ]
+
+Illustrative drafting prompt
+“Use the supplied brief and approved source excerpts only. Produce an outline and draft for the stated audience and scope. Tag factual statements with source IDs, preserve exact quotations, and mark missing evidence or rights as [BLOCKED]. Do not invent sources, figures or quotations. List questions for the human reviewer.”
+
+Illustrative reviewer prompt
+“Compare this draft against the brief and supplied source versions. List each factual claim, quotation and citation with its source ID and supporting passage, or mark it [BLOCKED]. Flag scope, context, rights and readability issues. Suggest corrections without inventing evidence. A human must inspect the sources and make the decision.”
+
+Hypothetical tracker example
+A small publisher plans an article on maintaining a garden. Record BR-01 for the brief and SRC-01 for an approved source version; draft D-01 references both. In review R-01, claim C-01 has a source passage recorded, while C-02 has no supporting passage and is blocked. The editor removes or substantiates C-02, creates D-02 and records a fresh review before a decision. Link any channel drafts, asset versions and final package to D-02 and the decision record. These identifiers and scenario are illustrative, not evidence of an actual review.
+
+Reader checklist
+- Is the audience, purpose, scope and human owner clear?
+- Is the source set approved and versioned?
+- Does every factual claim, quotation and citation have checked support in context?
+- Are unsupported claims and unresolved rights blocked or removed?
+- Are the brief, sources, draft, review, channel assets, package and human decision linked by version?
+- Has an accountable person reviewed the package and recorded a decision?
+
+Candidate evidence and gates
+Only the three URLs in sources.json are approved for factual claims. The register maps candidate propositions for a reviewer to test; wording is provisional and is not a representation of source contents. This writer did not fetch or check them. The reviewer must record retrieval dates, source versions or content hashes, exact supporting passages and verification outcomes; remove or revise any unsupported proposition, quotation or citation. Use no unapproved external source to support article claims. The final article need not make any candidate proposition if support is absent.
+
+Downstream deliverables and constraints
+After the article is reviewed, prepare separate LinkedIn, X, Facebook, Instagram and Reddit drafts grounded in the approved article. Destinations are undecided. Missing destination and current platform evidence block each affected channel; Reddit remains blocked until a community and its current rules are supplied and checked. Create an original editable OpenFilm workflow diagram and a 1080 × 1080 PNG candidate LinkedIn feed asset using exact excerpts from the approved article and code-drawn shapes only; no external images, music, footage or logos. Check rights and current platform requirements, record gaps, and do not call the candidate approved. Assemble the article, drafts, editable project, rendered asset and review findings for a person. No publishing, scheduling, deployment, spending or credential creation.
+
+Process limitation
+The requested complete plan-seo-geo-growth skill was not accessible at its supplied path in this environment. The canonical drafting and independent review stages must obtain and apply it if available and record any remaining limitation. This brief does not substitute for those stages, source verification, platform checks or human approval.

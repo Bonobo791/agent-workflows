@@ -1703,7 +1703,8 @@ class ClaudeCallTest(unittest.TestCase):
     def test_each_role_starts_claude_with_its_model_effort_and_budget(self):
         client = FakeClient(['pass'])
         for role, model, effort, budget in [('writer', 'claude-haiku-5-5', 'xhigh', '1.00'),
-                                            ('importer', 'claude-sonnet-5-5', 'high', '5.00'),
+                                            ('script', 'claude-opus-5-5', 'medium', '4.00'),
+                                            ('importer', 'claude-sonnet-5-5', 'medium', '5.00'),
                                             ('strategist', 'claude-sonnet-5-5', 'high', '3.00'),
                                             ('creator', 'claude-opus-5-5', 'high', '6.00')]:
             self.call(client, role)

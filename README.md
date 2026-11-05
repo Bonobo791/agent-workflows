@@ -111,12 +111,13 @@ The draft goes to the a/r/q prompt. On approval, `positioning.md` is saved with 
 
 ## Models
 
-Each step and the import uses one of five roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
+Each step and the import uses one of six roles. The roles are set in `ROLES` at the top of `marketing/run.py`. The writer always uses Haiku 5.5; only the reel script (08-reel-script) uses the script role.
 
 | Role | Used for | Model | Effort | Budget per call |
 | --- | --- | --- | --- | --- |
-| writer | the brand command, steps 01, 03 to 06, and 08-reel-script | `claude-haiku-5-5` | `xhigh` | $1.00 |
-| importer | the import (`new --issue`) | `claude-sonnet-5-5` | `high` | $5.00 |
+| writer | the brand command, and steps 01, 03 to 06 | `claude-haiku-5-5` | `xhigh` | $1.00 |
+| script | the reel script (08-reel-script) | `claude-opus-5-5` | `medium` | $4.00 |
+| importer | the import (`new --issue`) | `claude-sonnet-5-5` | `medium` | $5.00 |
 | strategist | the brief (step 02) | `claude-sonnet-5-5` | `high` | $3.00 |
 | reviewer | the review of every step | `claude-sonnet-5-5` | `medium` | $4.00 |
 | creator | images and reel | `claude-opus-5-5` | `high` | $6.00 |
@@ -130,7 +131,7 @@ campaigns/<name>/00-task.md
 campaigns/<name>/import.json                         (only with --issue)
 campaigns/<name>/claude-stderr.log                    Claude Code's stderr for every run and import
 campaigns/<name>/run.log                             every step, Claude call and decision (also printed in the terminal)
-campaigns/<name>/sessions.json                       one Claude Code session per role (writer, strategist, reviewer, creator)
+campaigns/<name>/sessions.json                       one Claude Code session per role (writer, script, strategist, reviewer, creator)
 campaigns/<name>/01-sources/output.md, review.md, APPROVED, calls/, claude-usage.jsonl, review-started.txt, history/
 campaigns/<name>/02-brief/...
 ...

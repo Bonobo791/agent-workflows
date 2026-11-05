@@ -1,0 +1,1 @@
+Adapt only the approved article for the assigned channel, without introducing unsupported claims or publication.

@@ -1,0 +1,43 @@
+{
+  "stage": "brief",
+  "model": "gpt-6.1-terra",
+  "thread_id": "01a19e42-abd3-7890-b368-1c65104259a2",
+  "usage": {
+    "threadId": "01a19e42-abd3-7890-b368-1c65104259a2",
+    "turnId": "01a19e42-acb5-7d40-857e-31308d73e53a",
+    "tokenUsage": {
+      "total": {
+        "totalTokens": 83920,
+        "inputTokens": 82765,
+        "cachedInputTokens": 79488,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 1155,
+        "reasoningOutputTokens": 329
+      },
+      "last": {
+        "totalTokens": 28936,
+        "inputTokens": 28250,
+        "cachedInputTokens": 27776,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 686,
+        "reasoningOutputTokens": 301
+      },
+      "modelContextWindow": 475000
+    }
+  },
+  "schema_problems": [],
+  "result": {
+    "stage": "brief",
+    "status": "passed",
+    "reason": null,
+    "input_versions": [
+      "87a6886abfda2fdcb6e98c1e54fb70b17a1e1298d5dd3f899669ea1552f0c85a",
+      "e739e2e7df43f2659e517710d51e3db5d536d77b1f5351624b20ddeb72ed38f8"
+    ],
+    "outputs": [
+      "# Example Domain at a glance\n\n**Deliverable:** Short guide note.\n**Audience:** Developers who have never seen the page.\n**Page type:** Example page for documentation.\n**Requirements:** Use the exact heading above and make no claims beyond the supplied source facts.\n\nThe HTML document title is “Example Domain.” The page is intended for use in illustrative examples in documents.\n\n**Private evidence register**\n- claim-1: The HTML document title is “Example Domain.” Corroborated by the page title at [Example Domain](https://example.com/), accessed 2026-11-02.\n- claim-2: The page is intended for use in illustrative examples in documents. Corroborated by [Example Domain](https://example.com/), accessed 2026-11-02.\n\n**Blockers:** None.\n\nThe supplied synthetic source does not identify a URL; example.com was checked as an independent corroborating source.\n\n"
+    ],
+    "session_id": null,
+    "findings": []
+  }
+}

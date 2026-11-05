@@ -41,18 +41,20 @@ BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'posit
 LIBRARY_DIR = HERE / 'skill-library'
 PRIVATE_SKILLS_DIR = Path.home() / '.config' / 'agent-workflows' / 'private' / 'skills'  # private copies of external skills, kept out of the repo
 CAMPAIGNS_DIR = REPO / 'campaigns'
-# The owner's roles: the writer uses Haiku 5.5 at xhigh; the importer, strategist and reviewer use Sonnet 5.5 (high, high and
-# medium); the image and video creator uses Opus 5.5 at high. Each budget_usd caps one call. The importer's cap is set for
-# Sonnet: a live import on Haiku cost $0.69, and Sonnet costs about four times as much.
+# The owner's roles: the writer always uses Haiku 5.5 at xhigh; the script writer (08-reel-script) uses Opus 5.5 at medium; the
+# importer and reviewer use Sonnet 5.5 at medium; the strategist uses Sonnet 5.5 at high; the image and video creator uses Opus 5.5 at high.
+# Each budget_usd caps one call. The importer's cap is set for Sonnet: a live import on Haiku cost $0.69, and Sonnet costs about
+# four times as much.
 ROLES = {
     'writer': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
-    'importer': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 5.00},
+    'script': {'model': 'claude-opus-5-5', 'effort': 'medium', 'budget_usd': 4.00},
+    'importer': {'model': 'claude-sonnet-5-5', 'effort': 'medium', 'budget_usd': 5.00},
     'strategist': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 3.00},
     'reviewer': {'model': 'claude-sonnet-5-5', 'effort': 'medium', 'budget_usd': 4.00},
     'creator': {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 6.00},
 }
 # --tools is fixed per role, so every call of a role has the same flags; --allowedTools is what each step may use.
-ROLE_TOOLS = {'writer': 'WebSearch,WebFetch', 'strategist': '', 'reviewer': 'WebSearch,WebFetch,Read', 'creator': '', 'importer': ''}
+ROLE_TOOLS = {'writer': 'WebSearch,WebFetch', 'strategist': '', 'reviewer': 'WebSearch,WebFetch,Read', 'creator': '', 'importer': '', 'script': ''}
 WEB_TOOLS = ['WebSearch', 'WebFetch']
 SESSIONS_FILE = 'sessions.json'  # in the campaign folder: one Claude Code session per role
 REVIEW_STARTED = 'review-started.txt'  # in a step folder: its first review is done, so the next review is a re-review
@@ -160,7 +162,7 @@ STEPS = [
      'inputs': IMAGE_INPUTS, 'review_inputs': IMAGE_INPUTS,
      'writer_skills': ['openfilm-manual', 'quote-cards-and-text-graphics'],
      'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics']},
-    {'id': '08-reel-script', 'skill': 'reel-script', 'kind': 'script', 'role': 'writer', 'deliverable': 'reel', 'web': False, 'check': 'reel-script',
+    {'id': '08-reel-script', 'skill': 'reel-script', 'kind': 'script', 'role': 'script', 'deliverable': 'reel', 'web': False, 'check': 'reel-script',
      'inputs': REEL_SCRIPT_INPUTS, 'review_inputs': REEL_SCRIPT_INPUTS,
      'writer_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video'],
      'review_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']},
