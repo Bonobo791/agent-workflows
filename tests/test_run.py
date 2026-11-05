@@ -14,12 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'marketing'))
 import run  # noqa: E402
 import claude_client  # noqa: E402
 
-ROLES = {
-    'writer': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
-    'strategist': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
-    'creator': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 3.00},
-    'reviewer': {'model': 'claude-sonnet-5-5', 'effort': 'medium', 'budget_usd': 2.00},
-}
+ROLES = run.ROLES  # the roles the workflow uses
 TEXT_STEPS = [
     {'id': '01-brief', 'skill': 'brief', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': None,
      'inputs': ['00-task'], 'review_inputs': ['00-task'], 'writer_skills': [], 'review_skills': []},
@@ -110,13 +105,15 @@ FAKE_HELP = '\n'.join(f'  {flag}  (flag)' for flag in claude_client.REQUIRED_FLA
 class FakeClient(claude_client.ClaudeClient):
     """Replaces the process that starts claude. Each turn gets a scripted reply; every argv and prompt is recorded."""
 
-    def __init__(self, verdicts, writer_text=None, writer_outputs=(), searches=(), help_text=None, plan_status='connected', turn_stdout=None):
+    def __init__(self, verdicts, writer_text=None, writer_outputs=(), searches=(), help_text=None, plan_status='connected', turn_stdout=None,
+                 plan_tools=None):
         self.verdicts = list(verdicts)
         self.writer_text = writer_text
         self.writer_outputs = list(writer_outputs)  # JSON texts for the writer's calls, in order
         self.searches = list(searches)  # web search queries each turn reports
         self.help_text = FAKE_HELP if help_text is None else help_text
         self.plan_status = plan_status  # the It's a Plan status the init line reports
+        self.plan_tools = claude_client.IMPORT_TOOLS if plan_tools is None else list(plan_tools)  # the tools the init line lists
         self.turn_stdout = turn_stdout  # when set, every turn prints exactly this text
         self.prompts, self.calls, self.web_searches, self.argvs = [], [], [], []
         self.thread_params = []  # the session each call resumed (None for a new session), named thread-1, thread-2, ...
@@ -166,7 +163,8 @@ class FakeClient(claude_client.ClaudeClient):
             return None  # claude's structured output is an object or nothing; the workflow rejects this
 
     def stream(self, session_id, structured, tools):
-        events = [{'type': 'system', 'subtype': 'init', 'mcp_servers': [{'name': claude_client.PLAN_SERVER, 'status': self.plan_status}]}]
+        events = [{'type': 'system', 'subtype': 'init', 'mcp_servers': [{'name': claude_client.PLAN_SERVER, 'status': self.plan_status}],
+                   'tools': list(self.plan_tools)}]
         if 'WebSearch' in tools:
             events += [{'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'WebSearch', 'input': {'query': query}}]}}
                        for query in self.searches]
@@ -323,7 +321,7 @@ class RunTest(unittest.TestCase):
         client = FakeClient(['pass', 'pass'])
         self.go(client, answers('a', 'a'))
         self.assertEqual(client.calls[0], ('claude-haiku-5-5', 'xhigh'))
-        self.assertEqual(client.calls[1], ('claude-sonnet-5-5', 'medium'))
+        self.assertEqual(client.calls[1], ('claude-opus-5-5', 'medium'))
 
     def test_failed_checks_skip_the_reviewer(self):
         (self.campaign / '00-task.md').write_text(task_text('article, social'))
@@ -338,7 +336,7 @@ class RunTest(unittest.TestCase):
             self.go(FakeClient(['pass', 'pass']), answers('a', 'a'))
         text = (self.campaign / 'run.log').read_text()
         self.assertIn('writer: asking claude-haiku-5-5 (effort xhigh', text)
-        self.assertIn('reviewer: asking claude-sonnet-5-5 (effort medium', text)
+        self.assertIn('reviewer: asking claude-opus-5-5 (effort medium', text)
         self.assertIn('[01-brief] review verdict pass', text)
         self.assertIn('[01-brief] approved by the owner', text)
         self.assertIn('final package written', text)
@@ -467,7 +465,7 @@ class VoiceAndAngleTest(unittest.TestCase):
 
     def test_brief_step_runs_on_the_strategist(self):
         brief = next(step for step in run.STEPS if step['id'] == '02-brief')
-        self.assertEqual(run.ROLES[brief['role']], {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00})
+        self.assertEqual(run.ROLES[brief['role']], {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 3.00})
         article = next(step for step in run.STEPS if step['id'] == '03-article')
         self.assertEqual(run.ROLES[article['role']], {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00})
 
@@ -604,7 +602,7 @@ class MinorFindingsTest(unittest.TestCase):
 
     def test_minor_findings_get_one_rewrite(self):
         client = self.run_with(['minor', 'pass'])
-        self.assertEqual([model for model, _ in client.calls], ['claude-haiku-5-5', 'claude-sonnet-5-5'] * 2)  # writer, reviewer, writer, reviewer, then the owner
+        self.assertEqual([model for model, _ in client.calls], ['claude-haiku-5-5', 'claude-opus-5-5'] * 2)  # writer, reviewer, writer, reviewer, then the owner
 
     def test_hooks_are_left_out_of_the_final_package(self):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
@@ -617,7 +615,7 @@ class MinorFindingsTest(unittest.TestCase):
 
     def test_second_minor_findings_go_to_the_owner(self):
         client = self.run_with(['minor', 'minor'])
-        self.assertEqual([model for model, _ in client.calls], ['claude-haiku-5-5', 'claude-sonnet-5-5'] * 2)
+        self.assertEqual([model for model, _ in client.calls], ['claude-haiku-5-5', 'claude-opus-5-5'] * 2)
 
 
 class BrandKitTest(unittest.TestCase):
@@ -1687,8 +1685,9 @@ class ClaudeCallTest(unittest.TestCase):
     def test_each_role_starts_claude_with_its_model_effort_and_budget(self):
         client = FakeClient(['pass'])
         for role, model, effort, budget in [('writer', 'claude-haiku-5-5', 'xhigh', '1.00'),
-                                            ('strategist', 'claude-haiku-5-5', 'xhigh', '1.00'),
-                                            ('creator', 'claude-sonnet-5-5', 'high', '3.00')]:
+                                            ('importer', 'claude-haiku-5-5', 'xhigh', '2.00'),
+                                            ('strategist', 'claude-opus-5-5', 'high', '3.00'),
+                                            ('creator', 'claude-opus-5-5', 'high', '6.00')]:
             self.call(client, role)
             argv = client.argvs[-1]
             self.assertEqual(argv[argv.index('--model') + 1], model)
@@ -1698,7 +1697,7 @@ class ClaudeCallTest(unittest.TestCase):
         run.call_model(client, run.ROLES, 'reviewer', 'review', folder, run.REVIEW_SCHEMA, folder / 'r.json', 'reviewer')
         argv = client.argvs[-1]
         self.assertEqual((argv[argv.index('--model') + 1], argv[argv.index('--effort') + 1], argv[argv.index('--max-budget-usd') + 1]),
-                         ('claude-sonnet-5-5', 'medium', '2.00'))
+                         ('claude-opus-5-5', 'medium', '4.00'))
 
     def test_a_revision_has_the_first_drafts_flags_and_resumes_its_session(self):
         client = FakeClient([])
@@ -1776,6 +1775,38 @@ class ClaudeCallTest(unittest.TestCase):
         with self.assertRaisesRegex(run.WorkflowError, 'no structured output object'):
             self.call(client, resume=SESSION)
 
+    def test_a_missing_usage_field_raises_and_names_it(self):
+        client = scripted(result_event(SESSION, usage={'input_tokens': 1, 'cache_creation_input_tokens': 2, 'output_tokens': 4}))
+        with self.assertRaisesRegex(run.WorkflowError, 'did not report cache_read_input_tokens'):
+            self.call(client, resume=SESSION)
+
+    def test_a_budget_error_on_a_resumed_call_has_no_delete_hint(self):
+        folder = self.folder()
+        session_file = folder / 'writer-session.txt'
+        session_file.write_text(SESSION + '\n')
+        client = scripted(result_event(SESSION, subtype='error_max_budget_usd', is_error=True))
+        with self.assertRaises(run.WorkflowError) as caught:
+            run.call_model(client, run.ROLES, 'writer', 'prompt', folder, run.WRITER_SCHEMAS['text'], folder / 'out.json', 'writer',
+                           resume=SESSION, session_file=session_file)
+        self.assertIn('error_max_budget_usd', str(caught.exception))
+        self.assertNotIn('starts a new session', str(caught.exception))
+
+    def test_a_resume_that_claude_cannot_find_names_the_session_file(self):
+        event = result_event(SESSION, subtype='error_during_execution', is_error=True, num_turns=0,
+                             errors=[f'No conversation found with session ID: {SESSION}'])
+        client = claude_client.ClaudeClient(process=lambda argv, prompt, cwd, stderr_path=None: (1, json.dumps(event) + '\n'))
+        folder = self.folder()
+        session_file = folder / 'writer-session.txt'
+        session_file.write_text(SESSION + '\n')
+        with self.assertRaisesRegex(run.WorkflowError, 'deleting writer-session.txt starts a new session'):
+            run.call_model(client, run.ROLES, 'writer', 'prompt', folder, run.WRITER_SCHEMAS['text'], folder / 'out.json', 'writer',
+                           resume=SESSION, session_file=session_file)
+
+    def test_a_line_that_is_not_a_json_object_raises(self):
+        for stdout in ['[1, 2]\n', '"text"\n', 'null\n']:
+            with self.subTest(stdout=stdout), self.assertRaisesRegex(claude_client.ClaudeError, 'not a JSON object'):
+                claude_client.parse_events(stdout)
+
     def test_usage_totals_adds_every_call_not_just_the_last(self):
         folder = self.folder()
         records = [{'call': 'writer', 'input': 10, 'cache_write': 5, 'cache_read': 3, 'output': 2, 'cost_usd': 0.25},
@@ -1806,10 +1837,21 @@ class ClaudeCallTest(unittest.TestCase):
         argv = client.argvs[-1]
         self.assertEqual(argv[argv.index('--setting-sources') + 1], 'user,project')
         self.assertNotIn('--strict-mcp-config', argv)
+        self.assertEqual(argv[argv.index('--max-budget-usd') + 1], '2.00')
         self.assertEqual(argv[argv.index('--tools') + 1], '')
         self.assertEqual(argv[argv.index('--allowedTools') + 1].split(','), claude_client.IMPORT_TOOLS)
         self.assertIn(claude_client.PLAN_TOOL + 'get_issue_by_number', claude_client.IMPORT_TOOLS)
         self.assertTrue((campaign / '00-task.md').read_text().startswith('# Task'))
+
+    def test_the_importer_stops_when_an_it_s_a_plan_tool_is_missing(self):
+        campaign = self.folder() / 'campaigns' / 'demo'
+        campaign.mkdir(parents=True)
+        client = FakeClient([], writer_outputs=[json.dumps({'output': task_text(), 'notes': ''})],
+                            plan_tools=claude_client.IMPORT_TOOLS[1:])  # every tool but get_issue_by_number
+        with self.assertRaises(run.WorkflowError) as caught:
+            run.import_issue(client, campaign, 'MC-32')
+        self.assertIn(claude_client.PLAN_TOOL + 'get_issue_by_number', str(caught.exception))
+        self.assertNotIn(claude_client.PLAN_TOOL + 'get_document', str(caught.exception))
 
 
 class ReviewerSessionTest(unittest.TestCase):
@@ -1856,10 +1898,6 @@ class ReviewerSessionTest(unittest.TestCase):
                            'reviewer', resume=SESSION, session_file=session_file)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class SampleLinesTest(unittest.TestCase):
     def test_character_needs_three_to_five_sample_lines(self):
         def check(lines):
@@ -1887,3 +1925,7 @@ class SampleLinesTest(unittest.TestCase):
     def test_templates_have_the_sample_lines_section(self):
         self.assertIn('## Sample lines', (REPO_TEMPLATE / 'character.md').read_text())
         self.assertIn('## Sample lines', (REPO_TEMPLATE.parent / 'moderaty' / 'character.md').read_text())
+
+
+if __name__ == '__main__':
+    unittest.main()

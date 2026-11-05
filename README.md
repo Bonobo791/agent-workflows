@@ -13,7 +13,7 @@ Nothing is published unless the task has `## Publish to` and you approve step 09
 
 ## Steps
 
-0. The brand kit, once per brand: `brand <brand>` drafts `positioning.md` from its One line with one web-search pass. Every campaign checks the brand kit before any model call.
+0. The brand kit, once per brand: `brand <brand>` drafts `positioning.md` from its One line with one web-search pass. Every campaign run checks the brand kit before any campaign model call; `new --issue` imports the task first because its brand is not known yet.
 1. `01-sources`: finds the facts the campaign needs beyond the brand kit, from primary sources only: at least 3 searches, and at least 3 facts with URLs from 3 different sites
 2. `02-brief`: the brief. Its Angle is one reader problem from `positioning.md`, and each Channel idea starts with a different Value line from it
 3. `03-article`: the SEO article. Each H2 delivers only its Adds line from the brief. It links only to the pages listed in `pages.md`
@@ -111,14 +111,15 @@ The draft goes to the a/r/q prompt. On approval, `positioning.md` is saved with 
 
 ## Models
 
-Each step uses one of four roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
+Each step and the import uses one of five roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
 
 | Role | Used for | Model | Effort | Budget per call |
 | --- | --- | --- | --- | --- |
-| writer | steps 01, 03 to 06, and the import | `claude-haiku-5-5` | `xhigh` | $1.00 |
-| strategist | the brief (step 02) | `claude-haiku-5-5` | `xhigh` | $1.00 |
-| reviewer | the review of every step | `claude-sonnet-5-5` | `medium` | $2.00 |
-| creator | images and reel | `claude-sonnet-5-5` | `high` | $3.00 |
+| writer | the brand command, steps 01, 03 to 06, and 08-reel-script | `claude-haiku-5-5` | `xhigh` | $1.00 |
+| importer | the import (`new --issue`) | `claude-haiku-5-5` | `xhigh` | $2.00 |
+| strategist | the brief (step 02) | `claude-opus-5-5` | `high` | $3.00 |
+| reviewer | the review of every step | `claude-opus-5-5` | `medium` | $4.00 |
+| creator | images and reel | `claude-opus-5-5` | `high` | $6.00 |
 
 Before any step runs, the program runs `claude --version` and `claude --help`: every flag it uses must be in the help, and each role's effort must be one of the `--effort` choices. If one is not, it stops with an `error:` message. There is no model list: a model Claude Code does not know fails its first call.
 

@@ -61,9 +61,12 @@ def parse_events(stdout):
     for line in stdout.splitlines():
         if line.strip():
             try:
-                events.append(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError:
                 raise ClaudeError('claude printed a line that is not JSON') from None
+            if not isinstance(event, dict):
+                raise ClaudeError('claude printed a line that is not a JSON object')
+            events.append(event)
     return events
 
 

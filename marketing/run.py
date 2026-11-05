@@ -18,7 +18,6 @@ import time
 import uuid
 import urllib.parse
 import urllib.error
-import urllib.parse
 import urllib.request
 from collections import Counter
 from contextlib import contextmanager
@@ -41,13 +40,15 @@ BRAND_FILES = ['design-system.md', 'voice.md', 'positioning.md', 'pages.md']
 BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'positioning': 'positioning.md', 'pages': 'pages.md', 'character': 'character.md'}
 LIBRARY_DIR = HERE / 'skill-library'
 CAMPAIGNS_DIR = REPO / 'campaigns'
-# The owner's roles: the writer and the strategist use Haiku 5.5 at xhigh, the reviewer Sonnet 5.5 at medium,
-# and the image and video creator Sonnet 5.5 at high. Each budget_usd caps one call.
+# The owner's roles: the writer uses Haiku 5.5 at xhigh; the strategist Opus 5.5 at high, the reviewer Opus 5.5 at medium,
+# and the image and video creator Opus 5.5 at high. The importer (new --issue) has its own budget: one live import cost $0.69.
+# Each budget_usd caps one call.
 ROLES = {
     'writer': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
-    'strategist': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
-    'reviewer': {'model': 'claude-sonnet-5-5', 'effort': 'medium', 'budget_usd': 2.00},
-    'creator': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 3.00},
+    'importer': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 2.00},
+    'strategist': {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 3.00},
+    'reviewer': {'model': 'claude-opus-5-5', 'effort': 'medium', 'budget_usd': 4.00},
+    'creator': {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 6.00},
 }
 MAX_AUTO_REVISIONS = 1  # one automatic rewrite, shared by a failed check, a revise and a minor-findings pass
 MAX_REVIEW_FRAMES = 10
@@ -1142,14 +1143,49 @@ def parse_json(text, path, what):
         raise WorkflowError(f'{what} did not return valid JSON ({error}); raw reply saved to {path}') from None
 
 
+class ResumeFailed(WorkflowError):
+    """A resumed call that printed no result line, or answered with another session. call_model names the session file for it."""
+
+
+def required(source, key, what):
+    """A field the reply must carry. A missing one is an error that names it; no default is filled in."""
+    if not isinstance(source, dict) or key not in source:
+        raise WorkflowError(f'{what}: claude did not report {key}')
+    return source[key]
+
+
+def resume_error(resume, message):
+    """Only a call that resumed a session can fail to resume it, so only that failure names the session file."""
+    return ResumeFailed(message) if resume else WorkflowError(message)
+
+
+def failure(resume, result, message):
+    """A failed call. claude's own 'No conversation found' answer to a resume is a failed resume, the one failure that names the file."""
+    if resume and 'No conversation found with session ID' in str(result.get('errors')):
+        return ResumeFailed(message)
+    return WorkflowError(message)
+
+
+def has_result_line(stdout):
+    """True when some line is a JSON result event, even if the stream also holds lines that are not JSON."""
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('type') == 'result':
+            return True
+    return False
+
+
 def call_model(client, roles, role_name, prompt, folder, schema, save_path, what, images=(), web=False, resume=None, importer=False,
                session_file=None):
-    """_call_model, except that a failed resume names its session file: deleting that file is what starts a new session."""
+    """_call_model, except that a resume which failed names its session file: deleting that file is what starts a new session."""
     try:
         return _call_model(client, roles, role_name, prompt, folder, schema, save_path, what, images, web, resume, importer)
-    except WorkflowError as error:
-        if resume is None or session_file is None:
-            raise
+    except ResumeFailed as error:
+        if session_file is None:
+            raise WorkflowError(str(error)) from None
         raise WorkflowError(f'{error}. The session {resume} in {session_file} could not be resumed; '
                             f'deleting {session_file.name} starts a new session.') from None
 
@@ -1181,46 +1217,60 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
     try:
         events = parse_events(stdout)
     except ClaudeError as error:
-        raise WorkflowError(f'{what}: {error}; first 300 characters: {stdout[:300]!r}; saved to {stream_path}') from None
+        message = f'{what}: {error}; first 300 characters: {stdout[:300]!r}; saved to {stream_path}'
+        raise (WorkflowError(message) if has_result_line(stdout) else resume_error(resume, message)) from None
     results = [event for event in events if event.get('type') == 'result']
-    if len(results) != 1:
+    if not results:
+        raise resume_error(resume, f"{what}: claude printed no result line; first 300 characters: {stdout[:300]!r}; saved to {stream_path}")
+    if len(results) > 1:
         raise WorkflowError(f"{what}: claude printed {len(results)} result lines, not one; first 300 characters: {stdout[:300]!r}; "
                             f'saved to {stream_path}')
     result = results[0]
-    usage = result.get('usage', {})
-    totals = {'input': usage.get('input_tokens', 0), 'cache_write': usage.get('cache_creation_input_tokens', 0),
-              'cache_read': usage.get('cache_read_input_tokens', 0), 'output': usage.get('output_tokens', 0),
-              'cost_usd': result.get('total_cost_usd', 0.0)}
-    denials = result.get('permission_denials', [])
+    usage = required(result, 'usage', what)
+    totals = {'input': required(usage, 'input_tokens', what), 'cache_write': required(usage, 'cache_creation_input_tokens', what),
+              'cache_read': required(usage, 'cache_read_input_tokens', what), 'output': required(usage, 'output_tokens', what),
+              'cost_usd': required(result, 'total_cost_usd', what)}
+    denials = required(result, 'permission_denials', what)
     for denial in denials:
         log.warning('%s: permission denied: %s', what, json.dumps(denial, ensure_ascii=False))
+    subtype = required(result, 'subtype', what)
     record = {'time': now(), 'call': what, 'role': role_name, 'model': role['model'], 'effort': role['effort'],
-              'session_id': session_id, 'subtype': result.get('subtype'), 'turns': result.get('num_turns', 0),
+              'session_id': session_id, 'subtype': subtype, 'turns': required(result, 'num_turns', what),
               'cost_usd': totals['cost_usd'], 'input': totals['input'], 'cache_write': totals['cache_write'],
               'cache_read': totals['cache_read'], 'output': totals['output'], 'denials': len(denials)}
     with (Path(folder) / 'claude-usage.jsonl').open('a', encoding='utf-8') as handle:
         handle.write(json.dumps(record) + '\n')
-    subtype = result.get('subtype')
+    reported = required(result, 'session_id', what)
     if returncode != 0:
-        raise WorkflowError(f'{what}: claude exited with code {returncode} ({subtype}); saved to {stream_path}')
-    if result.get('is_error') or subtype != 'success':
+        raise failure(resume, result, f'{what}: claude exited with code {returncode} ({subtype}); saved to {stream_path}')
+    if required(result, 'is_error', what) or subtype != 'success':
         hint = ' (the budget_usd of this role needs raising)' if subtype == 'error_max_budget_usd' else ''
-        raise WorkflowError(f"{what}: claude ended with {subtype}{hint}: {result.get('errors') or result.get('result')}; saved to {stream_path}")
-    if result.get('session_id') != session_id:
-        raise WorkflowError(f"{what}: claude used session {result.get('session_id')}, expected {session_id}")
+        raise failure(resume, result, f"{what}: claude ended with {subtype}{hint}: {result.get('errors') or result.get('result')}; "
+                                      f'saved to {stream_path}')
+    if reported != session_id:
+        raise resume_error(resume, f"{what}: claude used session {reported}, expected {session_id}")
     if importer:
-        init = next((event for event in events if event.get('type') == 'system' and event.get('subtype') == 'init'), {})
-        servers = {server.get('name'): server.get('status') for server in init.get('mcp_servers', [])}
+        init = next((event for event in events if event.get('type') == 'system' and event.get('subtype') == 'init'), None)
+        if init is None:
+            raise WorkflowError(f"{what}: claude printed no init line, so It's a Plan cannot be checked; saved to {stream_path}")
+        servers = {required(server, 'name', what): required(server, 'status', what) for server in required(init, 'mcp_servers', what)}
         if servers.get(PLAN_SERVER) != 'connected':
             raise WorkflowError(f"It's a Plan is not connected to claude (status {servers.get(PLAN_SERVER, 'missing')}); "
                                 'connect it in Claude Code, then run the import again')
+        tools = required(init, 'tools', what)
+        missing = [name for name in IMPORT_TOOLS if name not in tools]
+        if missing:
+            raise WorkflowError(f"{what}: claude has no It's a Plan tools {', '.join(missing)}; saved to {stream_path}")
     structured = result.get('structured_output')
     if not isinstance(structured, dict):
         raise WorkflowError(f'{what}: claude gave no structured output object; saved to {stream_path}')
     save_path.write_text(json.dumps(structured, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-    searches = [block['input']['query'] for event in events if event.get('type') == 'assistant'
-                for block in event.get('message', {}).get('content', [])
-                if block.get('type') == 'tool_use' and block.get('name') == 'WebSearch' and block.get('input', {}).get('query')]
+    searches = []
+    for event in events:
+        if event.get('type') == 'assistant':
+            for block in required(required(event, 'message', what), 'content', what):
+                if block.get('type') == 'tool_use' and block.get('name') == 'WebSearch':
+                    searches.append(required(required(block, 'input', what), 'query', what))
     log.info('%s: answered in %.0f s on session %s; %s', what, time.monotonic() - started, session_id, usage_line(totals))
     for query in searches:
         log.info('%s: web search: %s', what, query)
@@ -2078,7 +2128,7 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
 def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
     check_tools(client, roles)
     prompt = '\n\n'.join([load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)])
-    written, _, _ = call_model(client, roles, 'writer', prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer',
+    written, _, _ = call_model(client, roles, 'importer', prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer',
                                importer=True)
     output = written['output']
     errors = check_task(output, design=False)  # the owner sets the design system when checking 00-task.md
