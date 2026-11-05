@@ -27,7 +27,7 @@ def schema_text(schema):
 
 
 def claude_argv(role, schema, tools, session, allowed=None, importer=False):
-    """Every call of one session gets these same flags; only the session flag and its id differ."""
+    """One call's flags. --tools is fixed per role; --allowedTools and the schema are the step's, so a role's calls share flags where they can."""
     argv = ['claude', '-p', '--output-format', 'stream-json', '--verbose', '--model', role['model'], '--effort', role['effort'],
             '--max-budget-usd', f"{role['budget_usd']:.2f}", '--permission-mode', 'dontAsk', '--tools', tools]
     if allowed:

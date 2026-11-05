@@ -130,14 +130,28 @@ campaigns/<name>/00-task.md
 campaigns/<name>/import.json                         (only with --issue)
 campaigns/<name>/claude-stderr.log                    Claude Code's stderr for every run and import
 campaigns/<name>/run.log                             every step, Claude call and decision (also printed in the terminal)
-campaigns/<name>/01-sources/output.md, review.md, APPROVED, calls/, claude-usage.jsonl, writer-session.txt, reviewer-session.txt, history/
+campaigns/<name>/sessions.json                       one Claude Code session per role (writer, strategist, reviewer, creator)
+campaigns/<name>/01-sources/output.md, review.md, APPROVED, calls/, claude-usage.jsonl, review-started.txt, history/
 campaigns/<name>/02-brief/...
 ...
 campaigns/<name>/final/index.md
 campaigns/<name>/09-publish/plan.json, APPROVED, publish.jsonl, media/   (only with ## Publish to)
 ```
 
-Each step folder has `claude-usage.jsonl` (one line per Claude call: tokens and cost), `calls/` (each prompt and the full stream of replies), `writer-session.txt` (the writer's session, which a revision resumes) and `reviewer-session.txt` (the reviewer's session, which every re-review resumes). `status` adds the tokens and cost up.
+Each step folder has `claude-usage.jsonl` (one line per Claude call: tokens, cost and context size), `calls/` (each prompt and the full stream of replies) and `review-started.txt`, which marks that the reviewer has seen the current draft, so the next review is a re-review. `status` adds the tokens and cost up.
+
+### Sessions
+
+A campaign has one Claude Code session per role, in `sessions.json`: `{"writer": {"id": ..., "steps": [...]}}`. The first call of a role starts its session, and every later call of that role in the campaign resumes it, so a role's steps share one conversation. `steps` lists the steps the session has drafted or reviewed. A revision or re-review of a step the session does not hold stops with "the <role> session has no draft of <step>"; delete that step folder and run again.
+
+- Writer and reviewer keep separate sessions, so the reviewer judges the drafts without the writer's conversation.
+- Every call runs from the campaign folder. The prompt, the stream and the usage go in the step folder.
+- `--tools` is fixed per role (writer: web tools; reviewer: web tools and `Read`; strategist and creator: none), so each role's calls share the same flags. `--allowedTools` says what the step may use.
+- A role's first prompt for a step starts with the step id, its earlier steps being finished, and the tools allowed for it.
+- A failed resume stops the run and names `sessions.json` and the role. Removing that role's entry starts a new session.
+- If claude compacts a session, the run logs a warning.
+
+The brand command has its own `sessions.json` in `campaigns/brand-<brand>/`; `--refresh` of an approved draft starts its sessions afresh.
 
 To follow a run from another terminal, run `tail -f campaigns/<name>/run.log`.
 

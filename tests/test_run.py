@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from datetime import date
 from pathlib import Path
 from unittest import mock
@@ -106,7 +107,7 @@ class FakeClient(claude_client.ClaudeClient):
     """Replaces the process that starts claude. Each turn gets a scripted reply; every argv and prompt is recorded."""
 
     def __init__(self, verdicts, writer_text=None, writer_outputs=(), searches=(), help_text=None, plan_status='connected', turn_stdout=None,
-                 plan_tools=None):
+                 plan_tools=None, compact=False):
         self.verdicts = list(verdicts)
         self.writer_text = writer_text
         self.writer_outputs = list(writer_outputs)  # JSON texts for the writer's calls, in order
@@ -114,6 +115,8 @@ class FakeClient(claude_client.ClaudeClient):
         self.help_text = FAKE_HELP if help_text is None else help_text
         self.plan_status = plan_status  # the It's a Plan status the init line reports
         self.plan_tools = claude_client.IMPORT_TOOLS if plan_tools is None else list(plan_tools)  # the tools the init line lists
+        self.compact = compact  # emit a compact_boundary event, as claude does when it compacts a long session
+        self.cwds = []  # the working folder of each call
         self.turn_stdout = turn_stdout  # when set, every turn prints exactly this text
         self.prompts, self.calls, self.web_searches, self.argvs = [], [], [], []
         self.thread_params = []  # the session each call resumed (None for a new session), named thread-1, thread-2, ...
@@ -126,10 +129,11 @@ class FakeClient(claude_client.ClaudeClient):
         if argv[1:] == ['--help']:
             return 0, self.help_text
         self.argvs.append(argv)
+        self.cwds.append(cwd)
         self.prompts.append(prompt)
         self.calls.append((argv[argv.index('--model') + 1], argv[argv.index('--effort') + 1]))
-        tools = argv[argv.index('--tools') + 1]
-        self.web_searches.append(tools)
+        allowed = argv[argv.index('--allowedTools') + 1] if '--allowedTools' in argv else ''
+        self.web_searches.append(allowed)
         flag, session_id = argv[-2], argv[-1]
         if flag == '--session-id':
             self.session_names[session_id] = f'thread-{len(self.session_names) + 1}'
@@ -139,7 +143,7 @@ class FakeClient(claude_client.ClaudeClient):
         if self.turn_stdout is not None:
             return 0, self.turn_stdout
         structured = self.reply(json.loads(argv[argv.index('--json-schema') + 1]))
-        return 0, self.stream(session_id, structured, tools)
+        return 0, self.stream(session_id, structured, allowed)
 
     def reply(self, schema):
         if schema == run.REVIEW_SCHEMA:
@@ -162,12 +166,14 @@ class FakeClient(claude_client.ClaudeClient):
         except ValueError:
             return None  # claude's structured output is an object or nothing; the workflow rejects this
 
-    def stream(self, session_id, structured, tools):
+    def stream(self, session_id, structured, allowed):
         events = [{'type': 'system', 'subtype': 'init', 'mcp_servers': [{'name': claude_client.PLAN_SERVER, 'status': self.plan_status}],
                    'tools': list(self.plan_tools)}]
-        if 'WebSearch' in tools:
+        if 'WebSearch' in allowed:
             events += [{'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'WebSearch', 'input': {'query': query}}]}}
                        for query in self.searches]
+        if self.compact:
+            events.append({'type': 'system', 'subtype': 'compact_boundary'})
         events.append({'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': session_id,
                        'result': json.dumps(structured), 'structured_output': structured,
                        'usage': {'input_tokens': 10, 'cache_creation_input_tokens': 20, 'cache_read_input_tokens': 30, 'output_tokens': 5},
@@ -276,7 +282,7 @@ class RunTest(unittest.TestCase):
             self.go(FakeClient(['pass']), answers('q'))
         client = FakeClient(['pass', 'pass'])
         self.go(client, answers('r', 'shorter', '', 'a', 'a'))
-        self.assertEqual(client.thread_params[0], (self.campaign / '01-brief' / 'writer-session.txt').read_text().strip())
+        self.assertEqual(client.thread_params[0], json.loads((self.campaign / 'sessions.json').read_text())['writer']['id'])
         self.assertIn('shorter', client.prompts[0])
 
     def test_prompts_put_inputs_before_the_skill(self):
@@ -1267,7 +1273,8 @@ class SearchLogTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         with self.assertLogs('marketing', level='INFO') as logs:
             _, _, searches = run.call_model(client, {'writer': {'model': 'claude-haiku-5-5', 'effort': 'low', 'budget_usd': 1.00}}, 'writer', 'prompt', tmp,
-                                                run.WRITER_SCHEMAS['text'], tmp / 'writer.json', 'writer', web=True)
+                                                run.WRITER_SCHEMAS['text'], tmp / 'writer.json', 'writer', cwd=tmp,
+                                                session=('--session-id', str(uuid.uuid4())), web=True)
         self.assertEqual(searches, ['ledgerly csv export', 'instagram alt text rules'])
         self.assertIn('writer: web search: ledgerly csv export', '\n'.join(logs.output))
 
@@ -1678,9 +1685,11 @@ class ClaudeCallTest(unittest.TestCase):
     def folder(self):
         return Path(tempfile.mkdtemp())
 
-    def call(self, client, role='writer', **kwargs):
+    def call(self, client, role='writer', resume=None, **kwargs):
         folder = self.folder()
-        return run.call_model(client, run.ROLES, role, 'prompt', folder, run.WRITER_SCHEMAS['text'], folder / 'out.json', 'writer', **kwargs)
+        session = ('--resume', resume) if resume else ('--session-id', str(uuid.uuid4()))
+        return run.call_model(client, run.ROLES, role, 'prompt', folder, run.WRITER_SCHEMAS['text'], folder / 'out.json', 'writer',
+                              cwd=folder, session=session, resume_note='RESUME NOTE', **kwargs)
 
     def test_each_role_starts_claude_with_its_model_effort_and_budget(self):
         client = FakeClient(['pass'])
@@ -1694,7 +1703,8 @@ class ClaudeCallTest(unittest.TestCase):
             self.assertEqual(argv[argv.index('--effort') + 1], effort)
             self.assertEqual(argv[argv.index('--max-budget-usd') + 1], budget)
         folder = self.folder()
-        run.call_model(client, run.ROLES, 'reviewer', 'review', folder, run.REVIEW_SCHEMA, folder / 'r.json', 'reviewer')
+        run.call_model(client, run.ROLES, 'reviewer', 'review', folder, run.REVIEW_SCHEMA, folder / 'r.json', 'reviewer',
+                       cwd=folder, session=('--session-id', SESSION))
         argv = client.argvs[-1]
         self.assertEqual((argv[argv.index('--model') + 1], argv[argv.index('--effort') + 1], argv[argv.index('--max-budget-usd') + 1]),
                          ('claude-opus-5-5', 'medium', '4.00'))
@@ -1702,10 +1712,11 @@ class ClaudeCallTest(unittest.TestCase):
     def test_a_revision_has_the_first_drafts_flags_and_resumes_its_session(self):
         client = FakeClient([])
         folder = self.folder()
-        _, session, _ = run.call_model(client, run.ROLES, 'writer', 'draft', folder, run.WRITER_SCHEMAS['text'], folder / 'w.json',
-                                       'writer', web=True)
+        session = str(uuid.uuid4())
+        run.call_model(client, run.ROLES, 'writer', 'draft', folder, run.WRITER_SCHEMAS['text'], folder / 'w.json', 'writer',
+                       cwd=folder, session=('--session-id', session), web=True)
         run.call_model(client, run.ROLES, 'writer', 'revise', folder, run.WRITER_SCHEMAS['text'], folder / 'w.json', 'writer',
-                       web=True, resume=session)
+                       cwd=folder, session=('--resume', session), web=True)
         first, second = client.argvs
         self.assertEqual(first[:-2], second[:-2])  # the same flags; only the session flag and its id differ
         self.assertEqual(first[-2:], ['--session-id', session])
@@ -1731,9 +1742,10 @@ class ClaudeCallTest(unittest.TestCase):
         self.assertIn(str(image.resolve()), prompt.splitlines())
         self.assertTrue(Path(str(image.resolve())).is_file())
         client = FakeClient(['pass'])
-        run.call_model(client, run.ROLES, 'reviewer', prompt, step_dir, run.REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images=[image])
+        run.call_model(client, run.ROLES, 'reviewer', prompt, step_dir, run.REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images=[image],
+                       cwd=step_dir, session=('--session-id', SESSION))
         argv = client.argvs[0]
-        self.assertEqual(argv[argv.index('--tools') + 1], 'Read')
+        self.assertEqual(argv[argv.index('--allowedTools') + 1], 'Read')  # --tools stays fixed for the reviewer
 
     def test_video_reviews_list_each_frame_with_its_second(self):
         folder = self.folder()
@@ -1780,27 +1792,23 @@ class ClaudeCallTest(unittest.TestCase):
         with self.assertRaisesRegex(run.WorkflowError, 'did not report cache_read_input_tokens'):
             self.call(client, resume=SESSION)
 
-    def test_a_budget_error_on_a_resumed_call_has_no_delete_hint(self):
+    def test_a_budget_error_on_a_resumed_call_has_no_resume_note(self):
         folder = self.folder()
-        session_file = folder / 'writer-session.txt'
-        session_file.write_text(SESSION + '\n')
         client = scripted(result_event(SESSION, subtype='error_max_budget_usd', is_error=True))
         with self.assertRaises(run.WorkflowError) as caught:
             run.call_model(client, run.ROLES, 'writer', 'prompt', folder, run.WRITER_SCHEMAS['text'], folder / 'out.json', 'writer',
-                           resume=SESSION, session_file=session_file)
+                           cwd=folder, session=('--resume', SESSION), resume_note='RESUME NOTE')
         self.assertIn('error_max_budget_usd', str(caught.exception))
-        self.assertNotIn('starts a new session', str(caught.exception))
+        self.assertNotIn('RESUME NOTE', str(caught.exception))
 
-    def test_a_resume_that_claude_cannot_find_names_the_session_file(self):
+    def test_a_resume_that_claude_cannot_find_gets_the_resume_note(self):
         event = result_event(SESSION, subtype='error_during_execution', is_error=True, num_turns=0,
                              errors=[f'No conversation found with session ID: {SESSION}'])
         client = claude_client.ClaudeClient(process=lambda argv, prompt, cwd, stderr_path=None: (1, json.dumps(event) + '\n'))
         folder = self.folder()
-        session_file = folder / 'writer-session.txt'
-        session_file.write_text(SESSION + '\n')
-        with self.assertRaisesRegex(run.WorkflowError, 'deleting writer-session.txt starts a new session'):
+        with self.assertRaisesRegex(run.WorkflowError, 'RESUME NOTE'):
             run.call_model(client, run.ROLES, 'writer', 'prompt', folder, run.WRITER_SCHEMAS['text'], folder / 'out.json', 'writer',
-                           resume=SESSION, session_file=session_file)
+                           cwd=folder, session=('--resume', SESSION), resume_note='RESUME NOTE')
 
     def test_a_line_that_is_not_a_json_object_raises(self):
         for stdout in ['[1, 2]\n', '"text"\n', 'null\n']:
@@ -1854,6 +1862,15 @@ class ClaudeCallTest(unittest.TestCase):
         self.assertNotIn(claude_client.PLAN_TOOL + 'get_document', str(caught.exception))
 
 
+def core_flags(argv):
+    """The flags one role's calls share: everything but the session pair and --allowedTools."""
+    flags = argv[:-2]
+    if '--allowedTools' in flags:
+        at = flags.index('--allowedTools')
+        flags = flags[:at] + flags[at + 2:]
+    return flags
+
+
 class ReviewerSessionTest(unittest.TestCase):
     def setUp(self):
         self.folder = Path(tempfile.mkdtemp())
@@ -1864,38 +1881,119 @@ class ReviewerSessionTest(unittest.TestCase):
                      'check': None, 'inputs': [], 'review_inputs': [], 'writer_skills': [], 'review_skills': []}
         self.step_dir = self.campaign / '01-brief'
         self.step_dir.mkdir()
+        (self.step_dir / 'output.md').write_text('# Draft\nfirst version\n')
 
-    def review(self, client):
-        return run.review_step(client, run.ROLES, run.SKILLS_DIR, self.campaign, self.step, self.step_dir, [])
+    def review(self, client, step=None, step_dir=None):
+        return run.review_step(client, run.ROLES, run.SKILLS_DIR, self.campaign, step or self.step, step_dir or self.step_dir, [])
+
+    def saved(self, role):
+        return json.loads((self.campaign / 'sessions.json').read_text())[role]
 
     def test_a_rereview_resumes_the_reviewer_session_with_the_same_flags(self):
         client = FakeClient(['revise', 'pass'])
-        (self.step_dir / 'output.md').write_text('# Draft\nfirst version\n')
         self.review(client)
         (self.step_dir / 'output.md').write_text('# Draft\nsecond version\n')
         self.review(client)
         first, second = client.argvs
-        self.assertEqual(first[:-2], second[:-2])  # the same flags; only the session flag and its id differ
-        self.assertEqual(first[-2], '--session-id')
-        self.assertEqual(second[-2:], ['--resume', (self.step_dir / 'reviewer-session.txt').read_text().strip()])
-        self.assertEqual(second[-1], first[-1])
-        self.assertTrue(client.prompts[1].startswith(run.REREVIEW_RULE))
+        self.assertEqual(first[-2:], ['--session-id', self.saved('reviewer')['id']])
+        self.assertEqual(second[-2:], ['--resume', self.saved('reviewer')['id']])
+        self.assertEqual(first[:-2], second[:-2])  # the same flags; only the session flag changes
+        self.assertTrue(client.prompts[1].startswith(run.REREVIEW_RULE.format(step='01-brief')))
         self.assertIn('second version', client.prompts[1])
         self.assertNotIn('--- BEGIN 00-task', client.prompts[1])  # the reviewer already holds the rules
 
-    def test_a_new_draft_deletes_the_reviewer_session(self):
-        (self.step_dir / 'reviewer-session.txt').write_text('old\n')
+    def test_a_new_draft_clears_the_review_marker_and_keeps_the_reviewer_session(self):
+        self.review(FakeClient(['pass']))
+        self.assertTrue((self.step_dir / 'review-started.txt').is_file())
         run.write(FakeClient([]), run.ROLES, run.SKILLS_DIR, self.campaign, self.step, self.step_dir, None)
-        self.assertFalse((self.step_dir / 'reviewer-session.txt').exists())
-        self.assertTrue((self.step_dir / 'writer-session.txt').is_file())
+        self.assertFalse((self.step_dir / 'review-started.txt').exists())
+        self.assertEqual(self.saved('reviewer')['steps'], ['01-brief'])
 
-    def test_a_failed_resume_names_the_session_file(self):
+    def test_a_new_steps_first_review_resumes_the_reviewer_session_with_the_full_prompt(self):
+        client = FakeClient(['pass', 'pass'])
+        self.review(client)
+        other_dir = self.campaign / '02-article'
+        other_dir.mkdir()
+        (other_dir / 'output.md').write_text('# Article\nText.\n')
+        self.review(client, step=dict(self.step, id='02-article', skill='seo-article'), step_dir=other_dir)
+        first, second = client.argvs
+        self.assertEqual(first[-2:], ['--session-id', self.saved('reviewer')['id']])
+        self.assertEqual(second[-2:], ['--resume', self.saved('reviewer')['id']])
+        self.assertTrue(client.prompts[1].startswith('Step 02-article starts here.'))
+        self.assertIn('BEGIN deliverable', client.prompts[1])  # a first review sends the full review prompt
+        self.assertEqual(self.saved('reviewer')['steps'], ['01-brief', '02-article'])
+
+    def test_a_rereview_without_a_saved_reviewer_session_raises(self):
+        self.review(FakeClient(['revise']))
+        (self.campaign / 'sessions.json').unlink()
+        with self.assertRaisesRegex(run.WorkflowError, 'the reviewer session has no draft of 01-brief; delete campaigns/demo/01-brief'):
+            self.review(FakeClient(['pass']))
+
+    def test_a_failed_resume_names_sessions_json_and_the_role(self):
+        (self.campaign / 'sessions.json').write_text(json.dumps({'reviewer': {'id': SESSION, 'steps': ['01-brief']}}))
         client = claude_client.ClaudeClient(process=lambda argv, prompt, cwd, stderr_path=None: (0, 'No conversation found with session ID\n'))
-        session_file = self.step_dir / 'reviewer-session.txt'
-        session_file.write_text(SESSION + '\n')
-        with self.assertRaisesRegex(run.WorkflowError, 'deleting reviewer-session.txt starts a new session'):
-            run.call_model(client, run.ROLES, 'reviewer', 'p', self.step_dir, run.REVIEW_SCHEMA, self.step_dir / 'review.json',
-                           'reviewer', resume=SESSION, session_file=session_file)
+        with self.assertRaisesRegex(run.WorkflowError, 'removing the reviewer entry from sessions.json starts a new session'):
+            run.review_step(client, run.ROLES, run.SKILLS_DIR, self.campaign, self.step, self.step_dir, [])
+
+
+class SessionsTest(unittest.TestCase):
+    def setUp(self):
+        self.campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        self.campaign.mkdir(parents=True)
+        (self.campaign / '00-task.md').write_text(task_text())
+
+    def saved(self, role):
+        return json.loads((self.campaign / 'sessions.json').read_text())[role]
+
+    def write_step(self, client, step_id, revision=None):
+        step = dict(next(s for s in run.STEPS if s['id'] == step_id), inputs=[], review_inputs=[], writer_skills=[], review_skills=[])
+        folder = self.campaign / step_id
+        folder.mkdir(exist_ok=True)
+        return run.write(client, run.ROLES, run.SKILLS_DIR, self.campaign, step, folder, revision)
+
+    def test_two_steps_of_one_role_share_a_session_and_differ_only_in_allowed_tools(self):
+        client = FakeClient([])
+        self.write_step(client, '01-sources')  # a web step: --allowedTools lists the web tools
+        self.write_step(client, '03-article')
+        first, second = client.argvs
+        self.assertEqual(first[-2:], ['--session-id', self.saved('writer')['id']])
+        self.assertEqual(second[-2:], ['--resume', self.saved('writer')['id']])
+        self.assertEqual(core_flags(first), core_flags(second))
+        self.assertEqual(client.cwds, [self.campaign, self.campaign])
+        self.assertEqual(set(self.saved('writer')), {'id', 'steps'})
+        self.assertEqual(self.saved('writer')['steps'], ['01-sources', '03-article'])
+
+    def test_on_03_article_the_writer_has_its_web_tools_and_none_allowed(self):
+        client = FakeClient([])
+        self.write_step(client, '03-article')
+        argv = client.argvs[0]
+        self.assertEqual(argv[argv.index('--tools') + 1], 'WebSearch,WebFetch')
+        self.assertNotIn('--allowedTools', argv)
+        self.assertTrue(client.prompts[0].startswith('Step 03-article starts here.'))
+        self.assertIn('Tools you may use in this step: none.', client.prompts[0])
+
+    def test_revision_and_rereview_prompts_name_the_step(self):
+        client = FakeClient([])
+        self.write_step(client, '03-article')
+        self.write_step(client, '03-article', revision=({'verdict': 'revise', 'summary': 'Checked.', 'findings': []}, 'shorter'))
+        self.assertIn('This is a revision of your last answer for step 03-article.', client.prompts[1])
+        self.assertTrue(client.prompts[1].startswith('This is a revision'))
+
+    def test_a_revision_of_a_step_the_session_lacks_raises_with_the_delete_hint(self):
+        (self.campaign / 'sessions.json').write_text(json.dumps({'writer': {'id': SESSION, 'steps': ['01-sources']}}))
+        with self.assertRaisesRegex(run.WorkflowError,
+                                    'the writer session has no draft of 03-article; delete campaigns/demo/03-article and run again'):
+            self.write_step(FakeClient([]), '03-article', revision=({'verdict': 'revise', 'summary': 'Checked.', 'findings': []}, 'shorter'))
+
+    def test_a_compact_boundary_logs_a_warning_for_the_role(self):
+        with self.assertLogs(run.log, 'WARNING') as logs:
+            self.write_step(FakeClient([], compact=True), '03-article')
+        self.assertIn('claude compacted the writer session', '\n'.join(logs.output))
+
+    def test_each_call_logs_its_context_size(self):
+        with self.assertLogs(run.log, 'INFO') as logs:
+            self.write_step(FakeClient([]), '03-article')
+        self.assertTrue(any('context ' in line and ' tokens' in line for line in logs.output))
 
 
 class SampleLinesTest(unittest.TestCase):
