@@ -160,7 +160,7 @@ When every content step is approved, step 09 shows every post exactly as it will
 
 ```
 ## Publish to
-linkedin, instagram, youtube
+linkedin, instagram, youtube, tiktok
 
 ## Article URL
 https://moderaty.com/blog/demo-article
@@ -170,7 +170,7 @@ https://moderaty.com/blog/demo-article
 - instagram: 2026-11-10T14:00Z
 ```
 
-- `## Publish to` names the platforms to post on: `linkedin`, `instagram` or `youtube`.
+- `## Publish to` names the platforms to post on: `linkedin`, `instagram`, `youtube` or `tiktok`.
 - `## Article URL` is the live `https://` address of the article. Publish the article on your website first, then write its address here. Step 09 stops until the address answers HTTP 200. LinkedIn gets this link in its first comment and YouTube in its description. Instagram captions end with "Link in bio", so point your bio link at the article yourself. The timer checks the address once more before the first post.
 - `## Schedule` is optional, one line per platform, in UTC. A platform without a line goes out on the first timer run after approval.
 
@@ -181,10 +181,11 @@ https://moderaty.com/blog/demo-article
 | `linkedin` | `social` | the Post, then a first comment with the article link | `linkedin.png` if `images` |
 | `instagram` | `social` and `images` | the caption, a blank line, then the hashtags | `instagram.png`, converted to JPEG |
 | `youtube` | `reel` | the article title; the meta description, a blank line, the article link | `reel.mp4`, uploaded as a Short |
+| `tiktok` | `social` and `reel` | the Instagram caption, a blank line, then the hashtags | `reel.mp4` |
 
 X is not posted automatically, because its API charges per post. Post the thread by hand from `final/05-x.md`.
 
-TikTok, Instagram Reels and publishing the article to the website are not built yet.
+Instagram Reels and publishing the article to the website are not built yet.
 
 ### The config file
 
@@ -199,7 +200,9 @@ chmod 600 ~/.config/agent-workflows/publish.json
   "linkedin": {"organization_id": "<page id, digits only>", "access_token": "<token>", "version": "<YYYYMM>"},
   "instagram": {"user_id": "<Instagram user id>", "access_token": "<token>", "api_version": "v26.0",
                 "media_dir": "<folder your web server serves publicly>", "media_base_url": "https://<your domain>/<folder>"},
-  "youtube": {"client_id": "<id>", "client_secret": "<secret>", "refresh_token": "<token>", "category_id": "28"}
+  "youtube": {"client_id": "<id>", "client_secret": "<secret>", "refresh_token": "<token>", "category_id": "28"},
+  "tiktok": {"client_key": "<client key>", "client_secret": "<secret>", "privacy_level": "SELF_ONLY",
+             "token_file": "/home/<you>/.config/agent-workflows/tiktok-token.json"}
 }
 ```
 
@@ -210,6 +213,7 @@ If any other user can read the file, every publish run stops. The program never 
 - **LinkedIn**: an app with the Community Management API and the `w_organization_social` permission, and an access token for the page.
 - **Instagram**: a professional account, Business Login for Instagram with `instagram_business_content_publish`, and a public web folder on your own server for the images. Instagram fetches each image from `media_base_url`, so the folder must be reachable from the internet.
 - **YouTube**: a Google Cloud project with the YouTube Data API, the `youtube.upload` scope, and a refresh token for your channel. Set the app's OAuth consent screen to In production before you make the refresh token. In Testing the token lapses after 7 days, and a token made in Testing keeps that limit, so make a new one after the switch.
+- **TikTok**: a developer app with Login Kit and the Content Posting API (Direct Post on), the `video.publish` scope, and a refresh token in `token_file` as `{"refresh_token": "..."}`, with the file set to chmod 600. The token lasts 365 days and TikTok may replace it; the program saves the new one. Until TikTok audits the app, every post is private: set the account to private and privacy_level to `SELF_ONLY`, and at most 5 accounts can post in 24 hours. After the audit, set privacy_level to `PUBLIC_TO_EVERYONE`. TikTok also caps posts per account per day.
 
 ### Run it from cron
 
