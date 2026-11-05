@@ -639,7 +639,9 @@ def youtube_token(ctx, settings):
     response = send(ctx.http, 'YouTube token', False, ctx.clock(), 'POST', 'https://oauth2.googleapis.com/token',
                     headers=FORM_HEADERS, body=body.encode())
     if response.status in (400, 401):
-        raise StopItem('YouTube refused the refresh token; get a new one and put it in publish.json')
+        raise StopItem("YouTube refused the refresh token. If the Google app's OAuth consent screen is in Testing, "
+                       "its refresh tokens last 7 days: set it to In production, make a new refresh token, "
+                       "and put it in publish.json.")
     check(response, {200}, 'YouTube token', False, ctx.clock())
     return dig(answer_json(response, 'YouTube token'), 'YouTube token', 'access_token')
 
