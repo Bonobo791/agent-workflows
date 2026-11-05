@@ -442,10 +442,8 @@ def publish_errors(task, wanted):
         targets = []
     for platform in targets:
         errors += [f'{platform} needs {need} in Deliverables' for need in sorted(PLATFORM_NEEDS[platform]) if need not in wanted]
-    url = found.get('Article URL', '')
-    if not url:
-        errors.append('## Publish to needs ## Article URL: the live https:// address of the article')
-    elif not article_url_ok(url):
+    url = found.get('Article URL', '').strip()  # optional: only the posts that link to the article need it
+    if url and not article_url_ok(url):
         errors.append('## Article URL must be one https:// address')
     schedule = found.get('Schedule', '')
     if schedule and schedule != 'None.':
@@ -1938,6 +1936,15 @@ def decide(step, step_dir, review, ask):
             print('Type a, r or q.')
 
 
+PUBLISH_SECTIONS = ('Deliverables', 'Publish to', 'Article URL', 'Schedule')
+
+
+def without_publish_sections(text):
+    """Deliverables and the publishing settings choose steps and channels. They are not part of what an approved step wrote."""
+    pattern = r'^## (?:' + '|'.join(map(re.escape, PUBLISH_SECTIONS)) + r')\n.*?(?=^## |\Z)'
+    return re.sub(pattern, '', text, flags=re.MULTILINE | re.DOTALL)
+
+
 def fingerprint(step, skills_dir, campaign):
     """What an approval depends on: the step's skills, its library skills, its check function and every input block it received."""
     digest = hashlib.sha256()
@@ -1956,6 +1963,8 @@ def fingerprint(step, skills_dir, campaign):
             parts.append(spec + '\nmissing: not approved or not written yet')  # the approval stays stale until the input exists
             continue
         block = re.sub(r'^Approved: .*\n?', '', block, flags=re.MULTILINE)  # the approval date is not content, so changing it keeps approvals valid
+        if spec == '00-task':
+            block = without_publish_sections(block)  # changing Deliverables or the publishing settings keeps approvals valid
         parts.append(spec + '\n' + block)
     for part in parts:
         digest.update(part.encode() + b'\0')
@@ -2063,6 +2072,8 @@ def file_sha256(path):
 
 
 def fill_link(text, article_url):
+    if not article_url:  # no article URL yet: the placeholder stays, and build_publish_plan holds that post back
+        return text
     text = text.replace(LINK, article_url)
     if LINK in text:
         raise WorkflowError(f'{LINK} is still in a post after the replacement')
@@ -2086,7 +2097,7 @@ def build_publish_plan(campaign):
     task = (campaign / '00-task.md').read_text()
     targets = publish_targets(task)
     wanted = parse_deliverables(task)
-    article_url = section(task, 'Article URL', 'task')
+    article_url = sections(task).get('Article URL', '').strip()  # empty until the article is live; only posts that link to it wait
     times = schedule_times(task)
     uses_images = 'images' in wanted and bool(set(targets) & {'linkedin', 'instagram'})
     needed = ['03-article'] + [step for platform in targets for step in PLATFORM_STEPS[platform]] + (['07-images'] if uses_images else [])
@@ -2104,13 +2115,14 @@ def build_publish_plan(campaign):
     def image(name):
         return [copy_media(media_dir, images_dir / name, name)] if 'images' in wanted else []
 
-    items = [{'id': 'article', 'platform': 'website', 'action': 'check', 'url': article_url, 'depends_on': [], 'not_before': None}]
+    deps = ['article'] if article_url else []
+    items = [{'id': 'article', 'platform': 'website', 'action': 'check', 'url': article_url, 'depends_on': [], 'not_before': None}] if article_url else []
     if 'linkedin' in targets:
         text = (campaign / '04-linkedin' / 'output.md').read_text()
         post = fill_link(section(text, 'Post', '04-linkedin'), article_url)
         comment = fill_link(section(text, 'First comment', '04-linkedin'), article_url)
         items.append({'id': 'linkedin-post', 'platform': 'linkedin', 'action': 'post', 'text': post,
-                      'media': image('linkedin.png'), 'depends_on': ['article'], 'not_before': times.get('linkedin')})
+                      'media': image('linkedin.png'), 'depends_on': deps, 'not_before': times.get('linkedin')})
         items.append({'id': 'linkedin-comment', 'platform': 'linkedin', 'action': 'comment', 'text': comment,
                       'media': [], 'depends_on': ['linkedin-post'], 'not_before': times.get('linkedin')})
     if 'instagram' in targets or 'tiktok' in targets:
@@ -2120,7 +2132,7 @@ def build_publish_plan(campaign):
     if 'instagram' in targets:
         items.append({'id': 'instagram-post', 'platform': 'instagram', 'action': 'post', 'text': social_text,
                       'media': [instagram_jpeg(media_dir, images_dir / 'instagram.png')],
-                      'depends_on': ['article'], 'not_before': times.get('instagram')})
+                      'depends_on': deps, 'not_before': times.get('instagram')})
     if 'youtube' in targets:
         article = (campaign / '03-article' / 'output.md').read_text()
         titles = [line[2:].strip() for line in article.splitlines() if line.startswith('# ')]
@@ -2130,13 +2142,18 @@ def build_publish_plan(campaign):
             raise WorkflowError(f'the article title is {len(titles[0])} characters; a YouTube title allows {YOUTUBE_TITLE_MAX}')
         meta = article.splitlines()[0][len('Meta description: '):].strip()
         items.append({'id': 'youtube-short', 'platform': 'youtube', 'action': 'upload', 'title': titles[0],
-                      'text': fill_link(f'{meta}\n\n{article_url}', article_url),
+                      'text': fill_link(f'{meta}\n\n{article_url}', article_url).strip(),
                       'media': [copy_media(media_dir, campaign / '08-reel' / 'reel.mp4', 'reel.mp4')],
-                      'depends_on': ['article'], 'not_before': times.get('youtube')})
+                      'depends_on': deps, 'not_before': times.get('youtube')})
     if 'tiktok' in targets:
         items.append({'id': 'tiktok-video', 'platform': 'tiktok', 'action': 'upload', 'text': social_text,
                       'media': [copy_media(media_dir, campaign / '08-reel' / 'reel.mp4', 'reel.mp4')],
-                      'depends_on': ['article'], 'not_before': times.get('tiktok')})
+                      'depends_on': deps, 'not_before': times.get('tiktok')})
+    waiting = {item['id'] for item in items if LINK in item.get('text', '')}  # posts that link to the article wait for its URL
+    waiting |= {item['id'] for item in items if set(item['depends_on']) & waiting}  # and so does anything that waits on them
+    if waiting:
+        log.info('publish waits for ## Article URL: %s', ', '.join(sorted(waiting)))
+    items = [item for item in items if item['id'] not in waiting]
     plan = {'campaign': campaign.name, 'article_url': article_url, 'items': items}
     plan_bytes = (json.dumps(plan, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
     (step_dir / 'plan.json').write_bytes(plan_bytes)
@@ -2169,13 +2186,14 @@ def publish_gate(campaign, ask, http=publish.http_request):
         raise WorkflowError('09-publish has a publish log but no APPROVED file. Posts may already be live, so the plan is not rebuilt. '
                             'Restore 09-publish/APPROVED, or move 09-publish away only if you are sure nothing was posted.')
     task = (campaign / '00-task.md').read_text()
-    url = section(task, 'Article URL', 'task')
-    try:  # the article must be live before anything is built or shown
-        response = http('GET', url)
-    except publish.NetworkError as error:
-        raise WorkflowError(f'could not reach the article at {url}: {error}. Make sure it is live, then run the same command again.') from None
-    if response.status != 200:
-        raise WorkflowError(f'the article is not live yet: {url} answered HTTP {response.status}. Publish it, then run the same command again.')
+    url = sections(task).get('Article URL', '').strip()
+    if url:  # with a URL, the article must be live before anything is built or shown
+        try:
+            response = http('GET', url)
+        except publish.NetworkError as error:
+            raise WorkflowError(f'could not reach the article at {url}: {error}. Make sure it is live, then run the same command again.') from None
+        if response.status != 200:
+            raise WorkflowError(f'the article is not live yet: {url} answered HTTP {response.status}. Publish it, then run the same command again.')
     plan_bytes = build_publish_plan(campaign)
     plan = json.loads(plan_bytes)
     plan_sha = hashlib.sha256(plan_bytes).hexdigest()

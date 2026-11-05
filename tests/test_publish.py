@@ -44,9 +44,9 @@ class PublishTaskTest(unittest.TestCase):
         self.assertEqual(run.check_task(task_text()), [])
         self.assertEqual(run.publish_targets(task_text()), [])
 
-    def test_publish_to_needs_article_url(self):
+    def test_publish_to_does_not_need_the_article_url_yet(self):
         errors = run.check_task(publish_task(extra='## Publish to\nlinkedin\n\n'))
-        self.assertIn('## Publish to needs ## Article URL: the live https:// address of the article', errors)
+        self.assertFalse(any('Article URL' in error for error in errors))
 
     def test_article_url_must_have_a_host(self):
         for url in ('https:///blog/demo', 'https://[moderaty.com/blog/demo'):

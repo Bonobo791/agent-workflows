@@ -187,7 +187,7 @@ https://moderaty.com/blog/demo-article
 ```
 
 - `## Publish to` names the platforms to post on: `linkedin`, `instagram`, `youtube` or `tiktok`.
-- `## Article URL` is the live `https://` address of the article. Publish the article on your website first, then write its address here. Step 09 stops until the address answers HTTP 200. LinkedIn gets this link in its first comment and YouTube in its description. Instagram captions end with "Link in bio", so point your bio link at the article yourself. The timer checks the address once more before the first post.
+- `## Article URL` is the live `https://` address of the article. Only the posts that link to the article need it: LinkedIn's post and first comment wait until it is set, and YouTube's description gets the link once it is set. Instagram and TikTok go out without it. When the address is set, step 09 stops until it answers HTTP 200, and the timer checks it once more before the first post. Instagram captions end with "Link in bio", so point your bio link at the article yourself. Changing Deliverables or the publishing settings does not make approved steps stale.
 - `## Schedule` is optional, one line per platform, in UTC. A platform without a line goes out on the first timer run after approval.
 
 ### What each platform posts
