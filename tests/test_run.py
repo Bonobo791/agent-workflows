@@ -327,7 +327,7 @@ class RunTest(unittest.TestCase):
         client = FakeClient(['pass', 'pass'])
         self.go(client, answers('a', 'a'))
         self.assertEqual(client.calls[0], ('claude-haiku-5-5', 'xhigh'))
-        self.assertEqual(client.calls[1], ('claude-opus-5-5', 'medium'))
+        self.assertEqual(client.calls[1], ('claude-sonnet-5-5', 'medium'))
 
     def test_failed_checks_skip_the_reviewer(self):
         (self.campaign / '00-task.md').write_text(task_text('article, social'))
@@ -342,7 +342,7 @@ class RunTest(unittest.TestCase):
             self.go(FakeClient(['pass', 'pass']), answers('a', 'a'))
         text = (self.campaign / 'run.log').read_text()
         self.assertIn('writer: asking claude-haiku-5-5 (effort xhigh', text)
-        self.assertIn('reviewer: asking claude-opus-5-5 (effort medium', text)
+        self.assertIn('reviewer: asking claude-sonnet-5-5 (effort medium', text)
         self.assertIn('[01-brief] review verdict pass', text)
         self.assertIn('[01-brief] approved by the owner', text)
         self.assertIn('final package written', text)
@@ -471,7 +471,7 @@ class VoiceAndAngleTest(unittest.TestCase):
 
     def test_brief_step_runs_on_the_strategist(self):
         brief = next(step for step in run.STEPS if step['id'] == '02-brief')
-        self.assertEqual(run.ROLES[brief['role']], {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 3.00})
+        self.assertEqual(run.ROLES[brief['role']], {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 3.00})
         article = next(step for step in run.STEPS if step['id'] == '03-article')
         self.assertEqual(run.ROLES[article['role']], {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00})
 
@@ -608,7 +608,7 @@ class MinorFindingsTest(unittest.TestCase):
 
     def test_minor_findings_get_one_rewrite(self):
         client = self.run_with(['minor', 'pass'])
-        self.assertEqual([model for model, _ in client.calls], ['claude-haiku-5-5', 'claude-opus-5-5'] * 2)  # writer, reviewer, writer, reviewer, then the owner
+        self.assertEqual([model for model, _ in client.calls], ['claude-haiku-5-5', 'claude-sonnet-5-5'] * 2)  # writer, reviewer, writer, reviewer, then the owner
 
     def test_hooks_are_left_out_of_the_final_package(self):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
@@ -621,7 +621,7 @@ class MinorFindingsTest(unittest.TestCase):
 
     def test_second_minor_findings_go_to_the_owner(self):
         client = self.run_with(['minor', 'minor'])
-        self.assertEqual([model for model, _ in client.calls], ['claude-haiku-5-5', 'claude-opus-5-5'] * 2)
+        self.assertEqual([model for model, _ in client.calls], ['claude-haiku-5-5', 'claude-sonnet-5-5'] * 2)
 
 
 class BrandKitTest(unittest.TestCase):
@@ -1694,8 +1694,8 @@ class ClaudeCallTest(unittest.TestCase):
     def test_each_role_starts_claude_with_its_model_effort_and_budget(self):
         client = FakeClient(['pass'])
         for role, model, effort, budget in [('writer', 'claude-haiku-5-5', 'xhigh', '1.00'),
-                                            ('importer', 'claude-haiku-5-5', 'xhigh', '2.00'),
-                                            ('strategist', 'claude-opus-5-5', 'high', '3.00'),
+                                            ('importer', 'claude-sonnet-5-5', 'high', '5.00'),
+                                            ('strategist', 'claude-sonnet-5-5', 'high', '3.00'),
                                             ('creator', 'claude-opus-5-5', 'high', '6.00')]:
             self.call(client, role)
             argv = client.argvs[-1]
@@ -1707,7 +1707,7 @@ class ClaudeCallTest(unittest.TestCase):
                        cwd=folder, session=('--session-id', SESSION))
         argv = client.argvs[-1]
         self.assertEqual((argv[argv.index('--model') + 1], argv[argv.index('--effort') + 1], argv[argv.index('--max-budget-usd') + 1]),
-                         ('claude-opus-5-5', 'medium', '4.00'))
+                         ('claude-sonnet-5-5', 'medium', '4.00'))
 
     def test_a_revision_has_the_first_drafts_flags_and_resumes_its_session(self):
         client = FakeClient([])
@@ -1845,7 +1845,7 @@ class ClaudeCallTest(unittest.TestCase):
         argv = client.argvs[-1]
         self.assertEqual(argv[argv.index('--setting-sources') + 1], 'user,project')
         self.assertNotIn('--strict-mcp-config', argv)
-        self.assertEqual(argv[argv.index('--max-budget-usd') + 1], '2.00')
+        self.assertEqual(argv[argv.index('--max-budget-usd') + 1], '5.00')
         self.assertEqual(argv[argv.index('--tools') + 1], '')
         self.assertEqual(argv[argv.index('--allowedTools') + 1].split(','), claude_client.IMPORT_TOOLS)
         self.assertIn(claude_client.PLAN_TOOL + 'get_issue_by_number', claude_client.IMPORT_TOOLS)
