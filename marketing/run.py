@@ -1332,6 +1332,8 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
             for block in required(required(event, 'message', what), 'content', what):
                 if block.get('type') == 'tool_use' and block.get('name') == 'WebSearch':
                     searches.append(required(required(block, 'input', what), 'query', what))
+    # The session id logged here is a conversation id, not a credential.
+    # nosemgrep: python-logger-credential-disclosure
     log.info('%s: answered in %.0f s on session %s; context %d tokens; %s', what, time.monotonic() - started, session_id, context,
              usage_line(totals))
     for query in searches:
