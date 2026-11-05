@@ -1,0 +1,25 @@
+{
+  "stage": "canonical_review",
+  "status": "blocked",
+  "reason": "The required source verification record lacks access dates and precise claim-to-passage mappings for the supplied snapshots.",
+  "findings": [
+    {
+      "id": "CR-01",
+      "severity": "blocking",
+      "description": "The three Google claims are consistent with the supplied page text: S1 recommends focusing on people-first content; S2 is guidance on generative AI content; and S3 is a guide to generative AI features in Google Search. However, the verification artifact only marks each supported and retains PENDING evidence IDs. It records neither the pages' access dates nor precise supporting passages, and the snapshots do not supply retrieval dates. The brief expressly requires these records, so the evidence chain is incomplete even though the wording is plausible and the snapshots have content references.",
+      "location": "Section 1, Google guidance paragraph; source verification and source snapshots",
+      "evidence": "3e9df44b128ad6d62b185f71fc887483738fb52617ec303f8a31ce86d3c1ae44",
+      "remedy": "Record the actual retrieval date for each preserved source version and map C1–C3 to exact supporting passages, or remove any claim whose required verification cannot be completed. Re-review the resulting record.",
+      "resolution": "open"
+    },
+    {
+      "id": "CR-02",
+      "severity": "nonblocking",
+      "description": "The title promises automation, but most steps describe manual editorial controls and only one concrete trigger-action example creates a tracker row and notifies a reviewer. Beginners may struggle to translate the sequence into an actual repeatable automation. The direct opening, descriptive headings, labeled hypothetical and lack of unsupported search-demand or ranking promises otherwise serve the stated intent; site-specific SEO performance cannot be assessed without site, market or search data.",
+      "location": "Sections 2–4 and introduction",
+      "evidence": "33ad603abedef5ad96f4a9aef7068ece841e2b8c35fde007eed19705e603a6b8",
+      "remedy": "Consider adding a compact illustrative trigger, input, action, output and human checkpoint sequence using a shared document and task board, clearly labeling it as an example rather than a measured result.",
+      "resolution": "open"
+    }
+  ]
+}

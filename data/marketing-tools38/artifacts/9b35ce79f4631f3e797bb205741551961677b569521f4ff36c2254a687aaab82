@@ -1,0 +1,12 @@
+{
+  "register_ref": "31f14e2dec3054afd8a72f3f7d6903a2ff6869fe9ce787ab9300840bc4e47845",
+  "verifier_id": "source_review",
+  "checks": [
+    {"claim_id": "C1", "source_id": "S1", "evidence_id": "EV-S1-PENDING", "supported": true, "primary": true},
+    {"claim_id": "C2", "source_id": "S2", "evidence_id": "EV-S2-PENDING", "supported": true, "primary": true},
+    {"claim_id": "C3", "source_id": "S3", "evidence_id": "EV-S3-PENDING", "supported": true, "primary": true}
+  ],
+  "draft_ref": null,
+  "omitted_claims": [],
+  "coverage_complete": true
+}

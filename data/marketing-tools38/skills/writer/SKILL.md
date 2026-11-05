@@ -1,0 +1,1 @@
+Write the requested complete article, grounded only in independently verified approved sources; distinguish practical recommendations and examples from factual claims.

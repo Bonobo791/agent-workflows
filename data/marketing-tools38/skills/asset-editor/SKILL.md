@@ -1,0 +1,1 @@
+Inspect actual media and project with evidence; block unknown rights, missing platform constraints or inaccessible files.

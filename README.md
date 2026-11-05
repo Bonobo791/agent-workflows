@@ -111,12 +111,13 @@ The draft goes to the a/r/q prompt. On approval, `positioning.md` is saved with 
 
 ## Models
 
-Each step and the import uses one of five roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
+Each step and the import uses one of six roles. The roles are set in `ROLES` at the top of `marketing/run.py`. The writer always uses Haiku 5.5; only the reel script (08-reel-script) uses the script role.
 
 | Role | Used for | Model | Effort | Budget per call |
 | --- | --- | --- | --- | --- |
-| writer | the brand command, steps 01, 03 to 06, and 08-reel-script | `claude-haiku-5-5` | `xhigh` | $1.00 |
-| importer | the import (`new --issue`) | `claude-sonnet-5-5` | `high` | $5.00 |
+| writer | the brand command, and steps 01, 03 to 06 | `claude-haiku-5-5` | `xhigh` | $1.00 |
+| script | the reel script (08-reel-script) | `claude-opus-5-5` | `medium` | $4.00 |
+| importer | the import (`new --issue`) | `claude-sonnet-5-5` | `medium` | $5.00 |
 | strategist | the brief (step 02) | `claude-sonnet-5-5` | `high` | $3.00 |
 | reviewer | the review of every step | `claude-sonnet-5-5` | `medium` | $4.00 |
 | creator | images and reel | `claude-opus-5-5` | `high` | $6.00 |
@@ -130,7 +131,7 @@ campaigns/<name>/00-task.md
 campaigns/<name>/import.json                         (only with --issue)
 campaigns/<name>/claude-stderr.log                    Claude Code's stderr for every run and import
 campaigns/<name>/run.log                             every step, Claude call and decision (also printed in the terminal)
-campaigns/<name>/sessions.json                       one Claude Code session per role (writer, strategist, reviewer, creator)
+campaigns/<name>/sessions.json                       one Claude Code session per role (writer, script, strategist, reviewer, creator)
 campaigns/<name>/01-sources/output.md, review.md, APPROVED, calls/, claude-usage.jsonl, review-started.txt, history/
 campaigns/<name>/02-brief/...
 ...
@@ -186,7 +187,7 @@ https://moderaty.com/blog/demo-article
 ```
 
 - `## Publish to` names the platforms to post on: `linkedin`, `instagram`, `youtube` or `tiktok`.
-- `## Article URL` is the live `https://` address of the article. Publish the article on your website first, then write its address here. Step 09 stops until the address answers HTTP 200. LinkedIn gets this link in its first comment and YouTube in its description. Instagram captions end with "Link in bio", so point your bio link at the article yourself. The timer checks the address once more before the first post.
+- `## Article URL` is the live `https://` address of the article. Only the posts that link to the article need it: LinkedIn's post and first comment wait until it is set, and YouTube's description gets the link once it is set. Instagram and TikTok go out without it. When the address is set, step 09 stops until it answers HTTP 200, and the timer checks it once more before the first post. Instagram captions end with "Link in bio", so point your bio link at the article yourself. Changing Deliverables or the publishing settings does not make approved steps stale.
 - `## Schedule` is optional, one line per platform, in UTC. A platform without a line goes out on the first timer run after approval.
 
 ### What each platform posts

@@ -1,0 +1,12 @@
+{
+  "claims": [
+    {"id":"C1","claim":"Candidate for verification: Google recommends creating helpful, reliable content intended primarily for people.","source_ids":["S1"]},
+    {"id":"C2","claim":"Candidate for verification: Google provides guidance on using generative AI to create content and cautions about scaled content created primarily to manipulate search rankings.","source_ids":["S2"]},
+    {"id":"C3","claim":"Candidate for verification: Google provides guidance on preparing content for AI features in Search.","source_ids":["S3"]}
+  ],
+  "sources": [
+    {"id":"S1","url":"https://developers.google.com/search/docs/fundamentals/creating-helpful-content","evidence_id":"E1-pending-fetch"},
+    {"id":"S2","url":"https://developers.google.com/search/docs/fundamentals/using-gen-ai-content","evidence_id":"E2-pending-fetch"},
+    {"id":"S3","url":"https://developers.google.com/search/docs/fundamentals/ai-optimization-guide","evidence_id":"E3-pending-fetch"}
+  ]
+}
