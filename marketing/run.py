@@ -40,14 +40,14 @@ BRAND_FILES = ['design-system.md', 'voice.md', 'positioning.md', 'pages.md']
 BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'positioning': 'positioning.md', 'pages': 'pages.md', 'character': 'character.md'}
 LIBRARY_DIR = HERE / 'skill-library'
 CAMPAIGNS_DIR = REPO / 'campaigns'
-# The owner's roles: the writer uses Haiku 5.5 at xhigh; the strategist Opus 5.5 at high, the reviewer Opus 5.5 at medium,
-# and the image and video creator Opus 5.5 at high. The importer (new --issue) has its own budget: one live import cost $0.69.
-# Each budget_usd caps one call.
+# The owner's roles: the writer uses Haiku 5.5 at xhigh; the importer, strategist and reviewer use Sonnet 5.5 (high, high and
+# medium); the image and video creator uses Opus 5.5 at high. Each budget_usd caps one call. The importer's cap is set for
+# Sonnet: a live import on Haiku cost $0.69, and Sonnet costs about four times as much.
 ROLES = {
     'writer': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
-    'importer': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 2.00},
-    'strategist': {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 3.00},
-    'reviewer': {'model': 'claude-opus-5-5', 'effort': 'medium', 'budget_usd': 4.00},
+    'importer': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 5.00},
+    'strategist': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 3.00},
+    'reviewer': {'model': 'claude-sonnet-5-5', 'effort': 'medium', 'budget_usd': 4.00},
     'creator': {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 6.00},
 }
 # --tools is fixed per role, so every call of a role has the same flags; --allowedTools is what each step may use.
@@ -1332,6 +1332,8 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
             for block in required(required(event, 'message', what), 'content', what):
                 if block.get('type') == 'tool_use' and block.get('name') == 'WebSearch':
                     searches.append(required(required(block, 'input', what), 'query', what))
+    # The session id logged here is a conversation id, not a credential.
+    # nosemgrep: python-logger-credential-disclosure
     log.info('%s: answered in %.0f s on session %s; context %d tokens; %s', what, time.monotonic() - started, session_id, context,
              usage_line(totals))
     for query in searches:

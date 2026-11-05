@@ -116,9 +116,9 @@ Each step and the import uses one of five roles. The roles are set in `ROLES` at
 | Role | Used for | Model | Effort | Budget per call |
 | --- | --- | --- | --- | --- |
 | writer | the brand command, steps 01, 03 to 06, and 08-reel-script | `claude-haiku-5-5` | `xhigh` | $1.00 |
-| importer | the import (`new --issue`) | `claude-haiku-5-5` | `xhigh` | $2.00 |
-| strategist | the brief (step 02) | `claude-opus-5-5` | `high` | $3.00 |
-| reviewer | the review of every step | `claude-opus-5-5` | `medium` | $4.00 |
+| importer | the import (`new --issue`) | `claude-sonnet-5-5` | `high` | $5.00 |
+| strategist | the brief (step 02) | `claude-sonnet-5-5` | `high` | $3.00 |
+| reviewer | the review of every step | `claude-sonnet-5-5` | `medium` | $4.00 |
 | creator | images and reel | `claude-opus-5-5` | `high` | $6.00 |
 
 Before any step runs, the program runs `claude --version` and `claude --help`: every flag it uses must be in the help, and each role's effort must be one of the `--effort` choices. If one is not, it stops with an `error:` message. There is no model list: a model Claude Code does not know fails its first call.
