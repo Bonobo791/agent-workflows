@@ -96,7 +96,7 @@ Each brand has a folder, `marketing/brands/<brand>/`, with five files. Every cam
 - `voice.md`: how the brand sounds.
 - `positioning.md`: what the product sells, to whom, the reader problems, the proof and the alternatives.
 - `pages.md`: the pages the article may link to.
-- `character.md`: the reel presenter's name, personality, HeyGen avatar and voice ids, what they do and don't do on camera, and the disclosure line. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
+- `character.md`: the reel presenter's name, personality, three to five sample lines, HeyGen avatar and voice ids, what they do and don't do on camera, and the disclosure line. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
 
 Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. `character.md` is needed only for reels. Replace each `Template note:` line with your text. A run stops before any Codex call if a file is missing or still has a template note.
 

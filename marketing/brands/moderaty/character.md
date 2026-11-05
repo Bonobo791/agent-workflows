@@ -8,6 +8,9 @@ Template note: the presenter's name, as the script names them.
 ## Personality
 Template note: three lines: who the presenter is, how they talk, and what they never do.
 
+## Sample lines
+Template note: three to five lines the presenter would say, one per line, in their own voice.
+
 ## Avatar id
 Template note: the look id from python3 marketing/run.py heygen avatars, on one line.
 

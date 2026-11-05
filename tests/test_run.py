@@ -60,7 +60,7 @@ run.CAMPAIGNS_DIR = Path(tempfile.mkdtemp()) / 'campaigns'
 
 
 CHARACTER_TEXT = '# Character: demo\n\n' + '\n'.join(f'## {heading}\n{body}\n' for heading, body in [
-    ('Name', 'Ada'), ('Personality', 'Calm.\nDirect.\nNever preachy.'), ('Avatar id', 'avatar-1'), ('Voice id', 'voice-1'),
+    ('Name', 'Ada'), ('Personality', 'Calm.\nDirect.\nNever preachy.'), ('Sample lines', 'Line one.\nLine two.\nLine three.'), ('Avatar id', 'avatar-1'), ('Voice id', 'voice-1'),
     ('Do', 'Speak to the viewer.'), ("Don't", 'Never joke about threats.'), ('Disclosure', 'The presenter is an AI avatar.')])
 
 
@@ -1699,3 +1699,32 @@ class ThreadFixesTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SampleLinesTest(unittest.TestCase):
+    def test_character_needs_three_to_five_sample_lines(self):
+        def check(lines):
+            write_brand('samplecheck', **{'character.md': CHARACTER_TEXT.replace('Line one.\nLine two.\nLine three.', '\n'.join(lines))})
+            return run.check_character('samplecheck')
+        self.assertEqual(check(['One.', 'Two.', 'Three.']), [])
+        self.assertEqual(check(['One.', 'Two.', 'Three.', 'Four.', 'Five.']), [])
+        self.assertTrue(any('needs 3 to 5 lines; found 2' in e for e in check(['One.', 'Two.'])))
+        self.assertTrue(any('needs 3 to 5 lines; found 6' in e for e in check(['1.', '2.', '3.', '4.', '5.', '6.'])))
+
+    def test_sample_lines_reach_the_reel_script_writer_and_reviewer(self):
+        campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+        campaign.mkdir(parents=True)
+        (campaign / '00-task.md').write_text(task_text('article, social, images, reel'))
+        step = next(s for s in run.STEPS if s['id'] == '08-reel-script')
+        self.assertIn('character', step['inputs'])
+        self.assertIn('character', step['review_inputs'])
+        self.assertIn('## Sample lines\nLine one.', run.read_input(campaign, 'character'))
+
+    def test_reel_script_review_and_skill_name_the_sample_lines(self):
+        review = (run.SKILLS_DIR / 'reel-script' / 'REVIEW.md').read_text()
+        self.assertIn("- A line that doesn't sound like the Sample lines.", review.split('Minor findings:')[1])
+        self.assertIn('Sample lines', (run.SKILLS_DIR / 'reel-script' / 'SKILL.md').read_text())
+
+    def test_templates_have_the_sample_lines_section(self):
+        self.assertIn('## Sample lines', (REPO_TEMPLATE / 'character.md').read_text())
+        self.assertIn('## Sample lines', (REPO_TEMPLATE.parent / 'moderaty' / 'character.md').read_text())

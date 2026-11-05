@@ -11,6 +11,7 @@ Rules:
 - The first line names a moment, a number or a mistake the reader recognises, from the brief's Angle or the Reader problems in positioning.md.
 - Use only facts from the brief's Facts section. Never invent a fact. Keep to the Claims we never make in positioning.md.
 - Write each line as the character would say it aloud: short sentences, plain words, no stage directions, no emoji.
+- Sound like the Sample lines in the character block: the same register and sentence length.
 - One idea per reel. Say what the reader should do once, near the end.
 - The last line ends with "Link in bio" (a final period is allowed).
 - The disclosure is not part of the script; the reel notes carry it.

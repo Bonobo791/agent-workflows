@@ -55,7 +55,7 @@ HEYGEN_BASE = 'https://api.heygen.com'
 HEYGEN_POLL_SECONDS = 10
 HEYGEN_MAX_POLLS = 180
 HEYGEN_TIMEOUT = 120
-CHARACTER_SECTIONS = ['Name', 'Personality', 'Avatar id', 'Voice id', 'Do', "Don't", 'Disclosure']
+CHARACTER_SECTIONS = ['Name', 'Personality', 'Sample lines', 'Avatar id', 'Voice id', 'Do', "Don't", 'Disclosure']
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
 URL_RE = re.compile(r'https?://\S+')
@@ -1247,6 +1247,9 @@ def check_character(brand):
             errors.append(f'character.md: section "## {heading}" is missing or empty')
         elif has_template_note(body):
             errors.append(f'character.md: section "## {heading}" still has its template note')
+    samples = [line for line in found.get('Sample lines', '').splitlines() if line.strip()]
+    if samples and not has_template_note(found['Sample lines']) and not 3 <= len(samples) <= 5:
+        errors.append(f'character.md: "## Sample lines" needs 3 to 5 lines; found {len(samples)}')
     return errors
 
 
