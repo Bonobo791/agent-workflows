@@ -1,7 +1,7 @@
 """Marketing workflow.
 
 sources -> brief -> SEO article -> social copy, images and reel (as the Deliverables ask) -> final package.
-Every step: a Codex writer, Python checks, then a fresh Codex reviewer, then the owner approves or rejects.
+Every step: a Claude writer, Python checks, then a fresh Claude reviewer, then the owner approves or rejects.
 """
 import argparse
 import difflib
@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 import urllib.parse
 import urllib.error
 import urllib.parse
@@ -27,7 +28,8 @@ from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from codex_client import CodexClient, CodexError  # noqa: E402
+from claude_client import (IMPORT_TOOLS, PLAN_SERVER, REQUIRED_FLAGS, ClaudeClient, ClaudeError, claude_argv,  # noqa: E402
+                           effort_choices, parse_events)
 import publish  # noqa: E402
 
 log = logging.getLogger('marketing')
@@ -39,12 +41,13 @@ BRAND_FILES = ['design-system.md', 'voice.md', 'positioning.md', 'pages.md']
 BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'positioning': 'positioning.md', 'pages': 'pages.md', 'character': 'character.md'}
 LIBRARY_DIR = HERE / 'skill-library'
 CAMPAIGNS_DIR = REPO / 'campaigns'
-# The owner's roles: writer "gpt6.1 sol medium", reviewer "gpt6.1 sol high", image and video creator "gpt6.1 sol high".
+# The owner's roles: the writer and the strategist use Haiku 5.5 at xhigh, the reviewer Sonnet 5.5 at medium,
+# and the image and video creator Sonnet 5.5 at high. Each budget_usd caps one call.
 ROLES = {
-    'writer': {'model': 'gpt-6.1-sol', 'effort': 'medium'},
-    'reviewer': {'model': 'gpt-6.1-sol', 'effort': 'high'},
-    'creator': {'model': 'gpt-6.1-sol', 'effort': 'high'},
-    'strategist': {'model': 'gpt-6.1-sol', 'effort': 'high'},
+    'writer': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
+    'strategist': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
+    'reviewer': {'model': 'claude-sonnet-5-5', 'effort': 'medium', 'budget_usd': 2.00},
+    'creator': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 3.00},
 }
 MAX_AUTO_REVISIONS = 1  # one automatic rewrite, shared by a failed check, a revise and a minor-findings pass
 MAX_REVIEW_FRAMES = 10
@@ -78,7 +81,6 @@ TASK_LENGTH_RE = re.compile(r'\b(?:article\s+)?length\b[^\n]*\b\d[\d,]*\s*words?
 META_MIN = 150
 META_MAX = 160
 LENGTH_TOLERANCE = 0.2
-USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens']
 DELIVERABLES = ['article', 'social', 'images', 'reel']
 TASK_SECTIONS = ['Deliverables', 'Goal', 'Audience', 'Details', 'Sources', 'Required headings', 'Constraints', 'Brand']
 # Design system names are file names: letters, digits and hyphens. TEMPLATE is uppercase, so NAME_RE would reject it.
@@ -246,34 +248,24 @@ def campaign_log(campaign, console=True):
             handler.close()
 
 
-def record_usage(folder, what, role, result):
-    for key in USAGE_KEYS:
-        if key not in result['usage']:
-            raise WorkflowError(f'token usage has no {key}')
-    record = {'time': now(), 'call': what, 'model': role['model'], 'effort': role['effort'],
-              'thread': result['thread_id'], 'total': {key: result['usage'][key] for key in USAGE_KEYS}}
-    with (folder / 'usage.jsonl').open('a') as handle:
-        handle.write(json.dumps(record) + '\n')
-
-
-def usage_totals(step_dir):
-    totals = {key: 0 for key in USAGE_KEYS}
-    path = step_dir / 'usage.jsonl'
-    if not path.is_file():
-        return totals
-    last = {}  # a thread's running total only grows, so its last record is its total
-    for line in path.read_text().splitlines():
-        record = json.loads(line)
-        last[record['thread']] = record['total']
-    for total in last.values():
-        for key in USAGE_KEYS:
-            totals[key] += total[key]
+def usage_totals(folder):
+    """Adds up every call (every line) in a folder's claude-usage.jsonl."""
+    totals = {'input': 0, 'cache_write': 0, 'cache_read': 0, 'output': 0, 'cost_usd': 0.0}
+    path = folder / 'claude-usage.jsonl'
+    if path.is_file():
+        for line in path.read_text(encoding='utf-8').splitlines():
+            record = json.loads(line)
+            for key in totals:
+                totals[key] += record[key]
     return totals
 
 
 def usage_line(totals):
-    total_in, cached, out = totals['inputTokens'], totals['cachedInputTokens'], totals['outputTokens']
-    return f"input {total_in} (non-cached {total_in - cached}, cached {cached}), output {out} (reasoning {totals['reasoningOutputTokens']})"
+    fresh, written, read = totals['input'], totals['cache_write'], totals['cache_read']
+    seen = fresh + written + read
+    hit = round(100 * read / seen) if seen else 0
+    return (f"non-cached input {fresh + written} (input {fresh}, cache write {written}), "
+            f"cache read {read} ({hit}% of input), output {totals['output']}, cost ${totals['cost_usd']:.4f}")
 
 
 def load_skill(skills_dir, skill, filename):
@@ -290,15 +282,25 @@ def check_skills(skills_dir, steps):
         library_block(step['writer_skills'] + step['review_skills'])  # raises if a library skill is missing
 
 
-def check_models(client, roles, steps):
-    available = client.models()
-    for name in sorted({step['role'] for step in steps}):
-        model, effort = roles[name]['model'], roles[name]['effort']
-        if model not in available:
-            raise WorkflowError(f"{name} model {model} is not in the Codex model list; available: {', '.join(sorted(available))}")
-        if effort not in available[model]:
-            raise WorkflowError(f"{name} effort {effort} is not supported by {model}; supported: {', '.join(available[model])}")
-    log.info('models checked: %s', ', '.join(f"{name} {roles[name]['model']} {roles[name]['effort']}" for name in sorted({step['role'] for step in steps})))
+def check_tools(client, roles):
+    """Start checks, before any call: claude is installed, its help lists every flag used here, and each role's effort is one of them."""
+    try:
+        code, version = client.start(['claude', '--version'])
+        if code != 0:
+            raise WorkflowError(f'claude --version failed: {version.strip()}')
+        log.info('claude %s', version.strip())
+        code, help_text = client.start(['claude', '--help'])
+        if code != 0:
+            raise WorkflowError('claude --help failed')
+        for flag in REQUIRED_FLAGS:
+            if flag not in help_text:
+                raise WorkflowError(f'claude {version.strip()} has no {flag}; install Claude Code 2.1.318 or newer')
+        choices = effort_choices(help_text)
+    except ClaudeError as error:
+        raise WorkflowError(str(error)) from None
+    for name, role in roles.items():
+        if role['effort'] not in choices:
+            raise WorkflowError(f"{name} effort {role['effort']} is not one of the --effort choices: {', '.join(choices)}")
 
 
 def sections(md):
@@ -983,7 +985,7 @@ def brand_kit(client, brand, refresh, ask):
         return ask(prompt)
 
     with campaign_log(campaign):
-        check_models(client, ROLES, [BRAND_STEP, {'role': 'reviewer'}])
+        check_tools(client, ROLES)
         check_skills(SKILLS_DIR, [BRAND_STEP])
         run_step(client, ROLES, SKILLS_DIR, campaign, BRAND_STEP, ask_with_diff)
     if not (step_dir / 'APPROVED').is_file():
@@ -995,12 +997,12 @@ def brand_kit(client, brand, refresh, ask):
 
 
 def cmd_brand(name, refresh):
-    errors = brand_name_errors(name) or check_brand(name, for_brand_run=True)  # before any Codex process starts
+    errors = brand_name_errors(name) or check_brand(name, for_brand_run=True)  # before any model process starts
     if errors:
         raise WorkflowError('; '.join(errors))
     campaign = CAMPAIGNS_DIR / f'brand-{name}'
     campaign.mkdir(parents=True, exist_ok=True)
-    with CodexClient(stderr_path=campaign / 'codex-stderr.log') as client:
+    with ClaudeClient(stderr_path=campaign / 'claude-stderr.log') as client:
         brand_kit(client, name, refresh, input)
     if (BRANDS_DIR / name / 'positioning.md').is_file():
         warn_if_old(name)
@@ -1065,6 +1067,9 @@ def review_markdown(review):
     return '\n'.join(lines).rstrip() + '\n'
 
 
+REREVIEW_RULE = ('This is the revised version of the deliverable you reviewed last. Check that every blocking finding from '
+                 'your last review is fixed, then review it again in full against the same rules. Return the complete review '
+                 'in the same JSON shape.')
 REVIEW_LINE = 'The program rejects your draft for any item under Checked, and the reviewer blocks it for any blocking finding. Meet all of them before you answer.'
 
 
@@ -1090,23 +1095,43 @@ def revision_prompt(step, review, notes):
     return '\n'.join(parts)
 
 
-def frame_note(seconds):
-    return (f'The attached images are up to {MAX_REVIEW_FRAMES} frames spread evenly across the video, at half size. '
-            f"Their seconds, in the order attached: {', '.join(seconds)}.")
+def image_lines(images, seconds=None):
+    """One absolute path per line, with its second for video frames: the reviewer must be able to open them."""
+    if seconds is None:
+        return [str(Path(image).resolve()) for image in images]
+    return [f'{Path(image).resolve()} (second {second})' for image, second in zip(images, seconds)]
 
 
-def review_prompt(skills_dir, campaign, step, step_dir):
+def frame_note(seconds, images):
+    return ('Read each image below with the Read tool before you review. '
+            f'The images are up to {MAX_REVIEW_FRAMES} frames spread evenly across the video, at half size. '
+            f"Their seconds, in the order listed: {', '.join(seconds)}.\n" + '\n'.join(image_lines(images, seconds)))
+
+
+def review_prompt(skills_dir, campaign, step, step_dir, images=()):
     parts = [DATA_RULE]
     for input_id in step['review_inputs']:
         parts += ['', block(input_id, read_input(campaign, input_id))]
     parts += ['', block('deliverable', (step_dir / 'output.md').read_text())]
     if step['kind'] == 'images':
-        parts += ['', 'The attached images are the rendered images, at half size, in the order listed in the deliverable.']
+        parts += ['', 'Read each image below with the Read tool before you review. The images are the rendered images, at half size, '
+                      'in the order listed in the deliverable.', '\n'.join(image_lines(images))]
     if step['kind'] == 'video':
-        parts += ['', frame_note((step_dir / 'frame-seconds.txt').read_text().split())]
+        parts += ['', frame_note((step_dir / 'frame-seconds.txt').read_text().split(), images)]
     parts += ['', library_block(step['review_skills']), '', CONTRACT_RULE,
               '', load_skill(skills_dir, step['skill'], 'REVIEW.md'), '', REVIEW_RULES]
     return '\n'.join(parts)
+
+
+def rereview_prompt(step, step_dir, images=()):
+    """A re-review sends only the rule and the new deliverable: the reviewer's session already holds the rules and the last review."""
+    parts = [REREVIEW_RULE, block('deliverable', (step_dir / 'output.md').read_text())]
+    if step['kind'] == 'images':
+        parts += ['Read each image below with the Read tool before you review. The images are the rendered images, at half size, '
+                  'in the order listed in the deliverable.', '\n'.join(image_lines(images))]
+    if step['kind'] == 'video':
+        parts += [frame_note((step_dir / 'frame-seconds.txt').read_text().split(), images)]
+    return '\n\n'.join(parts)
 
 
 def parse_json(text, path, what):
@@ -1117,23 +1142,89 @@ def parse_json(text, path, what):
         raise WorkflowError(f'{what} did not return valid JSON ({error}); raw reply saved to {path}') from None
 
 
-def call_codex(client, role, prompt, cwd, schema, save_path, what, images=(), web=False, thread_id=None, persist=False):
-    log.info('%s: asking %s (effort %s, web search %s, %s, prompt %d characters, %d images)', what, role['model'], role['effort'],
-             'on' if web else 'off', f'continuing thread {thread_id}' if thread_id else 'new thread', len(prompt), len(images))
+def call_model(client, roles, role_name, prompt, folder, schema, save_path, what, images=(), web=False, resume=None, importer=False,
+               session_file=None):
+    """_call_model, except that a failed resume names its session file: deleting that file is what starts a new session."""
+    try:
+        return _call_model(client, roles, role_name, prompt, folder, schema, save_path, what, images, web, resume, importer)
+    except WorkflowError as error:
+        if resume is None or session_file is None:
+            raise
+        raise WorkflowError(f'{error}. The session {resume} in {session_file} could not be resumed; '
+                            f'deleting {session_file.name} starts a new session.') from None
+
+
+def _call_model(client, roles, role_name, prompt, folder, schema, save_path, what, images, web, resume, importer):
+    """One claude call. It starts a new session unless resume names one. It saves the prompt and the stream, checks the reply, and records usage."""
+    role = roles[role_name]
+    if importer:
+        tools, allowed = '', IMPORT_TOOLS
+    else:
+        tools = 'WebSearch,WebFetch' if web else ('Read' if images else '')
+        allowed = tools.split(',') if tools else None
+    session_id = resume or str(uuid.uuid4())
+    argv = claude_argv(role, schema, tools, ('--resume' if resume else '--session-id', session_id), allowed, importer)
+    calls = Path(folder) / 'calls'
+    calls.mkdir(parents=True, exist_ok=True)
+    stem = f'{len(list(calls.glob("*-prompt.txt"))) + 1:02d}-{what}'
+    (calls / f'{stem}-prompt.txt').write_text(prompt, encoding='utf-8')
+    stream_path = calls / f'{stem}-stream.jsonl'
+    log.info('%s: asking %s (effort %s, tools %s, %s, prompt %d characters, %d images)', what, role['model'], role['effort'],
+             tools or 'none', f'resuming {session_id}' if resume else 'new session', len(prompt), len(images))
     started = time.monotonic()
     try:
-        result = client.run_turn(prompt, role['model'], role['effort'], str(cwd), output_schema=schema,
-                                 images=images, web_search='live' if web else 'disabled',
-                                 thread_id=thread_id, persist=persist)
-    except CodexError as error:
+        returncode, stdout = client.start(argv, prompt, folder)
+    except ClaudeError as error:
         log.error('%s: failed: %s', what, error)
         raise WorkflowError(f'{what} failed: {error}') from None
-    record_usage(cwd, what, role, result)
-    log.info('%s: answered in %.0f s on thread %s; thread total so far: %s', what, time.monotonic() - started,
-             result['thread_id'], usage_line(result['usage']))
-    for query in result['searches']:
+    stream_path.write_text(stdout, encoding='utf-8')
+    try:
+        events = parse_events(stdout)
+    except ClaudeError as error:
+        raise WorkflowError(f'{what}: {error}; first 300 characters: {stdout[:300]!r}; saved to {stream_path}') from None
+    results = [event for event in events if event.get('type') == 'result']
+    if len(results) != 1:
+        raise WorkflowError(f"{what}: claude printed {len(results)} result lines, not one; first 300 characters: {stdout[:300]!r}; "
+                            f'saved to {stream_path}')
+    result = results[0]
+    usage = result.get('usage', {})
+    totals = {'input': usage.get('input_tokens', 0), 'cache_write': usage.get('cache_creation_input_tokens', 0),
+              'cache_read': usage.get('cache_read_input_tokens', 0), 'output': usage.get('output_tokens', 0),
+              'cost_usd': result.get('total_cost_usd', 0.0)}
+    denials = result.get('permission_denials', [])
+    for denial in denials:
+        log.warning('%s: permission denied: %s', what, json.dumps(denial, ensure_ascii=False))
+    record = {'time': now(), 'call': what, 'role': role_name, 'model': role['model'], 'effort': role['effort'],
+              'session_id': session_id, 'subtype': result.get('subtype'), 'turns': result.get('num_turns', 0),
+              'cost_usd': totals['cost_usd'], 'input': totals['input'], 'cache_write': totals['cache_write'],
+              'cache_read': totals['cache_read'], 'output': totals['output'], 'denials': len(denials)}
+    with (Path(folder) / 'claude-usage.jsonl').open('a', encoding='utf-8') as handle:
+        handle.write(json.dumps(record) + '\n')
+    subtype = result.get('subtype')
+    if returncode != 0:
+        raise WorkflowError(f'{what}: claude exited with code {returncode} ({subtype}); saved to {stream_path}')
+    if result.get('is_error') or subtype != 'success':
+        hint = ' (the budget_usd of this role needs raising)' if subtype == 'error_max_budget_usd' else ''
+        raise WorkflowError(f"{what}: claude ended with {subtype}{hint}: {result.get('errors') or result.get('result')}; saved to {stream_path}")
+    if result.get('session_id') != session_id:
+        raise WorkflowError(f"{what}: claude used session {result.get('session_id')}, expected {session_id}")
+    if importer:
+        init = next((event for event in events if event.get('type') == 'system' and event.get('subtype') == 'init'), {})
+        servers = {server.get('name'): server.get('status') for server in init.get('mcp_servers', [])}
+        if servers.get(PLAN_SERVER) != 'connected':
+            raise WorkflowError(f"It's a Plan is not connected to claude (status {servers.get(PLAN_SERVER, 'missing')}); "
+                                'connect it in Claude Code, then run the import again')
+    structured = result.get('structured_output')
+    if not isinstance(structured, dict):
+        raise WorkflowError(f'{what}: claude gave no structured output object; saved to {stream_path}')
+    save_path.write_text(json.dumps(structured, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+    searches = [block['input']['query'] for event in events if event.get('type') == 'assistant'
+                for block in event.get('message', {}).get('content', [])
+                if block.get('type') == 'tool_use' and block.get('name') == 'WebSearch' and block.get('input', {}).get('query')]
+    log.info('%s: answered in %.0f s on session %s; %s', what, time.monotonic() - started, session_id, usage_line(totals))
+    for query in searches:
         log.info('%s: web search: %s', what, query)
-    return parse_json(result['text'], save_path, what), result['thread_id'], result['searches']
+    return structured, session_id, searches
 
 
 def read_searches(step_dir):
@@ -1541,10 +1632,10 @@ def materialize_video(step_dir, written, character, presenter):
     (step_dir / 'output.md').write_text('\n'.join(lines) + '\n')
     return frames
 
-def read_writer_thread(step_dir):
-    path = step_dir / 'writer-thread.txt'
+def read_writer_session(step_dir):
+    path = step_dir / 'writer-session.txt'
     if not path.is_file():
-        raise WorkflowError(f'no saved writer thread in {step_dir}; cannot send the revision')
+        raise WorkflowError(f'no saved writer session in {step_dir}; cannot send the revision')
     return path.read_text().strip()
 
 
@@ -1553,19 +1644,21 @@ def write(client, roles, skills_dir, campaign, step, step_dir, revision):
         (step_dir / stale).unlink(missing_ok=True)
     if revision is None:
         (step_dir / 'searches.txt').unlink(missing_ok=True)
+        (step_dir / 'reviewer-session.txt').unlink(missing_ok=True)  # a new draft gets a fresh reviewer
     print(f"[{step['id']}] writer working...")
     if step['id'] == '08-reel':
         render_presenter(campaign, step_dir, read_character(campaign))  # before the film, so presenter.json exists for it
     if revision is None:
         log.info('[%s] first draft', step['id'])
-        prompt, thread_id = writer_prompt(skills_dir, campaign, step), None
+        prompt, resume = writer_prompt(skills_dir, campaign, step), None
     else:
         review, notes = revision
         log.info('[%s] revising: %s', step['id'], 'owner notes' if notes else 'automatic rewrite of the review findings')
-        prompt, thread_id = revision_prompt(step, review, notes), read_writer_thread(step_dir)
-    written, thread_id, searches = call_codex(client, roles[step['role']], prompt, step_dir, WRITER_SCHEMAS[step['kind']],
-                                              step_dir / 'writer.json', 'writer', web=step['web'], thread_id=thread_id, persist=True)
-    (step_dir / 'writer-thread.txt').write_text(thread_id + '\n')
+        prompt, resume = revision_prompt(step, review, notes), read_writer_session(step_dir)
+    written, session_id, searches = call_model(client, roles, step['role'], prompt, step_dir, WRITER_SCHEMAS[step['kind']],
+                                               step_dir / 'writer.json', 'writer', web=step['web'], resume=resume,
+                                               session_file=step_dir / 'writer-session.txt')
+    (step_dir / 'writer-session.txt').write_text(session_id + '\n')
     with (step_dir / 'searches.txt').open('a') as file:  # every web search the writer ran in this step, across revisions
         file.write(''.join(query + '\n' for query in searches))
     return written, materialize(step, step_dir, written, campaign)
@@ -1625,9 +1718,14 @@ def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
         if step['check'] is not None:
             log.info('[%s] automatic checks passed', step['id'])
         print(f"[{step['id']}] reviewer working...")
-        prompt = review_prompt(skills_dir, campaign, step, step_dir)
-        review, _, _ = call_codex(client, roles['reviewer'], prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer', images,
-                                  web=step['web'])
+        session_file = step_dir / 'reviewer-session.txt'
+        if session_file.is_file():  # the reviewer that saw the last version of this draft reviews the revision
+            prompt, resume = rereview_prompt(step, step_dir, images), session_file.read_text().strip()
+        else:
+            prompt, resume = review_prompt(skills_dir, campaign, step, step_dir, images), None
+        review, session_id, _ = call_model(client, roles, 'reviewer', prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer',
+                                           images=images, web=step['web'], resume=resume, session_file=session_file)
+        session_file.write_text(session_id + '\n')
         if any(finding['severity'] == 'blocking' for finding in review['findings']):
             review['verdict'] = 'revise'
     blocking = sum(finding['severity'] == 'blocking' for finding in review['findings'])
@@ -1939,7 +2037,7 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
     check_skills(skills_dir, steps)
     task = (campaign / '00-task.md').read_text()
-    errors = check_task(task)  # before any Codex call, so campaigns made before a rule are caught too
+    errors = check_task(task)  # before any model call, so campaigns made before a rule are caught too
     stale = stale_steps(campaign, steps, skills_dir)
     if stale:
         errors.append(stale_message(campaign, steps, stale))
@@ -1957,8 +2055,8 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
             raise WorkflowError('; '.join(errors))
         if not os.environ.get('HEYGEN_API_KEY') and not (campaign / '08-reel' / 'APPROVED').is_file():
             raise WorkflowError('HEYGEN_API_KEY is not set; set it in the environment before a reel run')
-    recheck_approved(campaign, steps)  # before any Codex call
-    check_models(client, roles, steps + [{'role': 'reviewer'}])  # every step is reviewed
+    recheck_approved(campaign, steps)  # before any model call
+    check_tools(client, roles)  # every role is checked before the first call
     for step in steps:
         if (campaign / step['id'] / 'APPROVED').is_file():
             log.info('[%s] already approved; skipping', step['id'])
@@ -1978,9 +2076,10 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
 
 
 def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
-    check_models(client, roles, [{'role': 'writer'}])
+    check_tools(client, roles)
     prompt = '\n\n'.join([load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)])
-    written, _, _ = call_codex(client, roles['writer'], prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer')
+    written, _, _ = call_model(client, roles, 'writer', prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer',
+                               importer=True)
     output = written['output']
     errors = check_task(output, design=False)  # the owner sets the design system when checking 00-task.md
     log.info('import: task text %d characters; task check %s', len(output), 'passed' if not errors else 'failed: ' + '; '.join(errors))
@@ -2016,9 +2115,9 @@ def cmd_new(name, task_file, issue):
     with campaign_log(campaign):
         log.info('importing %s', issue)
         try:
-            with CodexClient(stderr_path=campaign / 'codex-stderr.log') as client:  # not lean: the import needs the It's a Plan connection
+            with ClaudeClient(stderr_path=campaign / 'claude-stderr.log') as client:  # the import needs It's a Plan in Claude Code
                 task = import_issue(client, campaign, issue)
-        except (CodexError, WorkflowError) as error:
+        except WorkflowError as error:
             raise WorkflowError(f'{error} Delete {campaign} before trying again.') from None
     print(task)
     print(f"Check and edit {campaign / '00-task.md'}, then: python3 marketing/run.py run {name}")
@@ -2044,7 +2143,7 @@ def cmd_status(name):
         else:
             state = 'not started'
         totals = usage_totals(step_dir)
-        for key in USAGE_KEYS:
+        for key in total:
             total[key] += totals[key]
         print(f"{step['id']:<14} {state:<26} {usage_line(totals)}")
     task = (campaign / '00-task.md').read_text()
@@ -2084,11 +2183,8 @@ def cmd_run(name):
         raise WorkflowError(f'no campaign at {campaign}')
     with campaign_log(campaign):
         log.info('run %s started', name)
-        try:
-            with CodexClient(stderr_path=campaign / 'codex-stderr.log', lean=True) as client:
-                run_campaign(campaign, client)
-        except CodexError as error:
-            raise WorkflowError(f'codex: {error}') from None
+        with ClaudeClient(stderr_path=campaign / 'claude-stderr.log') as client:
+            run_campaign(campaign, client)
 
 
 def cmd_publish(due, retry):

@@ -1,19 +1,19 @@
 # Marketing workflow
 
 A brand's positioning, voice, design system and pages are prepared once. Then each task becomes a sourced brief and an SEO article, and the social posts, images and reel that its Deliverables ask for.
-Every step is written by Codex, checked by Python, reviewed by a separate Codex thread, and then waits for your approval.
+Every step is written by Claude Code, checked by Python, reviewed by a separate Claude Code session, and then waits for your approval.
 Nothing is published unless the task has `## Publish to` and you approve step 09 (see "Posting after approval"). The approved files end up in `campaigns/<name>/final/`.
 
 ## Requirements
 
 - Python 3.10 or newer
-- `codex` 0.166.0 or newer, installed and signed in
-- For `--issue`: the It's a Plan connection in Codex
+- Claude Code 2.1.318 or newer, installed and signed in
+- For `--issue`: It's a Plan connected in Claude Code (`claude mcp list` shows it as connected)
 - `openfilm` 0.2.6 and `ffmpeg` with libx264, on `PATH` (needed from step 07)
 
 ## Steps
 
-0. The brand kit, once per brand: `brand <brand>` drafts `positioning.md` from its One line with one web-search pass. Every campaign checks the brand kit before any Codex call.
+0. The brand kit, once per brand: `brand <brand>` drafts `positioning.md` from its One line with one web-search pass. Every campaign checks the brand kit before any model call.
 1. `01-sources`: finds the facts the campaign needs beyond the brand kit, from primary sources only: at least 3 searches, and at least 3 facts with URLs from 3 different sites
 2. `02-brief`: the brief. Its Angle is one reader problem from `positioning.md`, and each Channel idea starts with a different Value line from it
 3. `03-article`: the SEO article. Each H2 delivers only its Adds line from the brief. It links only to the pages listed in `pages.md`
@@ -98,7 +98,7 @@ Each brand has a folder, `marketing/brands/<brand>/`, with five files. Every cam
 - `pages.md`: the pages the article may link to.
 - `character.md`: the reel presenter's name, personality, three to five sample lines, HeyGen avatar and voice ids, what they do and don't do on camera, and the disclosure line. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
 
-Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. `character.md` is needed only for reels. Replace each `Template note:` line with your text. A run stops before any Codex call if a file is missing or still has a template note.
+Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. `character.md` is needed only for reels. Replace each `Template note:` line with your text. A run stops before any model call if a file is missing or still has a template note.
 
 Write `## One line` in `positioning.md` first: what the product is, for whom, the result, and the product URL. Then run:
 
@@ -113,30 +113,30 @@ The draft goes to the a/r/q prompt. On approval, `positioning.md` is saved with 
 
 Each step uses one of four roles. The roles are set in `ROLES` at the top of `marketing/run.py`.
 
-| Role | Used for | Model | Effort |
-| --- | --- | --- | --- |
-| writer | steps 01, 03 to 06, and the import | `gpt-6.1-sol` | `medium` |
-| strategist | the brief (step 02) | `gpt-6.1-sol` | `high` |
-| reviewer | the review of every step | `gpt-6.1-sol` | `high` |
-| creator | images and reel | `gpt-6.1-sol` | `high` |
+| Role | Used for | Model | Effort | Budget per call |
+| --- | --- | --- | --- | --- |
+| writer | steps 01, 03 to 06, and the import | `claude-haiku-5-5` | `xhigh` | $1.00 |
+| strategist | the brief (step 02) | `claude-haiku-5-5` | `xhigh` | $1.00 |
+| reviewer | the review of every step | `claude-sonnet-5-5` | `medium` | $2.00 |
+| creator | images and reel | `claude-sonnet-5-5` | `high` | $3.00 |
 
-Before any step runs, the program checks that each model and effort is in your Codex model list. If one is not, it stops with an `error:` message.
+Before any step runs, the program runs `claude --version` and `claude --help`: every flag it uses must be in the help, and each role's effort must be one of the `--effort` choices. If one is not, it stops with an `error:` message. There is no model list: a model Claude Code does not know fails its first call.
 
 ## Files of a campaign
 
 ```
 campaigns/<name>/00-task.md
 campaigns/<name>/import.json                         (only with --issue)
-campaigns/<name>/codex-stderr.log                    Codex's stderr for every run and import
-campaigns/<name>/run.log                             every step, Codex call and decision (also printed in the terminal)
-campaigns/<name>/01-sources/output.md, review.md, APPROVED, usage.jsonl, writer-thread.txt, history/
+campaigns/<name>/claude-stderr.log                    Claude Code's stderr for every run and import
+campaigns/<name>/run.log                             every step, Claude call and decision (also printed in the terminal)
+campaigns/<name>/01-sources/output.md, review.md, APPROVED, calls/, claude-usage.jsonl, writer-session.txt, reviewer-session.txt, history/
 campaigns/<name>/02-brief/...
 ...
 campaigns/<name>/final/index.md
 campaigns/<name>/09-publish/plan.json, APPROVED, publish.jsonl, media/   (only with ## Publish to)
 ```
 
-Each step folder has `usage.jsonl` (the tokens of each Codex call) and `writer-thread.txt` (the writer's Codex thread, which a revision continues). `status` adds the tokens up.
+Each step folder has `claude-usage.jsonl` (one line per Claude call: tokens and cost), `calls/` (each prompt and the full stream of replies), `writer-session.txt` (the writer's session, which a revision resumes) and `reviewer-session.txt` (the reviewer's session, which every re-review resumes). `status` adds the tokens and cost up.
 
 To follow a run from another terminal, run `tail -f campaigns/<name>/run.log`.
 
