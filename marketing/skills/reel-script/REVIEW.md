@@ -20,5 +20,6 @@ Blocking findings:
 
 Minor findings:
 - Pacing and word choice.
+- A line that doesn't sound like the Sample lines.
 
 Name the line (for example p2) in every finding. Pass only when there are no blocking findings.
