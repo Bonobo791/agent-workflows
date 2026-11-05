@@ -50,6 +50,11 @@ ROLES = {
     'reviewer': {'model': 'claude-opus-5-5', 'effort': 'medium', 'budget_usd': 4.00},
     'creator': {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 6.00},
 }
+# --tools is fixed per role, so every call of a role has the same flags; --allowedTools is what each step may use.
+ROLE_TOOLS = {'writer': 'WebSearch,WebFetch', 'strategist': '', 'reviewer': 'WebSearch,WebFetch,Read', 'creator': '', 'importer': ''}
+WEB_TOOLS = ['WebSearch', 'WebFetch']
+SESSIONS_FILE = 'sessions.json'  # in the campaign folder: one Claude Code session per role
+REVIEW_STARTED = 'review-started.txt'  # in a step folder: its first review is done, so the next review is a re-review
 MAX_AUTO_REVISIONS = 1  # one automatic rewrite, shared by a failed check, a revise and a minor-findings pass
 MAX_REVIEW_FRAMES = 10
 LINE_WORD_LIMIT = 25  # words in one presenter line
@@ -973,8 +978,9 @@ def brand_kit(client, brand, refresh, ask):
     approved = brand_file(brand, 'positioning.md')
     current = approved.read_text()
     previous = current.split('\n', 2)[2] if current.startswith('Approved: ') else None
-    if refresh and (step_dir / 'APPROVED').is_file():  # an approved draft is replaced; an unapproved one resumes at the owner prompt
+    if refresh and (step_dir / 'APPROVED').is_file():  # an approved draft is replaced with a fresh session; an unapproved one resumes
         shutil.rmtree(step_dir)
+        (campaign / SESSIONS_FILE).unlink(missing_ok=True)
     shown = []
 
     def ask_with_diff(prompt):
@@ -1068,7 +1074,7 @@ def review_markdown(review):
     return '\n'.join(lines).rstrip() + '\n'
 
 
-REREVIEW_RULE = ('This is the revised version of the deliverable you reviewed last. Check that every blocking finding from '
+REREVIEW_RULE = ('This is the revised version of step {step}, which you reviewed last. Check that every blocking finding from '
                  'your last review is fixed, then review it again in full against the same rules. Return the complete review '
                  'in the same JSON shape.')
 REVIEW_LINE = 'The program rejects your draft for any item under Checked, and the reviewer blocks it for any blocking finding. Meet all of them before you answer.'
@@ -1086,7 +1092,7 @@ def writer_prompt(skills_dir, campaign, step):
 
 
 def revision_prompt(step, review, notes):
-    parts = ['This is a revision of your last answer in this thread. Fix every finding below, blocking and minor, and follow the owner notes, if any. '
+    parts = [f"This is a revision of your last answer for step {step['id']}. Fix every finding below, blocking and minor, and follow the owner notes, if any. "
              'Return the complete new version in the same JSON shape, not a list of changes.',
              '', 'Fix each finding everywhere it occurs in the draft, not just in the quoted sentence. Check the whole draft against the Checked list and the blocking findings again before you answer.',
              '', block('review of your last answer', review_markdown(review))]
@@ -1126,7 +1132,7 @@ def review_prompt(skills_dir, campaign, step, step_dir, images=()):
 
 def rereview_prompt(step, step_dir, images=()):
     """A re-review sends only the rule and the new deliverable: the reviewer's session already holds the rules and the last review."""
-    parts = [REREVIEW_RULE, block('deliverable', (step_dir / 'output.md').read_text())]
+    parts = [REREVIEW_RULE.format(step=step['id']), block('deliverable', (step_dir / 'output.md').read_text())]
     if step['kind'] == 'images':
         parts += ['Read each image below with the Read tool before you review. The images are the rendered images, at half size, '
                   'in the order listed in the deliverable.', '\n'.join(image_lines(images))]
@@ -1178,28 +1184,80 @@ def has_result_line(stdout):
     return False
 
 
-def call_model(client, roles, role_name, prompt, folder, schema, save_path, what, images=(), web=False, resume=None, importer=False,
-               session_file=None):
-    """_call_model, except that a resume which failed names its session file: deleting that file is what starts a new session."""
+class Sessions:
+    """One Claude Code session per role per campaign, kept in campaigns/<name>/sessions.json as {"writer": {"id": ..., "steps": [...]}}."""
+
+    def __init__(self, campaign):
+        self.campaign = campaign
+        self.path = campaign / SESSIONS_FILE
+
+    def load(self):
+        return json.loads(self.path.read_text(encoding='utf-8')) if self.path.is_file() else {}
+
+    def start(self, role, step_id, purpose):
+        """The (flag, id) for the role's next call on a step. A first draft or first review resumes the role's session or starts it.
+        A revision or re-review needs a step that the session already holds."""
+        entry = self.load().get(role)
+        if purpose is None:
+            return ('--resume', entry['id']) if entry else ('--session-id', str(uuid.uuid4()))
+        if entry is None or step_id not in entry['steps']:
+            raise WorkflowError(f"the {role} session has no draft of {step_id}; delete campaigns/{self.campaign.name}/{step_id} and run again")
+        return ('--resume', entry['id'])
+
+    def record(self, role, step_id, session_id):
+        """Written after the call succeeds: the role's session, and the step it drafted or reviewed."""
+        data = self.load()
+        entry = data.setdefault(role, {'id': session_id, 'steps': []})
+        if step_id not in entry['steps']:
+            entry['steps'].append(step_id)
+        self.path.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+
+    def last_step(self, role):
+        entry = self.load().get(role)
+        return entry['steps'][-1] if entry and entry['steps'] else None
+
+    def resume_note(self, role):
+        return (f'The saved {role} session in {self.path} could not be resumed; '
+                f'removing the {role} entry from {SESSIONS_FILE} starts a new session')
+
+
+def allowed_tools(web, images):
+    """What a step may use. --tools is fixed per role; --allowedTools is this list."""
+    return (WEB_TOOLS if web else []) + (['Read'] if images else [])
+
+
+def step_header(step_id, allowed):
+    """The start of a role's first prompt for a step, so one session can carry several steps."""
+    tools = ', '.join(allowed) if allowed else 'none'
+    return (f'Step {step_id} starts here. Earlier steps in this conversation are finished; follow only the rules for this step. '
+            f'Tools you may use in this step: {tools}.\n\n')
+
+
+def step_kind(step_id):
+    return next((step['kind'] for step in [*STEPS, BRAND_STEP] if step['id'] == step_id), None)
+
+
+def call_model(client, roles, role_name, prompt, folder, schema, save_path, what, *, cwd, session, images=(), web=False,
+               importer=False, resume_note=None):
+    """_call_model. A resume that failed also says how to start a new session (resume_note)."""
     try:
-        return _call_model(client, roles, role_name, prompt, folder, schema, save_path, what, images, web, resume, importer)
+        return _call_model(client, roles, role_name, prompt, folder, schema, save_path, what, cwd, session, images, web, importer)
     except ResumeFailed as error:
-        if session_file is None:
+        if resume_note is None:
             raise WorkflowError(str(error)) from None
-        raise WorkflowError(f'{error}. The session {resume} in {session_file} could not be resumed; '
-                            f'deleting {session_file.name} starts a new session.') from None
+        raise WorkflowError(f'{error}. {resume_note}.') from None
 
 
-def _call_model(client, roles, role_name, prompt, folder, schema, save_path, what, images, web, resume, importer):
-    """One claude call. It starts a new session unless resume names one. It saves the prompt and the stream, checks the reply, and records usage."""
+def _call_model(client, roles, role_name, prompt, folder, schema, save_path, what, cwd, session, images, web, importer):
+    """One claude call on the given (flag, id) session. It saves the prompt and the stream, checks the reply, and records usage and context."""
     role = roles[role_name]
+    flag, session_id = session
+    resume = flag == '--resume'
     if importer:
         tools, allowed = '', IMPORT_TOOLS
     else:
-        tools = 'WebSearch,WebFetch' if web else ('Read' if images else '')
-        allowed = tools.split(',') if tools else None
-    session_id = resume or str(uuid.uuid4())
-    argv = claude_argv(role, schema, tools, ('--resume' if resume else '--session-id', session_id), allowed, importer)
+        tools, allowed = ROLE_TOOLS[role_name], allowed_tools(web, images) or None
+    argv = claude_argv(role, schema, tools, session, allowed, importer)
     calls = Path(folder) / 'calls'
     calls.mkdir(parents=True, exist_ok=True)
     stem = f'{len(list(calls.glob("*-prompt.txt"))) + 1:02d}-{what}'
@@ -1209,7 +1267,7 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
              tools or 'none', f'resuming {session_id}' if resume else 'new session', len(prompt), len(images))
     started = time.monotonic()
     try:
-        returncode, stdout = client.start(argv, prompt, folder)
+        returncode, stdout = client.start(argv, prompt, cwd)
     except ClaudeError as error:
         log.error('%s: failed: %s', what, error)
         raise WorkflowError(f'{what} failed: {error}') from None
@@ -1219,6 +1277,8 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
     except ClaudeError as error:
         message = f'{what}: {error}; first 300 characters: {stdout[:300]!r}; saved to {stream_path}'
         raise (WorkflowError(message) if has_result_line(stdout) else resume_error(resume, message)) from None
+    if any(event.get('type') == 'system' and event.get('subtype') == 'compact_boundary' for event in events):
+        log.warning('%s: claude compacted the %s session', what, role_name)
     results = [event for event in events if event.get('type') == 'result']
     if not results:
         raise resume_error(resume, f"{what}: claude printed no result line; first 300 characters: {stdout[:300]!r}; saved to {stream_path}")
@@ -1230,6 +1290,7 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
     totals = {'input': required(usage, 'input_tokens', what), 'cache_write': required(usage, 'cache_creation_input_tokens', what),
               'cache_read': required(usage, 'cache_read_input_tokens', what), 'output': required(usage, 'output_tokens', what),
               'cost_usd': required(result, 'total_cost_usd', what)}
+    context = totals['input'] + totals['cache_write'] + totals['cache_read']
     denials = required(result, 'permission_denials', what)
     for denial in denials:
         log.warning('%s: permission denied: %s', what, json.dumps(denial, ensure_ascii=False))
@@ -1237,7 +1298,7 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
     record = {'time': now(), 'call': what, 'role': role_name, 'model': role['model'], 'effort': role['effort'],
               'session_id': session_id, 'subtype': subtype, 'turns': required(result, 'num_turns', what),
               'cost_usd': totals['cost_usd'], 'input': totals['input'], 'cache_write': totals['cache_write'],
-              'cache_read': totals['cache_read'], 'output': totals['output'], 'denials': len(denials)}
+              'cache_read': totals['cache_read'], 'output': totals['output'], 'denials': len(denials), 'context': context}
     with (Path(folder) / 'claude-usage.jsonl').open('a', encoding='utf-8') as handle:
         handle.write(json.dumps(record) + '\n')
     reported = required(result, 'session_id', what)
@@ -1271,7 +1332,8 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
             for block in required(required(event, 'message', what), 'content', what):
                 if block.get('type') == 'tool_use' and block.get('name') == 'WebSearch':
                     searches.append(required(required(block, 'input', what), 'query', what))
-    log.info('%s: answered in %.0f s on session %s; %s', what, time.monotonic() - started, session_id, usage_line(totals))
+    log.info('%s: answered in %.0f s on session %s; context %d tokens; %s', what, time.monotonic() - started, session_id, context,
+             usage_line(totals))
     for query in searches:
         log.info('%s: web search: %s', what, query)
     return structured, session_id, searches
@@ -1682,33 +1744,32 @@ def materialize_video(step_dir, written, character, presenter):
     (step_dir / 'output.md').write_text('\n'.join(lines) + '\n')
     return frames
 
-def read_writer_session(step_dir):
-    path = step_dir / 'writer-session.txt'
-    if not path.is_file():
-        raise WorkflowError(f'no saved writer session in {step_dir}; cannot send the revision')
-    return path.read_text().strip()
-
-
 def write(client, roles, skills_dir, campaign, step, step_dir, revision):
+    role, sessions = step['role'], Sessions(campaign)
     for stale in ('review.json', 'review.md'):
         (step_dir / stale).unlink(missing_ok=True)
     if revision is None:
         (step_dir / 'searches.txt').unlink(missing_ok=True)
-        (step_dir / 'reviewer-session.txt').unlink(missing_ok=True)  # a new draft gets a fresh reviewer
+        (step_dir / REVIEW_STARTED).unlink(missing_ok=True)  # a new draft gets its first review
     print(f"[{step['id']}] writer working...")
     if step['id'] == '08-reel':
         render_presenter(campaign, step_dir, read_character(campaign))  # before the film, so presenter.json exists for it
+    allowed = WEB_TOOLS if step['web'] else []
     if revision is None:
         log.info('[%s] first draft', step['id'])
-        prompt, resume = writer_prompt(skills_dir, campaign, step), None
+        prompt, session = step_header(step['id'], allowed) + writer_prompt(skills_dir, campaign, step), sessions.start(role, step['id'], None)
     else:
         review, notes = revision
         log.info('[%s] revising: %s', step['id'], 'owner notes' if notes else 'automatic rewrite of the review findings')
-        prompt, resume = revision_prompt(step, review, notes), read_writer_session(step_dir)
-    written, session_id, searches = call_model(client, roles, step['role'], prompt, step_dir, WRITER_SCHEMAS[step['kind']],
-                                               step_dir / 'writer.json', 'writer', web=step['web'], resume=resume,
-                                               session_file=step_dir / 'writer-session.txt')
-    (step_dir / 'writer-session.txt').write_text(session_id + '\n')
+        prompt, session = revision_prompt(step, review, notes), sessions.start(role, step['id'], 'revision')
+    previous = sessions.last_step(role)
+    if session[0] == '--resume' and previous and step_kind(previous) != step['kind']:
+        log.info('[%s] the %s session changes its schema from %s to %s; its cache is written again', step['id'], role,
+                 step_kind(previous), step['kind'])
+    written, session_id, searches = call_model(client, roles, role, prompt, step_dir, WRITER_SCHEMAS[step['kind']], step_dir / 'writer.json',
+                                               'writer', cwd=campaign, session=session, web=step['web'],
+                                               resume_note=sessions.resume_note(role))
+    sessions.record(role, step['id'], session_id)
     with (step_dir / 'searches.txt').open('a') as file:  # every web search the writer ran in this step, across revisions
         file.write(''.join(query + '\n' for query in searches))
     return written, materialize(step, step_dir, written, campaign)
@@ -1768,14 +1829,17 @@ def review_step(client, roles, skills_dir, campaign, step, step_dir, images):
         if step['check'] is not None:
             log.info('[%s] automatic checks passed', step['id'])
         print(f"[{step['id']}] reviewer working...")
-        session_file = step_dir / 'reviewer-session.txt'
-        if session_file.is_file():  # the reviewer that saw the last version of this draft reviews the revision
-            prompt, resume = rereview_prompt(step, step_dir, images), session_file.read_text().strip()
+        sessions = Sessions(campaign)
+        if (step_dir / REVIEW_STARTED).is_file():  # the reviewer already saw this draft, so the revision gets the re-review prompt
+            prompt, session = rereview_prompt(step, step_dir, images), sessions.start('reviewer', step['id'], 're-review')
         else:
-            prompt, resume = review_prompt(skills_dir, campaign, step, step_dir, images), None
+            prompt = step_header(step['id'], allowed_tools(step['web'], images)) + review_prompt(skills_dir, campaign, step, step_dir, images)
+            session = sessions.start('reviewer', step['id'], None)
         review, session_id, _ = call_model(client, roles, 'reviewer', prompt, step_dir, REVIEW_SCHEMA, step_dir / 'review.json', 'reviewer',
-                                           images=images, web=step['web'], resume=resume, session_file=session_file)
-        session_file.write_text(session_id + '\n')
+                                           images=images, web=step['web'], cwd=campaign, session=session,
+                                           resume_note=sessions.resume_note('reviewer'))
+        sessions.record('reviewer', step['id'], session_id)
+        (step_dir / REVIEW_STARTED).write_text(session_id + '\n')
         if any(finding['severity'] == 'blocking' for finding in review['findings']):
             review['verdict'] = 'revise'
     blocking = sum(finding['severity'] == 'blocking' for finding in review['findings'])
@@ -2134,7 +2198,7 @@ def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
     check_tools(client, roles)
     prompt = '\n\n'.join([load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)])
     written, _, _ = call_model(client, roles, 'importer', prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer',
-                               importer=True)
+                               cwd=campaign, session=('--session-id', str(uuid.uuid4())), importer=True)
     output = written['output']
     errors = check_task(output, design=False)  # the owner sets the design system when checking 00-task.md
     log.info('import: task text %d characters; task check %s', len(output), 'passed' if not errors else 'failed: ' + '; '.join(errors))
