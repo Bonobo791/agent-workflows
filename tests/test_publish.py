@@ -1363,13 +1363,14 @@ class CommandTest(unittest.TestCase):
 class ReadmeTest(unittest.TestCase):
     def test_readme_says_the_article_is_checked_once_more_before_the_first_post(self):
         text = (Path(__file__).resolve().parents[1] / 'README.md').read_text()
-        self.assertIn('The timer checks the address once more before the first post.', text)
+        self.assertIn('When the address is set, step 09 stops until it answers HTTP 200, and the timer checks it once more before the first post.', text)
         self.assertNotIn('the timer checks the address again before each post goes out', text)
 
 
     def test_readme_says_which_post_gets_the_article_link(self):
         text = (Path(__file__).resolve().parents[1] / 'README.md').read_text()
-        self.assertIn('LinkedIn gets this link in its first comment and YouTube in its description.', text)
+        self.assertIn("LinkedIn's post and first comment wait until it is set, and YouTube's description gets the link once it is set.", text)
+        self.assertIn('Instagram and TikTok go out without it.', text)
         self.assertNotIn('Every post gets this link.', text)
 
 
