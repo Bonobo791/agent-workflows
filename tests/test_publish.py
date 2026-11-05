@@ -1086,6 +1086,13 @@ class YouTubeTest(AdapterTest):
         with self.assertRaises(publish.RetryLater):
             publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
 
+    def test_refused_refresh_token_explains_testing_mode(self):
+        http = FakeHttp([(400, {}, b'{"error": "invalid_grant"}')])
+        with self.assertRaises(publish.StopItem) as raised:
+            publish.youtube_item(self.ctx(self.short(), http, {'youtube': YT_CONFIG}))
+        self.assertIn('In production', str(raised.exception))
+        self.assertIn('new refresh token', str(raised.exception))
+
     def test_refused_refresh_token_stops(self):
         for status in (400, 401):
             with self.subTest(status=status), self.assertRaises(publish.StopItem):

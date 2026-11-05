@@ -209,7 +209,7 @@ If any other user can read the file, every publish run stops. The program never 
 
 - **LinkedIn**: an app with the Community Management API and the `w_organization_social` permission, and an access token for the page.
 - **Instagram**: a professional account, Business Login for Instagram with `instagram_business_content_publish`, and a public web folder on your own server for the images. Instagram fetches each image from `media_base_url`, so the folder must be reachable from the internet.
-- **YouTube**: a Google Cloud project with the YouTube Data API, the `youtube.upload` scope, and a refresh token for your channel.
+- **YouTube**: a Google Cloud project with the YouTube Data API, the `youtube.upload` scope, and a refresh token for your channel. Set the app's OAuth consent screen to In production before you make the refresh token. In Testing the token lapses after 7 days, and a token made in Testing keeps that limit, so make a new one after the switch.
 
 ### Run it from cron
 
