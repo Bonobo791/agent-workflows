@@ -881,6 +881,15 @@ class FilmLookTest(unittest.TestCase):
         self.assertEqual(reel['writer_skills'], ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'])
         self.assertEqual(reel['review_skills'], ['openfilm-manual', 'short-form-video-script', 'reels-script'])
 
+    def test_reel_script_skill_list(self):
+        script = next(step for step in run.STEPS if step['id'] == '08-reel-script')
+        expected = ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']
+        self.assertEqual(script['writer_skills'], expected)
+        self.assertEqual(script['review_skills'], expected)
+        library = run.library_block(script['writer_skills'])
+        self.assertIn('--- BEGIN skill: heygen-video ---', library)
+        self.assertIn('Write for the ear.', library)
+
 
 class RecheckTest(unittest.TestCase):
     def setUp(self):
