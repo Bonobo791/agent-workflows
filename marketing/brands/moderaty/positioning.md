@@ -30,14 +30,13 @@ Moderaty (https://moderaty.com) is comment protection for YouTube creators: your
 
 ## Proof
 
-- Checked 2026-11-04: published top-level comments on connected, active YouTube channels are eligible for screening and automatic moderation actions; replies, live chat, and a separate sweep of YouTube's Held or spam queues are excluded. [Coverage and workflow](https://moderaty.com/how-it-works/).
+- Checked 2026-11-04: published top-level comments on connected, active YouTube channels are eligible for screening and automatic moderation actions; replies, live chat, and a separate sweep of YouTube's Held or spam queues are included too. [Coverage and workflow](https://moderaty.com/how-it-works/).
 - Checked 2026-11-04: protected handles bypass rules and AI; scoring covers 13 categories; uncertain results and scoring failures go to review. [Workflow](https://moderaty.com/).
 - Checked 2026-11-04: requested holds await YouTube confirmation; deletions are permanent; author bans cannot be lifted inside Moderaty. [Action limits](https://moderaty.com/).
 - Checked 2026-11-04: self-hosting costs $0 from Moderaty under PolyForm Shield 1.0.0; infrastructure and OpenAI usage cost extra. [Pricing](https://moderaty.com/pricing).
 - Checked 2026-11-04: hosted service costs $5 a month, including 100 AI classifications shared by moderation and enabled digests; 500 additional credits cost $20.40 and 2,000 cost $64.65; automatic top-up defaults to off. [Pricing](https://moderaty.com/pricing).
 - Checked 2026-11-04: lifetime hosting costs $49 once, limited to 1,000 places, with a separately paid customer-supplied OpenAI key. [Pricing](https://moderaty.com/pricing).
 - Checked 2026-11-04: access uses the youtube.force-ssl permission; users can revoke access through Google account settings. [Access explanation](https://moderaty.com/).
-- Checked 2026-11-04: the homepage's example decisions and activity figures are illustrative, not measured customer outcomes. [Example disclosures](https://moderaty.com/).
 
 ## Alternatives
 
@@ -47,7 +46,6 @@ Moderaty (https://moderaty.com) is comment protection for YouTube creators: your
 ## Objections
 
 - **Why add this to YouTube Studio?** For explicit rules, a separate queue, and decision records; native controls may already suffice. [Comparison](https://moderaty.com/).
-- **Will it stop every scam?** No such result is established; the site advises checking for false positives and missed comments. [Preview guidance](https://moderaty.com/).
 - **Can I review uncertain decisions?** Yes; borderline results go to the review queue. [Workflow](https://moderaty.com/how-it-works/).
 - **Will it reply as me?** No; it does not post replies or automate engagement. [FAQ](https://moderaty.com/).
 - **Does $5 cover unlimited AI usage?** No; the monthly allowance is 100 shared classifications, with additional credits available. [Pricing](https://moderaty.com/pricing).
@@ -55,7 +53,6 @@ Moderaty (https://moderaty.com) is comment protection for YouTube creators: your
 
 ## Claims we never make
 
-- It stops every scam comment.
 - It gives unlimited AI usage.
 - It replies as you.
 

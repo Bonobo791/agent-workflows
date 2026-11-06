@@ -6,7 +6,7 @@ The program has already checked the items listed under Checked. Do not report th
 
 Checked:
 - openfilm look accepts film.html before the reel renders; a problem it reports goes back to the writer as a revision, so it does not reach the frames you review. openfilm render makes the reel, and a failed render stops the run before the reviewer sees the frames.
-- The program checked that each presenter clip is referenced at its at value in presenter.json, and that p1 starts at 0.
+- The program checked that the presenter video is referenced at its at value in presenter.json, and that it starts at 0.
 
 Blocking findings:
 - Headline text that names a product or feature instead of the reader's problem.

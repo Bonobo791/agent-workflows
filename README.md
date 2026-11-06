@@ -19,7 +19,7 @@ Nothing is published unless the task has `## Publish to` and you approve step 09
 3. `03-article`: the SEO article. Each H2 delivers only its Adds line from the brief. It links only to the pages listed in `pages.md`. After the normal review, the same reviewer session reviews the article a second time, separately, against the `plan-seo-geo-growth` skill. That skill is read from `~/.config/agent-workflows/private/skills/plan-seo-geo-growth/SKILL.md`, not from the repo. Its reference files are not sent, so the review uses the skill's `SKILL.md` only.
 4. `04-linkedin`, `05-x`, `06-instagram`: the social posts (if Deliverables has `social`). Each draft has a `## Hooks` section with three hooks from three different reader problems. The checks and the final package leave `## Hooks` out
 5. `07-images`: three still images (if Deliverables has `images`)
-6. `08-reel-script` and `08-reel`: a 30-second vertical video with a HeyGen presenter (if Deliverables has `reel`). You approve the script first; only then are the presenter clips rendered and the film made
+6. `08-reel-script` and `08-reel`: a 30-second vertical video with a HeyGen presenter (if Deliverables has `reel`). You approve the script first; only then are the presenter video rendered and the film made
 7. `09-publish`: shows every post exactly as it will go out, and queues them when you approve (only if the task has `## Publish to`)
 
 `article` is always made. `images` and `reel` need `social` in Deliverables.
@@ -32,6 +32,7 @@ python3 marketing/run.py new mc-32 --issue MC-32         # create a campaign fro
 python3 marketing/run.py new mc-32 --issue MC-32 --issue-file issue.json  # the same, from a saved copy of the issue (the headless import cannot reach It's a Plan)
 python3 marketing/run.py new spring-launch my-task.md    # or from a task file
 python3 marketing/run.py run mc-32                       # run; stops at every step for your decision
+python3 marketing/run.py run mc-32 --from 08-reel-script  # resume at a step; the steps before it must be approved
 python3 marketing/run.py status mc-32                    # where it is, and the tokens each step used
 ```
 
@@ -99,7 +100,7 @@ Each brand has a folder, `marketing/brands/<brand>/`, with five files. Every cam
 - `voice.md`: how the brand sounds.
 - `positioning.md`: what the product sells, to whom, the reader problems, the proof and the alternatives.
 - `pages.md`: the pages the article may link to.
-- `character.md`: the reel presenter's name, personality, three to five sample lines, HeyGen avatar and voice ids, what they do and don't do on camera, and the disclosure line. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
+- `character.md`: the reel presenter's name, personality, HeyGen avatar and voice ids, and what they do and don't do on camera. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
 
 Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. `character.md` is needed only for reels. Replace each `Template note:` line with your text. A run stops before any model call if a file is missing or still has a template note.
 

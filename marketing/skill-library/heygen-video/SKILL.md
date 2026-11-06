@@ -1,20 +1,38 @@
-Excerpt from HeyGen's official heygen-video skill (github.com/heygen-com/skills: heygen-video/SKILL.md and references/prompt-craft.md, version 3.2.0, MIT license), read 2026-11-05. Only the script-writing rules are kept. The Video Agent prompt, asset routing and API steps are left out: this workflow renders each line word for word with the HeyGen avatar API, so the presenter says exactly what is written.
+> Trimmed from HeyGen's official heygen-video skill (github.com/heygen-com/skills, version 3.2.0, MIT license, see LICENSE in this folder), copied 2026-11-06, to the parts on making social video content: hooks, script structure, voice, on-screen text and orientation. The Video Agent workflow and the multi-scene material were removed. The owner may replace this file.
 
-# heygen-video: writing the presenter's script
+---
+name: heygen-video
+description: Social video craft for HeyGen presenter videos: hooks, script structure, voice and on-screen text for short vertical reels.
+---
 
-Voice:
-- "Write for the ear. Short sentences. Active voice. Contractions are good."
-- "If you wouldn't say it to a friend, rewrite it."
+# Social video craft
 
-Shape:
-- "Front-load the hook. First 5s = 80% of retention."
-- "One idea per video. Single-topic produces dramatically better results."
-- Order the content by the video's type:
-  - Product demo: Hook, Problem, Solution, CTA
-  - Explainer: Context, Core concept, Takeaway
-  - Tutorial: What we'll build, Steps, Recap
-  - Sales pitch: Pain, Vision, Product, CTA
-  - Announcement: Hook, What changed, Why it matters, Next
+## Hook
 
-Timing:
-- Don't give lines durations or timestamps. HeyGen's own research found that per-scene timestamps make delivery robotic.
+Front-load the hook. The first 5 seconds carry about 80% of retention. Open on the reader's problem or a concrete moment, not on the product.
+
+## Structure
+
+Pick the structure that fits the video, and keep it one continuous piece of speech:
+
+- Product demo: Hook → Problem → Solution → CTA
+- Explainer: Context → Core concept → Takeaway
+- Tutorial: What we'll build → Steps → Recap
+- Sales pitch: Pain → Vision → Product → CTA
+- Announcement: Hook → What changed → Why it matters → Next
+
+## One idea
+
+One idea per video. A single topic produces dramatically better results than several.
+
+## Voice
+
+Write for the ear. Short sentences. Active voice. Contractions are good. If you wouldn't say it to a friend, rewrite it.
+
+## On-screen text
+
+Every literal on-screen element (numbers, quotes, handles, URLs, calls to action) is kept exactly as written.
+
+## Orientation
+
+Reels, TikTok and Shorts are portrait, 9:16.

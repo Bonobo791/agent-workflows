@@ -3,23 +3,25 @@
 The program has already checked the items listed under Checked. Do not report those.
 
 Checked:
-- Every line is 25 words or fewer, and the whole script is at most 2.5 words per second of the reel length.
-- No line is an internal process line.
-- No line uses a hedge word: may, might, describes, positions, offers, various.
+- The whole script is at most 2.5 words per second of the reel length.
+- No internal process line.
+- No hedge word: may, might, describes, positions, offers, various.
 - No banned phrase, no contrast ("X, not Y", "not X, it's Y", "rather than"), and no more than three sentences start with the same two words.
-- The last presenter line ends with "Link in bio" (a final period is allowed).
+- The script never says "Link in bio".
+- The brand is written "Moderahtee", one word with no dashes, and never "Moderaty".
 
-Judge the script as the character speaking to a viewer scrolling a busy feed.
+Judge the script as the character speaking to a viewer scrolling a busy feed, in one continuous take.
 
 Blocking findings:
-- The first line does not name a moment, a number or a mistake the reader recognises.
+- The first sentence does not name a moment, a number or a mistake the reader recognises.
 - A fact the brief's Facts section does not state, or a claim that Claims we never make in positioning.md excludes.
 - No single idea, or no clear action for the reader.
 - A line the character would not say aloud.
+- The script is split into scenes, parts or separate segments.
 - Any em dash.
 
 Minor findings:
 - Pacing and word choice.
-- A line that doesn't sound like the Sample lines.
+- Wording that doesn't sound like the moderaty-voice skill.
 
-Name the line (for example p2) in every finding. Pass only when there are no blocking findings.
+Quote the sentence in every finding. Pass only when there are no blocking findings.

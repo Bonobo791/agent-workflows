@@ -55,8 +55,8 @@ run.CAMPAIGNS_DIR = Path(tempfile.mkdtemp()) / 'campaigns'
 
 
 CHARACTER_TEXT = '# Character: demo\n\n' + '\n'.join(f'## {heading}\n{body}\n' for heading, body in [
-    ('Name', 'Ada'), ('Personality', 'Calm.\nDirect.\nNever preachy.'), ('Sample lines', 'Line one.\nLine two.\nLine three.'), ('Avatar id', 'avatar-1'), ('Voice id', 'voice-1'),
-    ('Do', 'Speak to the viewer.'), ("Don't", 'Never joke about threats.'), ('Disclosure', 'The presenter is an AI avatar.')])
+    ('Name', 'Ada'), ('Personality', 'Calm.\nDirect.\nNever preachy.'), ('Avatar id', 'avatar-1'), ('Voice id', 'voice-1'),
+    ('Do', 'Speak to the viewer.'), ("Don't", 'Never joke about threats.')])
 
 
 def write_brand(name, **files):
@@ -303,6 +303,20 @@ class RunTest(unittest.TestCase):
         fresh = FakeClient([])
         run.write(fresh, ROLES, self.skills, self.campaign, step, step_dir, None)
         self.assertEqual(len(fresh.prompts), 3)  # a new draft and both passes
+
+    def test_from_resumes_at_a_step_and_leaves_earlier_stale_approvals_alone(self):
+        folder = self.campaign / '01-brief'
+        folder.mkdir()
+        (folder / 'output.md').write_text('brief')
+        (folder / 'APPROVED').write_text('2026-11-01 10:00\nfingerprint: 0000\n')  # approved under older rules
+        client = FakeClient(['pass'])
+        run.run_campaign(self.campaign, client, ask=answers('a'), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, start_at='02-article')
+        self.assertEqual(len(client.prompts), 2)  # 02-article's draft and its review; 01-brief is not run again
+        self.assertTrue((self.campaign / '02-article' / 'APPROVED').is_file())
+
+    def test_from_needs_the_earlier_steps_approved(self):
+        with self.assertRaisesRegex(run.WorkflowError, 'needs these steps approved first: 01-brief'):
+            run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, start_at='02-article')
 
     def test_approving_every_step_builds_final_package(self):
         client = FakeClient(['pass', 'pass'])
@@ -940,8 +954,8 @@ class FilmLookTest(unittest.TestCase):
     def test_look_problems_become_check_errors(self):
         client = FakeClient(['pass'], writer_outputs=[self.projects(), self.projects()])
         self.run_images(client, look_failures=1)
-        self.assertEqual(len(client.prompts), 4)  # writer, one skill pass, one rewrite with the problems, reviewer
-        revision = client.prompts[2]
+        self.assertEqual(len(client.prompts), 5)  # writer, two skill passes, one rewrite with the problems, reviewer
+        revision = client.prompts[3]
         for problem in ['film.html:9: style is not an attribute of a track',
                         'film.html:10: <iframe src="scenes/card.html#t=0,3">: position would move the clip',
                         'film.html:10: <iframe src="scenes/card.html#t=0,3">: display would move the clip']:
@@ -951,19 +965,20 @@ class FilmLookTest(unittest.TestCase):
         client = FakeClient([], writer_outputs=[self.projects(), self.projects()])
         with self.assertRaisesRegex(run.WorkflowError, 'film.html has 3 problems') as caught:
             self.run_images(client, look_failures=99)
-        self.assertEqual(len(client.prompts), 3)  # writer, one skill pass, one rewrite; no reviewer call after the second failure
+        self.assertEqual(len(client.prompts), 4)  # writer, two skill passes, one rewrite; no reviewer call after the second failure
         self.assertIn('stderr:', str(caught.exception))
 
     def test_single_look_problem_becomes_check_error(self):
         client = FakeClient(['pass'], writer_outputs=[self.projects(), self.projects()])
         self.run_images(client, look_failures=1, look_stdout='✗ film.html:10: position would move the clip')
-        self.assertEqual(len(client.prompts), 4)  # writer, one skill pass, one rewrite with one problem, reviewer
-        self.assertEqual(client.prompts[2].count('[blocking]'), 1)
-        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[2])
+        self.assertEqual(len(client.prompts), 5)  # writer, two skill passes, one rewrite with one problem, reviewer
+        self.assertEqual(client.prompts[3].count('[blocking]'), 1)
+        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[3])
 
     def test_skills_ban_clip_position(self):
-        line = "A clip's style places it only with left, top, width, height and rotate. Never put position, display, inset, right, bottom, margin, transform, translate, scale, z-index, visibility, animation or transition in a clip's style."
-        for step in ['images', 'reel']:
+        lines = {'images': "A clip's style places it only with left, top, width, height and rotate. Never put position, display, inset, right, bottom, margin, transform, translate, scale, z-index, visibility, animation or transition in a clip's style.",
+                 'reel': "The presenter video's style places it only with left, top, width, height and rotate. Never put position, display, inset, right, bottom, margin, transform, translate, scale, z-index, visibility, animation or transition in its style."}
+        for step, line in lines.items():
             with self.subTest(step=step):
                 self.assertIn(line, (run.SKILLS_DIR / step / 'SKILL.md').read_text())
 
@@ -971,23 +986,23 @@ class FilmLookTest(unittest.TestCase):
         client = FakeClient([], writer_outputs=[self.projects(), self.projects()])
         with self.assertRaises(run.WorkflowError):
             self.run_images(client, look_failures=99, look_stdout='segmentation fault')
-        self.assertEqual(len(client.prompts), 2)  # writer and one skill pass; the look fails before any rewrite
+        self.assertEqual(len(client.prompts), 3)  # writer and two skill passes; the look fails before any rewrite
 
     def test_video_steps_load_openfilm_manual(self):
         images = next(step for step in run.STEPS if step['id'] == '07-images')
-        self.assertEqual(images['writer_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics'])
-        self.assertEqual(images['review_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics'])
+        self.assertEqual(images['writer_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics', 'moderaty-voice'])
+        self.assertEqual(images['review_skills'], ['openfilm-manual', 'quote-cards-and-text-graphics', 'moderaty-voice'])
         self.assertTrue((run.LIBRARY_DIR / 'openfilm-manual' / 'SKILL.md').is_file())
 
     def test_reel_skill_list(self):
         reel = next(step for step in run.STEPS if step['id'] == '08-reel')
-        self.assertEqual(reel['writer_skills'], ['openfilm-manual', 'motion-graphics', 'instagram-reels-publishing'])
-        self.assertEqual(reel['review_skills'], ['openfilm-manual', 'instagram-reels-publishing'])
+        self.assertEqual(reel['writer_skills'], ['openfilm-manual', 'motion-graphics', 'instagram-reels-publishing', 'moderaty-voice'])
+        self.assertEqual(reel['review_skills'], ['openfilm-manual', 'instagram-reels-publishing', 'moderaty-voice'])
 
     def test_reel_script_skill_list(self):
         script = next(step for step in run.STEPS if step['id'] == '08-reel-script')
-        expected = ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']
-        self.assertEqual(script['writer_skills'], expected + ['moderaty-voice', 'stop-slop'])  # the voice pass, then stop-slop again as the last pass
+        expected = ['hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']
+        self.assertEqual(script['writer_skills'], expected + ['moderaty-voice'])  # the voice pass is last
         self.assertEqual(script['review_skills'], expected + ['moderaty-voice'])
         library = run.library_block(script['writer_skills'])
         self.assertIn('--- BEGIN skill: heygen-video ---', library)
@@ -1085,7 +1100,7 @@ class ReviewRulesInPromptTest(unittest.TestCase):
         self.assertEqual(notes, 'first note\nsecond note')
 
 
-CHARACTER = {'name': 'Ada', 'avatar_id': 'avatar-1', 'voice_id': 'voice-1', 'disclosure': 'The presenter is an AI avatar.'}
+CHARACTER = {'name': 'Ada', 'avatar_id': 'avatar-1', 'voice_id': 'voice-1', }
 SCRIPT_LINES = ['First line.', 'Second line.', 'Third line.']
 
 
@@ -1126,7 +1141,7 @@ class HeyGenReelTest(unittest.TestCase):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
         (campaign / '08-reel-script').mkdir(parents=True)
         (campaign / '08-reel-script' / 'script.json').write_text(json.dumps(
-            {'presenter': 'Ada', 'lines': [{'id': f'p{n}', 'text': text} for n, text in enumerate(lines, 1)], 'notes': ''}))
+            {'presenter': 'Ada', 'script': ' '.join(lines), 'notes': ''}))
         (campaign / '00-task.md').write_text(task_text('article, social, images, reel', brand=brand))
         step_dir = campaign / '08-reel'
         step_dir.mkdir()
@@ -1153,18 +1168,17 @@ class HeyGenReelTest(unittest.TestCase):
                     with self.assertRaisesRegex(run.WorkflowError, expected):
                         run.run_campaign(campaign, FakeClient([]), ask=answers(), steps=[script, reel], skills_dir=run.SKILLS_DIR, roles=ROLES)
 
-    def test_script_checks_line_length_and_total(self):
-        def script(*lines):
-            return '# Reel script\n\nPresenter: Ada\n\n' + '\n'.join(f'- p{n}: {text}' for n, text in enumerate(lines, 1)) + '\n\n## Notes\n\nNone.\n'
-        long_line = script(' '.join(['word'] * 26))
-        self.assertIn('line p1 has 26 words; the limit is 25', run.check_reel_script(long_line, '', None))
+    def test_script_checks_the_whole_length(self):
+        def script(text):
+            return f'# Reel script\n\nPresenter: Ada\n\n## Script\n\n{text}\n\n## Notes\n\nNone.\n'
         twenty = ' '.join(['word'] * 20)
-        self.assertIn('the script has 80 words; the limit for a 30 s reel is 75', run.check_reel_script(script(twenty, twenty, twenty, twenty), '', None))
-        self.assertEqual(run.check_reel_script(script(' '.join(['word'] * 25), twenty, twenty + ' Link in bio'), '', None), [])
+        self.assertIn('the script has 80 words; the limit for a 30 s reel is 75', run.check_reel_script(script(' '.join([twenty] * 4)), '', None))
+        self.assertEqual(run.check_reel_script(script(' '.join([twenty] * 3)), '', None), [])
+        self.assertTrue(any('never have the script say "Link in bio"' in e for e in run.check_reel_script(script(twenty + ' Link in bio.'), '', None)))
 
     def test_no_render_before_script_approval(self):
         campaign, _ = self.make_campaign()
-        script_text = json.dumps({'presenter': 'Ada', 'lines': [{'id': 'p1', 'text': 'First line. Link in bio.'}], 'notes': ''})
+        script_text = json.dumps({'presenter': 'Ada', 'script': 'First line. Thanks.', 'notes': ''})
         script = dict(next(step for step in run.STEPS if step['id'] == '08-reel-script'), inputs=[], review_inputs=[])
         reel = dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
         fake = FakeHeyGen()
@@ -1175,32 +1189,42 @@ class HeyGenReelTest(unittest.TestCase):
         self.assertEqual(render.call_count, 0)
         self.assertEqual(fake.created, [])
 
-    def test_render_cache_skips_unchanged_lines(self):
+    def test_render_cache_reuses_the_presenter_video(self):
         campaign, step_dir = self.make_campaign()
         fake = FakeHeyGen()
         with self.heygen(fake):
             run.render_presenter(campaign, step_dir, CHARACTER)
-            self.assertEqual(len(fake.created), 3)
+            self.assertEqual(len(fake.created), 1)
             run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(len(fake.created), 3)  # the second pass reuses every render
+        self.assertEqual(len(fake.created), 1)  # the second pass reuses the render
 
-    def test_presenter_at_values_are_cumulative(self):
+    def test_subtitles_show_the_written_brand_name(self):
+        campaign, step_dir = self.make_campaign(lines=['Meet Moderahtee.'])
+        fake = FakeHeyGen(durations=(2.0,))
+        fake.SRT = '1\n00:00:01,000 --> 00:00:03,000\nMeet Moderahtee.\n'
+        with self.heygen(fake):
+            run.render_presenter(campaign, step_dir, CHARACTER)
+        vtt = (step_dir / 'assets' / 'presenter.vtt').read_text(encoding='utf-8')
+        self.assertIn('Meet Moderaty.', vtt)
+        self.assertNotIn('Moderahtee', vtt)
+
+    def test_presenter_is_one_video_at_zero(self):
         campaign, step_dir = self.make_campaign()
-        with self.heygen(FakeHeyGen(durations=(3.0, 4.5, 2.0))):
+        with self.heygen(FakeHeyGen(durations=(7.5,))):
             run.render_presenter(campaign, step_dir, CHARACTER)
         presenter = json.loads((step_dir / 'presenter.json').read_text())
-        self.assertEqual([clip['at'] for clip in presenter], [0.0, 3.0, 7.5])
-        self.assertEqual([clip['id'] for clip in presenter], ['p1', 'p2', 'p3'])
-        self.assertTrue((step_dir / 'assets' / 'p2.mp4').is_file())
-        self.assertTrue((step_dir / 'assets' / 'p2.vtt').is_file())
+        self.assertEqual([clip['at'] for clip in presenter], [0.0])
+        self.assertEqual([clip['id'] for clip in presenter], ['presenter'])
+        self.assertTrue((step_dir / 'assets' / 'presenter.mp4').is_file())
+        self.assertTrue((step_dir / 'assets' / 'presenter.vtt').is_file())
 
-    def test_presenter_total_over_the_reel_length_stops_with_the_commands(self):
+    def test_presenter_video_over_the_reel_length_stops_with_the_commands(self):
         campaign, step_dir = self.make_campaign()
-        with self.heygen(FakeHeyGen(durations=(12.0, 12.0, 12.0))):
+        with self.heygen(FakeHeyGen(durations=(40.0,))):
             with self.assertRaises(run.WorkflowError) as caught:
                 run.render_presenter(campaign, step_dir, CHARACTER)
         message = str(caught.exception)
-        self.assertIn('the presenter clips total 36.0 s; the reel limit is 30 s', message)
+        self.assertIn('the presenter video is 40.0 s; the reel limit is 30 s', message)
         self.assertIn(f"rm -r {campaign / '08-reel-script'} {step_dir}", message)
         self.assertFalse((step_dir / 'presenter.json').exists())
 
@@ -1218,7 +1242,7 @@ class HeyGenReelTest(unittest.TestCase):
     def test_failed_render_removes_the_pending_record(self):
         campaign, step_dir = self.make_campaign(lines=['First line.'])
         with self.heygen(FakeHeyGen(durations=(2.0,), failing='First line.')):
-            with self.assertRaisesRegex(run.HeyGenError, 'failed'):
+            with self.assertRaisesRegex(run.HeyGenError, 'render of the presenter video failed'):
                 run.render_presenter(campaign, step_dir, CHARACTER)
         self.assertEqual(list((campaign.parent / '.heygen-cache').glob('*.pending.json')), [])
 
@@ -1232,41 +1256,41 @@ class HeyGenReelTest(unittest.TestCase):
             os.environ.pop('HEYGEN_API_KEY', None)
             run.run_campaign(campaign, FakeClient([]), ask=answers(), steps=[reel], skills_dir=run.SKILLS_DIR, roles=ROLES)
 
-    def test_deleting_the_reel_step_reuses_its_clips(self):
+    def test_deleting_the_reel_step_reuses_the_video(self):
         campaign, step_dir = self.make_campaign()
         fake = FakeHeyGen()
         with self.heygen(fake):
             run.render_presenter(campaign, step_dir, CHARACTER)
-            self.assertEqual(len(fake.created), 3)
+            self.assertEqual(len(fake.created), 1)
             shutil.rmtree(step_dir)
             step_dir.mkdir()
             run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(len(fake.created), 3)  # every line was cached, so the rerun made no HeyGen call
+        self.assertEqual(len(fake.created), 1)  # the script was cached, so the rerun made no HeyGen call
         self.assertTrue((step_dir / 'presenter.json').is_file())
 
-    def test_only_a_changed_line_is_rendered_again(self):
+    def test_a_changed_script_is_rendered_again(self):
         campaign, step_dir = self.make_campaign()
         fake = FakeHeyGen()
         with self.heygen(fake):
             run.render_presenter(campaign, step_dir, CHARACTER)
             script = campaign / '08-reel-script' / 'script.json'
             data = json.loads(script.read_text())
-            data['lines'][1]['text'] = 'A new second line.'
+            data['script'] = 'A new script. Thanks.'
             script.write_text(json.dumps(data))
             run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(len(fake.created), 4)  # one new video, for the changed line only
+        self.assertEqual(len(fake.created), 2)  # one new video, for the changed script
 
     def test_failed_render_stops_with_response(self):
         campaign, step_dir = self.make_campaign()
-        with self.heygen(FakeHeyGen(failing='Second line.')):
-            with self.assertRaisesRegex(run.HeyGenError, 'HeyGen render of p2 failed') as caught:
+        with self.heygen(FakeHeyGen(failing=' '.join(SCRIPT_LINES))):
+            with self.assertRaisesRegex(run.HeyGenError, 'render of the presenter video failed') as caught:
                 run.render_presenter(campaign, step_dir, CHARACTER)
         self.assertIn('avatar unavailable', str(caught.exception))
 
-    def test_missing_subtitle_names_the_clip(self):
+    def test_missing_subtitle_names_the_presenter_video(self):
         campaign, step_dir = self.make_campaign()
-        with self.heygen(FakeHeyGen(missing_subtitle='Second line.')):
-            with self.assertRaisesRegex(run.WorkflowError, 'clip p2'):
+        with self.heygen(FakeHeyGen(missing_subtitle=' '.join(SCRIPT_LINES))):
+            with self.assertRaisesRegex(run.WorkflowError, 'without a subtitle_url'):
                 run.render_presenter(campaign, step_dir, CHARACTER)
 
     def test_srt_converts_to_vtt(self):
@@ -1277,10 +1301,10 @@ class HeyGenReelTest(unittest.TestCase):
         self.assertNotIn('\n1\n', vtt)
 
     def test_presenter_on_screen_in_first_two_seconds(self):
-        presenter = [{'id': 'p1', 'at': 0.0}]
-        late = [{'path': 'film.html', 'content': '<video src="assets/p1.mp4" at="3">'}]
+        presenter = [{'id': 'presenter', 'at': 0.0}]
+        late = [{'path': 'film.html', 'content': '<video src="assets/presenter.mp4" at="3">'}]
         self.assertTrue(any('must be on screen in the first 2 seconds' in e for e in run.presenter_film_errors(late, presenter)))
-        early = [{'path': 'film.html', 'content': '<video src="assets/p1.mp4" at="0">'}]
+        early = [{'path': 'film.html', 'content': '<video src="assets/presenter.mp4" at="0">'}]
         self.assertEqual(run.presenter_film_errors(early, presenter), [])
 
     def film_tool(self, calls=None, look_failures=0):
@@ -1311,8 +1335,8 @@ class HeyGenReelTest(unittest.TestCase):
             raise AssertionError(f'unexpected tool: {args}')
         return fake
 
-    def film(self, at_values):
-        clips = ''.join(f'<video src="assets/p{n}.mp4" at="{at}"></video>' for n, at in enumerate(at_values, 1))
+    def film(self, at):
+        clips = f'<video src="assets/presenter.mp4" at="{at}"></video>'
         html = f'<!doctype html><html><head><meta name="viewport" content="width=1080, height=1920"></head><body><section>{clips}</section></body></html>'
         return json.dumps({'files': [{'path': 'film.html', 'content': html}], 'notes': 'Film notes.'})
 
@@ -1322,12 +1346,12 @@ class HeyGenReelTest(unittest.TestCase):
     def test_reel_film_flow_reaches_the_owner(self):
         campaign, step_dir = self.make_campaign()
         fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
-        client = FakeClient(['pass'], writer_outputs=[self.film((0.0, 2.0, 4.0))])
+        client = FakeClient(['pass'], writer_outputs=[self.film(0.0)])
         with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
             run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
         self.assertTrue((step_dir / 'APPROVED').is_file())
         self.assertTrue((step_dir / 'reel.mp4').is_file())
-        self.assertIn('The presenter is an AI avatar.', (step_dir / 'output.md').read_text())
+        self.assertNotIn('AI avatar', (step_dir / 'output.md').read_text())  # no disclosure is ever added
 
     def test_the_reel_writer_is_prompted_after_the_presenter_clips_exist(self):
         campaign, step_dir = self.make_campaign()
@@ -1345,44 +1369,44 @@ class HeyGenReelTest(unittest.TestCase):
     def test_film_with_the_wrong_presenter_time_goes_back_once(self):
         campaign, step_dir = self.make_campaign()
         fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
-        client = FakeClient(['pass'], writer_outputs=[self.film((0.0, 3.0, 4.0)), self.film((0.0, 2.0, 4.0))])
+        client = FakeClient(['pass'], writer_outputs=[self.film(3.0), self.film(0.0)])
         with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
             run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
-        self.assertEqual(len(client.prompts), 5)  # writer, two skill passes, one rewrite with the timing problem, reviewer
-        self.assertIn('[blocking] assets/p2.mp4 must start at 2.0 s', client.prompts[3])
-        self.assertEqual(len(fake.created), 3)  # the rewrite reused every render
+        self.assertEqual(len(client.prompts), 6)  # writer, three skill passes, one rewrite with the timing problem, reviewer
+        self.assertIn('[blocking] assets/presenter.mp4 must start at 0.0 s', client.prompts[4])
+        self.assertEqual(len(fake.created), 1)  # the rewrite reused the render
 
     def test_reel_looks_before_render(self):
         campaign, step_dir = self.make_campaign()
         fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
         calls = []
-        client = FakeClient(['pass'], writer_outputs=[self.film((0.0, 2.0, 4.0)), self.film((0.0, 2.0, 4.0))])
+        client = FakeClient(['pass'], writer_outputs=[self.film(0.0), self.film(0.0)])
         with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=1)):
             run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
         self.assertEqual(calls, ['look', 'look', 'render --subtitles'])  # the failed look stops before the render
-        self.assertEqual(len(client.prompts), 5)  # writer, two skill passes, one rewrite with the look problem, reviewer
-        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[3])
+        self.assertEqual(len(client.prompts), 6)  # writer, three skill passes, one rewrite with the look problem, reviewer
+        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[4])
         self.assertTrue((step_dir / 'APPROVED').is_file())
 
     def test_reel_look_still_failing_stops(self):
         campaign, step_dir = self.make_campaign()
         fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
         calls = []
-        client = FakeClient([], writer_outputs=[self.film((0.0, 2.0, 4.0)), self.film((0.0, 2.0, 4.0))])
+        client = FakeClient([], writer_outputs=[self.film(0.0), self.film(0.0)])
         with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=2)):
             with self.assertRaisesRegex(run.WorkflowError, 'film.html:10') as caught:
                 run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
         self.assertEqual(calls, ['look', 'look'])  # no render
         self.assertIn('stdout:', str(caught.exception))
         self.assertIn('stderr:', str(caught.exception))
-        self.assertEqual(len(client.prompts), 4)  # writer, two skill passes, one rewrite; no reviewer call after the second failure
+        self.assertEqual(len(client.prompts), 5)  # writer, three skill passes, one rewrite; no reviewer call after the second failure
 
     def test_final_package_has_the_ai_label_line(self):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
         (campaign / '08-reel').mkdir(parents=True)
         (campaign / '08-reel' / 'output.md').write_text('# Reel\n')
         final = run.build_final(campaign, [{'id': '08-reel'}])
-        self.assertIn('Before posting the reel, turn on "Label as made with AI" in Instagram.', (final / 'index.md').read_text())
+        self.assertNotIn('Label as made with AI', (final / 'index.md').read_text())  # the label is set on the platform, never in the package
 
     def test_heygen_lists_page_through_items(self):
         pages = [{'data': [{'id': 'a'}], 'has_more': True, 'next_token': 't1'}, {'data': [{'id': 'b'}], 'has_more': False}]
@@ -1501,6 +1525,21 @@ class LibraryTest(unittest.TestCase):
             run.run_campaign(self.campaign, client, ask=answers(), steps=[step], skills_dir=self.skills, roles=ROLES)
         self.assertEqual(client.prompts, [])
 
+    def test_copy_steps_get_the_no_disclaimer_rule_and_writers_never_see_the_claims_list(self):
+        for step_id in ('03-article', '04-linkedin', '05-x', '06-instagram', '08-reel-script'):
+            step = next(s for s in run.STEPS if s['id'] == step_id)
+            self.assertTrue(run.is_copy_step(step), step_id)
+            self.assertNotIn(run.CLAIMS_INPUT, step['inputs'], step_id)  # the writer does not see the list
+            self.assertIn(run.CLAIMS_INPUT, step['review_inputs'], step_id)  # the reviewer still checks claims against it
+            self.assertIn(run.COPY_RULE, run.skill_pass_prompt(step, 'moderaty-voice', 2, []), step_id)
+            self.assertIn('never ask for a disclaimer', run.COPY_REVIEW_RULE)  # the review blocks disclaimers and never asks for one
+            self.assertIn('Never add a disclaimer', run.COPY_RULE)
+            self.assertIn('MUST be conversational', run.COPY_RULE)
+            self.assertIn('dry, stiff, formal or corporate', run.COPY_REVIEW_RULE)
+        sources = next(s for s in run.STEPS if s['id'] == '01-sources')
+        self.assertFalse(run.is_copy_step(sources))
+        self.assertNotIn(run.COPY_RULE, run.skill_pass_prompt(sources, 'content-research-and-sourcing', 2, []))
+
     def test_social_steps_share_the_longest_prefix(self):
         for step_id, text in (('02-brief', '## Angle\nA reader problem.\n## Keywords\nkeyword\n## Reader problems\n- A problem https://example.com (checked 2026-11-04)\n## Facts\n- A fact https://example.com (checked 2026-11-03)\n## Channel ideas\nIdea.\n'),
                               ('03-article', '# Title\n## One\nBody.\n')):
@@ -1510,8 +1549,8 @@ class LibraryTest(unittest.TestCase):
             (folder / 'APPROVED').write_text('done\n')
         social = [step for step in run.STEPS if step['id'] in ('04-linkedin', '05-x', '06-instagram')]
         prompts = [run.writer_prompt(run.SKILLS_DIR, self.campaign, step) for step in social]
-        self.assertIn('--- END skill: stop-slop ---', os.path.commonprefix(prompts))  # the first skill drafts; hook-writer comes in a later pass
-        self.assertNotIn('--- BEGIN skill: hook-writer ---', prompts[0])
+        self.assertIn('--- END skill: hook-writer ---', os.path.commonprefix(prompts))  # the first skill drafts; the voice pass comes last
+        self.assertNotIn('--- BEGIN skill: moderaty-voice ---', prompts[0])  # the voice comes in a later pass
 
 
 class LengthTest(unittest.TestCase):
@@ -1684,23 +1723,21 @@ class SkillFilesTest(unittest.TestCase):
 
 class NewRulesTest(unittest.TestCase):
     def script(self, *pairs):
-        return '# Reel script\n\nPresenter: Ada\n\n' + ''.join(f'- {line_id}: {text}\n' for line_id, text in pairs) + '\n## Notes\n\nNone.\n'
+        return '# Reel script\n\nPresenter: Ada\n\n## Script\n\n' + ' '.join(text for _, text in pairs) + '\n\n## Notes\n\nNone.\n'
 
-    def test_script_ids_must_be_p_numbers_in_order(self):
-        self.assertEqual(run.check_reel_script(self.script(('p1', 'One.'), ('p2', 'Two. Link in bio.')), '', None), [])
-        self.assertTrue(any('must look like p1' in e for e in run.check_reel_script(self.script(('../clip', 'One.')), '', None)))
-        self.assertTrue(any('in order' in e for e in run.check_reel_script(self.script(('p2', 'One.'), ('p1', 'Two.')), '', None)))
-        self.assertTrue(any('line x9 has 26 words' in e for e in run.check_reel_script(self.script(('x9', ' '.join(['word'] * 26))), '', None)))
+    def test_script_is_one_text_with_no_clip_ids(self):
+        self.assertEqual(run.check_reel_script(self.script(('p1', 'One.'), ('p2', 'Two. Thanks.')), '', None), [])
+
+    def test_the_brand_is_spoken_as_mod_der_ah_tee(self):
+        self.assertTrue(any('"Moderahtee", not "Moderaty"' in e for e in run.check_reel_script(self.script(('p1', 'Meet Moderaty. Thanks.')), '', None)))
+        self.assertTrue(any('one word with no dashes' in e for e in run.check_reel_script(self.script(('p1', 'Meet Mod-der-ah-tee. Thanks.')), '', None)))
+        self.assertTrue(any('one word with no dashes' in e for e in run.check_reel_script(self.script(('p1', 'Meet Mod der ah tee. Thanks.')), '', None)))
+        self.assertEqual(run.check_reel_script(self.script(('p1', 'Meet Moderahtee. Thanks.')), '', None), [])
 
     def test_rhythm_is_checked_across_the_script(self):
         lines = [('p1', 'The reader sees it first.'), ('p2', 'The reader saves it later.'),
                  ('p3', 'The reader shares it now.'), ('p4', 'The reader acts today.')]
         self.assertTrue(any('4 sentences start with "The reader"' in e for e in run.check_reel_script(self.script(*lines), '', None)))
-
-    def test_duplicate_script_ids_are_a_check_error_not_a_crash(self):
-        step_dir = Path(tempfile.mkdtemp())
-        run.materialize_script(step_dir, {'presenter': 'Ada', 'lines': [{'id': 'p1', 'text': 'One.'}, {'id': 'p1', 'text': 'Two.'}], 'notes': ''}, 'Ada')
-        self.assertTrue(any('in order' in e for e in run.check_reel_script((step_dir / 'output.md').read_text(), '', None)))
 
     def test_network_failures_become_heygen_errors_with_the_url(self):
         with mock.patch.dict(os.environ, {'HEYGEN_API_KEY': 'test-key'}), \
@@ -1761,26 +1798,25 @@ class ThreadFixesTest(unittest.TestCase):
         self.assertTrue(any('is empty' in e for e in run.adds_errors('- H2: One\n  - Adds:\n')))
         self.assertEqual(run.adds_errors('- H2: One\n  - Adds: The reader learns one thing.\n'), [])
 
-    def test_script_must_end_with_link_in_bio(self):
+    def test_script_never_says_link_in_bio(self):
         def script(*pairs):
-            return '# Reel script\n\nPresenter: Ada\n\n' + ''.join(f'- {line_id}: {text}\n' for line_id, text in pairs) + '\n## Notes\n\nNone.\n'
-        self.assertEqual(run.check_reel_script(script(('p1', 'Hello there.'), ('p2', 'Tap the link. Link in bio.')), '', None), [])
-        self.assertTrue(any('must end with "Link in bio"' in e
-                            for e in run.check_reel_script(script(('p1', 'Link in bio'), ('p2', 'Hello there.')), '', None)))
-
-    def test_presenter_clips_count_only_in_film_html(self):
-        presenter = [{'id': 'p1', 'at': 0.0}]
-        commented = [{'path': 'film.html', 'content': '<section><!-- <video src="assets/p1.mp4" at="0"></video> --></section>'}]
+            return '# Reel script\n\nPresenter: Ada\n\n## Script\n\n' + ' '.join(text for _, text in pairs) + '\n\n## Notes\n\nNone.\n'
+        self.assertEqual(run.check_reel_script(script(('p1', 'Hello there.'), ('p2', 'Tap the link now.')), '', None), [])
+        self.assertTrue(any('never have the script say "Link in bio"' in e
+                            for e in run.check_reel_script(script(('p1', 'Hello there.'), ('p2', 'Link in bio')), '', None)))
+    def test_presenter_video_counts_only_in_film_html(self):
+        presenter = [{'id': 'presenter', 'at': 0.0}]
+        commented = [{'path': 'film.html', 'content': '<section><!-- <video src="assets/presenter.mp4" at="0"></video> --></section>'}]
         self.assertTrue(run.presenter_film_errors(commented, presenter))
         elsewhere = [{'path': 'film.html', 'content': '<section></section>'},
-                     {'path': 'scenes/hook.html', 'content': '<video src="assets/p1.mp4" at="0"></video>'}]
+                     {'path': 'scenes/hook.html', 'content': '<video src="assets/presenter.mp4" at="0"></video>'}]
         self.assertTrue(run.presenter_film_errors(elsewhere, presenter))
-        shown = [{'path': 'film.html', 'content': '<section><video src="assets/p1.mp4" at="0"></video></section>'}]
+        shown = [{'path': 'film.html', 'content': '<section><video src="assets/presenter.mp4" at="0"></video></section>'}]
         self.assertEqual(run.presenter_film_errors(shown, presenter), [])
 
     def test_script_takes_the_presenter_name_from_character_md(self):
         step_dir = Path(tempfile.mkdtemp())
-        run.materialize_script(step_dir, {'presenter': 'Someone else', 'lines': [{'id': 'p1', 'text': 'One.'}], 'notes': ''}, 'Ada')
+        run.materialize_script(step_dir, {'presenter': 'Someone else', 'script': 'One.', 'notes': ''}, 'Ada')
         self.assertIn('Presenter: Ada', (step_dir / 'output.md').read_text())
         self.assertEqual(json.loads((step_dir / 'script.json').read_text())['presenter'], 'Ada')
 
@@ -1966,6 +2002,8 @@ class ClaudeCallTest(unittest.TestCase):
             run.check_tools(FakeClient([], help_text=FAKE_HELP.replace('xhigh, ', '')), run.ROLES)
         with self.assertRaisesRegex(run.WorkflowError, 'has no --session-id'):
             run.check_tools(FakeClient([], help_text=FAKE_HELP.replace('--session-id', '--sid')), run.ROLES)
+        with self.assertRaisesRegex(run.WorkflowError, 'has no --verbose'):
+            run.check_tools(FakeClient([], help_text=FAKE_HELP.replace('--verbose', '--vrb')), run.ROLES)
         run.check_tools(FakeClient([]), run.ROLES)
 
     def test_the_import_stops_when_it_s_a_plan_is_not_connected(self):
@@ -2195,15 +2233,6 @@ class ArticleSecondReviewTest(unittest.TestCase):
 
 
 class SampleLinesTest(unittest.TestCase):
-    def test_character_needs_three_to_five_sample_lines(self):
-        def check(lines):
-            write_brand('samplecheck', **{'character.md': CHARACTER_TEXT.replace('Line one.\nLine two.\nLine three.', '\n'.join(lines))})
-            return run.check_character('samplecheck')
-        self.assertEqual(check(['One.', 'Two.', 'Three.']), [])
-        self.assertEqual(check(['One.', 'Two.', 'Three.', 'Four.', 'Five.']), [])
-        self.assertTrue(any('needs 3 to 5 lines; found 2' in e for e in check(['One.', 'Two.'])))
-        self.assertTrue(any('needs 3 to 5 lines; found 6' in e for e in check(['1.', '2.', '3.', '4.', '5.', '6.'])))
-
     def test_sample_lines_reach_the_reel_script_writer_and_reviewer(self):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
         campaign.mkdir(parents=True)
@@ -2211,16 +2240,16 @@ class SampleLinesTest(unittest.TestCase):
         step = next(s for s in run.STEPS if s['id'] == '08-reel-script')
         self.assertIn('character', step['inputs'])
         self.assertIn('character', step['review_inputs'])
-        self.assertIn('## Sample lines\nLine one.', run.read_input(campaign, 'character'))
+        self.assertNotIn('Sample lines', run.read_input(campaign, 'character'))  # the voice comes from the moderaty-voice skill
 
-    def test_reel_script_review_and_skill_name_the_sample_lines(self):
+    def test_reel_script_review_and_skill_name_the_voice_skill(self):
         review = (run.SKILLS_DIR / 'reel-script' / 'REVIEW.md').read_text()
-        self.assertIn("- A line that doesn't sound like the Sample lines.", review.split('Minor findings:')[1])
-        self.assertIn('Sample lines', (run.SKILLS_DIR / 'reel-script' / 'SKILL.md').read_text())
+        self.assertIn("- Wording that doesn't sound like the moderaty-voice skill.", review.split('Minor findings:')[1])
+        self.assertIn('moderaty-voice skill', (run.SKILLS_DIR / 'reel-script' / 'SKILL.md').read_text())
 
-    def test_templates_have_the_sample_lines_section(self):
-        self.assertIn('## Sample lines', (REPO_TEMPLATE / 'character.md').read_text())
-        self.assertIn('## Sample lines', (REPO_TEMPLATE.parent / 'moderaty' / 'character.md').read_text())
+    def test_templates_have_no_sample_lines_section(self):
+        self.assertNotIn('## Sample lines', (REPO_TEMPLATE / 'character.md').read_text())
+        self.assertNotIn('## Sample lines', (REPO_TEMPLATE.parent / 'moderaty' / 'character.md').read_text())
 
 
 if __name__ == '__main__':
