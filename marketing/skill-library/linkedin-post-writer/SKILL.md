@@ -1,4 +1,4 @@
-> Copied from social-media-skills:linkedin-post-writer, copied 2026-11-03. The owner may replace this file.
+> Copied from social-media-skills:linkedin-post-writer, copied 2026-11-03, then tuned for the marketing pipeline (campaign rules below). The owner may replace this file.
 
 ---
 name: linkedin-post-writer
@@ -105,6 +105,19 @@ reason tied to the goal.
 - **Hard-sell request** → reframe toward value-first; LinkedIn punishes overt selling.
 - **No real story/insight** → don't manufacture a fake parable; sharpen the actual point or pick a
   format that fits what's true.
+
+## Campaign pipeline rules
+
+When a campaign step asks for a LinkedIn post, these override the length and structure guidance above. The step's own skill sets the section layout, which you follow exactly.
+
+- **Length:** the Post is 1,000 characters or fewer, hashtags excluded. This replaces the ~3,000 limit above.
+- **Shape:** 3 to 6 short paragraphs, the hook included, with a blank line between them. Most sentences stay under about 55 characters. Plain words, no adverbs stacked on verbs, no jargon.
+- **Rule of three:** at most two trios in one post.
+- **Links:** no link and no URL in the Post. The Post carries the line "Link in the first comment." exactly. The First comment carries `[ARTICLE LINK]`.
+- **Hook:** the first line is the hook, 140 characters or fewer, and it wins the "see more" tap. Its first line avoids may, might, describes, positions, offers and various.
+- **Form:** no em dashes, no emojis, no backticks, no question mark except the one closing question the step asks for.
+- **Never mention** the brief, supplied facts, supplied evidence or sources in the copy, and never write "fictional".
+- **Facts:** at most two, all from the brief's Facts.
 
 ## Related skills
 

@@ -41,17 +41,17 @@ BRAND_INPUTS = {'design-system': 'design-system.md', 'voice': 'voice.md', 'posit
 LIBRARY_DIR = HERE / 'skill-library'
 PRIVATE_SKILLS_DIR = Path.home() / '.config' / 'agent-workflows' / 'private' / 'skills'  # private copies of external skills, kept out of the repo
 CAMPAIGNS_DIR = REPO / 'campaigns'
-# The owner's roles: the writer always uses Haiku 5.5 at xhigh; the script writer (08-reel-script) uses Opus 5.5 at medium; the
-# importer and reviewer use Sonnet 5.5 at medium; the strategist uses Sonnet 5.5 at high; the image and video creator uses Opus 5.5 at high.
+# The owner's roles: the writer always uses Haiku 5.5 at xhigh; the script writer (08-reel-script) uses Sonnet 5.5 at high; the
+# importer and reviewer use Sonnet 5.5 at medium; the strategist uses Sonnet 5.5 at high; the image and video creator uses Sonnet 5.5 at xhigh.
 # Each budget_usd caps one call. The importer's cap is set for Sonnet: a live import on Haiku cost $0.69, and Sonnet costs about
 # four times as much.
 ROLES = {
     'writer': {'model': 'claude-haiku-5-5', 'effort': 'xhigh', 'budget_usd': 1.00},
-    'script': {'model': 'claude-opus-5-5', 'effort': 'medium', 'budget_usd': 4.00},
+    'script': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 4.00},
     'importer': {'model': 'claude-sonnet-5-5', 'effort': 'medium', 'budget_usd': 5.00},
     'strategist': {'model': 'claude-sonnet-5-5', 'effort': 'high', 'budget_usd': 3.00},
     'reviewer': {'model': 'claude-sonnet-5-5', 'effort': 'medium', 'budget_usd': 4.00},
-    'creator': {'model': 'claude-opus-5-5', 'effort': 'high', 'budget_usd': 6.00},
+    'creator': {'model': 'claude-sonnet-5-5', 'effort': 'xhigh', 'budget_usd': 6.00},
 }
 # --tools is fixed per role, so every call of a role has the same flags; --allowedTools is what each step may use.
 ROLE_TOOLS = {'writer': 'WebSearch,WebFetch', 'strategist': '', 'reviewer': 'WebSearch,WebFetch,Read', 'creator': '', 'importer': '', 'script': ''}
@@ -146,30 +146,30 @@ STEPS = [
                 'positioning#Claims we never make', 'positioning#Call to action', 'pages'],
      'review_inputs': ['voice', '00-task', '02-brief', 'positioning#Proof', 'positioning#Alternatives', 'positioning#Objections',
                        'positioning#Claims we never make', 'positioning#Call to action', 'pages'],
-     'writer_skills': ['stop-slop', 'on-page-seo', 'internal-linking', 'educational-content-and-how-to'],
-     'review_skills': ['stop-slop', 'on-page-seo']},
+     'writer_skills': ['stop-slop', 'on-page-seo', 'internal-linking', 'educational-content-and-how-to', 'moderaty-voice', 'stop-slop'],  # stop-slop last: the final clean-up
+     'review_skills': ['stop-slop', 'on-page-seo', 'moderaty-voice']},
     {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'linkedin',
      'inputs': SOCIAL_INPUTS, 'review_inputs': SOCIAL_REVIEW_INPUTS,
-     'writer_skills': ['stop-slop', 'hook-writer', 'linkedin-post-writer'], 'review_skills': ['stop-slop']},
+     'writer_skills': ['stop-slop', 'hook-writer', 'linkedin-post-writer', 'moderaty-voice', 'stop-slop'], 'review_skills': ['stop-slop', 'moderaty-voice']},
     {'id': '05-x', 'skill': 'x', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'x',
      'inputs': SOCIAL_INPUTS, 'review_inputs': SOCIAL_REVIEW_INPUTS,
-     'writer_skills': ['stop-slop', 'hook-writer', 'thread-writer'], 'review_skills': ['stop-slop']},
+     'writer_skills': ['stop-slop', 'hook-writer', 'thread-writer', 'moderaty-voice', 'stop-slop'], 'review_skills': ['stop-slop', 'moderaty-voice']},
     {'id': '06-instagram', 'skill': 'instagram', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'instagram',
      'inputs': SOCIAL_INPUTS, 'review_inputs': SOCIAL_REVIEW_INPUTS,
-     'writer_skills': ['stop-slop', 'hook-writer', 'caption-writer', 'hashtag-strategy', 'instagram-seo'],
-     'review_skills': ['stop-slop']},
+     'writer_skills': ['stop-slop', 'hook-writer', 'caption-writer', 'hashtag-strategy', 'instagram-seo', 'moderaty-voice', 'stop-slop'],
+     'review_skills': ['stop-slop', 'moderaty-voice']},
     {'id': '07-images', 'skill': 'images', 'kind': 'images', 'role': 'creator', 'deliverable': 'images', 'web': False, 'check': None,
      'inputs': IMAGE_INPUTS, 'review_inputs': IMAGE_INPUTS,
      'writer_skills': ['openfilm-manual', 'quote-cards-and-text-graphics'],
      'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics']},
     {'id': '08-reel-script', 'skill': 'reel-script', 'kind': 'script', 'role': 'script', 'deliverable': 'reel', 'web': False, 'check': 'reel-script',
      'inputs': REEL_SCRIPT_INPUTS, 'review_inputs': REEL_SCRIPT_INPUTS,
-     'writer_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video'],
-     'review_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']},
+     'writer_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video', 'moderaty-voice', 'stop-slop'],
+     'review_skills': ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video', 'moderaty-voice']},
     {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'check': None,
      'inputs': REEL_INPUTS, 'review_inputs': REEL_INPUTS,
-     'writer_skills': ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'],
-     'review_skills': ['openfilm-manual', 'short-form-video-script', 'reels-script']},
+     'writer_skills': ['openfilm-manual', 'motion-graphics', 'instagram-reels-publishing'],  # writing skills stay with 08-reel-script
+     'review_skills': ['openfilm-manual', 'instagram-reels-publishing']},  # the script's writing skills stay with 08-reel-script
 ]
 
 
@@ -203,13 +203,15 @@ def _obj(props):
 FILE_SCHEMA = _obj({'path': {'type': 'string'}, 'content': {'type': 'string'}})
 PROJECT_SCHEMA = _obj({'name': {'type': 'string'}, 'look_time': {'type': 'number'},
                        'files': {'type': 'array', 'items': FILE_SCHEMA}})
+UNCHANGED = {'unchanged': {'type': 'boolean'}}  # every writer call carries it, so draft, pass and revision share one schema and one cache
 WRITER_SCHEMAS = {
-    'text': _obj({'output': {'type': 'string'}, 'notes': {'type': 'string'}}),
-    'images': _obj({'projects': {'type': 'array', 'items': PROJECT_SCHEMA}, 'notes': {'type': 'string'}}),
-    'video': _obj({'files': {'type': 'array', 'items': FILE_SCHEMA}, 'notes': {'type': 'string'}}),
+    'text': _obj({'output': {'type': 'string'}, 'notes': {'type': 'string'}, **UNCHANGED}),
+    'images': _obj({'projects': {'type': 'array', 'items': PROJECT_SCHEMA}, 'notes': {'type': 'string'}, **UNCHANGED}),
+    'video': _obj({'files': {'type': 'array', 'items': FILE_SCHEMA}, 'notes': {'type': 'string'}, **UNCHANGED}),
     'script': _obj({'presenter': {'type': 'string'}, 'lines': {'type': 'array', 'items': _obj({'id': {'type': 'string'}, 'text': {'type': 'string'}})},
-                    'notes': {'type': 'string'}}),
+                    'notes': {'type': 'string'}, **UNCHANGED}),
 }
+IMPORT_SCHEMA = _obj({'output': {'type': 'string'}, 'notes': {'type': 'string'}})
 REVIEW_SCHEMA = _obj({
     'verdict': {'type': 'string', 'enum': ['pass', 'revise']},
     'summary': {'type': 'string'},
@@ -268,6 +270,17 @@ def usage_totals(folder):
             for key in totals:
                 totals[key] += record[key]
     return totals
+
+
+def session_cost_before(campaign, session_id):
+    """The session's running cost at its last recorded call, from every usage file in the campaign."""
+    latest = 0.0
+    for path in Path(campaign).rglob('claude-usage.jsonl'):
+        for line in path.read_text(encoding='utf-8').splitlines():
+            record = json.loads(line)
+            if record['session_id'] == session_id:
+                latest = max(latest, record.get('session_cost_usd', record['cost_usd']))  # older records hold the running total in cost_usd
+    return latest
 
 
 def usage_line(totals):
@@ -1055,7 +1068,7 @@ def block(name, content):
 
 LIBRARY_PREFACE = ('These skills were written for an interactive assistant. Use their craft advice. '
                    'Ignore any step that asks the user a question, calls a tool, or names another product. The step contract below wins. '
-                   'Files these skills point to under references/, and brand-profile.md or audience.md, are not available. Use the brand blocks in this prompt instead.')
+                   'Reference files a skill points to under references/ follow its SKILL.md. brand-profile.md and audience.md are not available; use the brand blocks in this prompt instead.')
 
 
 def private_skill_block(names):
@@ -1076,6 +1089,8 @@ def library_block(names):
         if not path.is_file():
             raise WorkflowError(f'missing library skill: {path}')
         parts.append(block(f'skill: {name}', path.read_text()))
+        for reference in sorted((LIBRARY_DIR / name / 'references').glob('*.md')):  # a skill's reference files travel with it
+            parts.append(block(f'skill: {name} reference: {reference.name}', reference.read_text()))
     if not parts:
         return ''
     return LIBRARY_PREFACE + '\n\n' + '\n\n'.join(parts)
@@ -1102,10 +1117,29 @@ def writer_prompt(skills_dir, campaign, step):
     parts = [DATA_RULE]
     for input_id in step['inputs']:
         parts += ['', block(input_id, read_input(campaign, input_id))]
-    parts += ['', library_block(step['writer_skills']), '', CONTRACT_RULE,
+    parts += ['', library_block(step['writer_skills'][:1]), '', CONTRACT_RULE,  # the first skill drafts; the rest are later passes
               '', load_skill(skills_dir, step['skill'], 'SKILL.md'),
               '', REVIEW_LINE, '', load_skill(skills_dir, step['skill'], 'REVIEW.md'),
-              '', FORMAT_RULES[step['kind']]]
+              '', f"{FORMAT_RULES[step['kind']]} {UNCHANGED_RULE}"]
+    return '\n'.join(parts)
+
+
+SKILL_PASS_RULE = ('This is the next pass on step {step}, in the same conversation. Review your last draft of this step against the skill below, '
+                   'then return the complete revised deliverable in the same JSON shape. Keep the step contract and every item under Checked. '
+                   'Change what the skill calls for and keep what already works.')
+
+
+UNCHANGED_RULE = 'Set "unchanged" to false.'
+PASS_UNCHANGED_RULE = ('Set "unchanged" to true only when the skill calls for no change; then leave the deliverable empty. '
+                       'Otherwise set it to false. "notes" is one line on what this pass changed; it is logged, not published.')
+
+
+def skill_pass_prompt(step, skill, position, errors):
+    """A later pass: the session already holds the draft, so the prompt sends the rule, the checks' findings and the skill."""
+    parts = [f"{SKILL_PASS_RULE.format(step=step['id'])} This is pass {position} of {len(step['writer_skills'])}: {skill}."]
+    if errors:
+        parts += ['', 'Checked now: the program found these problems in the draft. Fix each one in this pass:', *[f'- {error}' for error in errors]]
+    parts += ['', library_block([skill]), '', f"{FORMAT_RULES[step['kind']]} {PASS_UNCHANGED_RULE}"]
     return '\n'.join(parts)
 
 
@@ -1116,7 +1150,7 @@ def revision_prompt(step, review, notes):
              '', block('review of your last answer', review_markdown(review))]
     if notes:
         parts += ['', 'The owner notes below are instructions from the owner. Follow them.', '', block('owner notes', notes)]
-    parts += ['', FORMAT_RULES[step['kind']]]
+    parts += ['', f"{FORMAT_RULES[step['kind']]} {UNCHANGED_RULE}"]
     return '\n'.join(parts)
 
 
@@ -1133,6 +1167,11 @@ def frame_note(seconds, images):
             f"Their seconds, in the order listed: {', '.join(seconds)}.\n" + '\n'.join(image_lines(images, seconds)))
 
 
+def step_skill_names(step):
+    """Every skill the step uses, writer skills first. The reviewer loads all of them."""
+    return list(dict.fromkeys(step['writer_skills'] + step['review_skills']))
+
+
 def review_prompt(skills_dir, campaign, step, step_dir, images=()):
     parts = [DATA_RULE]
     for input_id in step['review_inputs']:
@@ -1143,7 +1182,7 @@ def review_prompt(skills_dir, campaign, step, step_dir, images=()):
                       'in the order listed in the deliverable.', '\n'.join(image_lines(images))]
     if step['kind'] == 'video':
         parts += ['', frame_note((step_dir / 'frame-seconds.txt').read_text().split(), images)]
-    parts += ['', library_block(step['review_skills']), '', CONTRACT_RULE,
+    parts += ['', library_block(step_skill_names(step)), '', CONTRACT_RULE,
               '', load_skill(skills_dir, step['skill'], 'REVIEW.md'), '', REVIEW_RULES]
     return '\n'.join(parts)
 
@@ -1308,6 +1347,8 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
     totals = {'input': required(usage, 'input_tokens', what), 'cache_write': required(usage, 'cache_creation_input_tokens', what),
               'cache_read': required(usage, 'cache_read_input_tokens', what), 'output': required(usage, 'output_tokens', what),
               'cost_usd': required(result, 'total_cost_usd', what)}
+    session_cost = totals['cost_usd']  # claude reports the session's running total, so this call's cost is the rise since its last record
+    totals['cost_usd'] = max(0.0, session_cost - session_cost_before(cwd, session_id))
     context = totals['input'] + totals['cache_write'] + totals['cache_read']
     denials = required(result, 'permission_denials', what)
     for denial in denials:
@@ -1315,7 +1356,7 @@ def _call_model(client, roles, role_name, prompt, folder, schema, save_path, wha
     subtype = required(result, 'subtype', what)
     record = {'time': now(), 'call': what, 'role': role_name, 'model': role['model'], 'effort': role['effort'],
               'session_id': session_id, 'subtype': subtype, 'turns': required(result, 'num_turns', what),
-              'cost_usd': totals['cost_usd'], 'input': totals['input'], 'cache_write': totals['cache_write'],
+              'cost_usd': totals['cost_usd'], 'session_cost_usd': session_cost, 'input': totals['input'], 'cache_write': totals['cache_write'],
               'cache_read': totals['cache_read'], 'output': totals['output'], 'denials': len(denials), 'context': context}
     with (Path(folder) / 'claude-usage.jsonl').open('a', encoding='utf-8') as handle:
         handle.write(json.dumps(record) + '\n')
@@ -1764,35 +1805,112 @@ def materialize_video(step_dir, written, character, presenter):
     (step_dir / 'output.md').write_text('\n'.join(lines) + '\n')
     return frames
 
-def write(client, roles, skills_dir, campaign, step, step_dir, revision):
-    role, sessions = step['role'], Sessions(campaign)
-    for stale in ('review.json', 'review.md'):
-        (step_dir / stale).unlink(missing_ok=True)
-    if revision is None:
-        (step_dir / 'searches.txt').unlink(missing_ok=True)
-        (step_dir / REVIEW_STARTED).unlink(missing_ok=True)  # a new draft gets its first review
-    print(f"[{step['id']}] writer working...")
-    if step['id'] == '08-reel':
-        render_presenter(campaign, step_dir, read_character(campaign))  # before the film, so presenter.json exists for it
-    allowed = WEB_TOOLS if step['web'] else []
-    if revision is None:
-        log.info('[%s] first draft', step['id'])
-        prompt, session = step_header(step['id'], allowed) + writer_prompt(skills_dir, campaign, step), sessions.start(role, step['id'], None)
-    else:
-        review, notes = revision
-        log.info('[%s] revising: %s', step['id'], 'owner notes' if notes else 'automatic rewrite of the review findings')
-        prompt, session = revision_prompt(step, review, notes), sessions.start(role, step['id'], 'revision')
+def writer_call(client, roles, step, step_dir, campaign, sessions, prompt, session, what):
+    """One writer call on the role's session. It records the session and the searches the call ran."""
+    role = step['role']
     previous = sessions.last_step(role)
     if session[0] == '--resume' and previous and step_kind(previous) != step['kind']:
         log.info('[%s] the %s session changes its schema from %s to %s; its cache is written again', step['id'], role,
                  step_kind(previous), step['kind'])
     written, session_id, searches = call_model(client, roles, role, prompt, step_dir, WRITER_SCHEMAS[step['kind']], step_dir / 'writer.json',
-                                               'writer', cwd=campaign, session=session, web=step['web'],
-                                               resume_note=sessions.resume_note(role))
+                                               what, cwd=campaign, session=session, web=step['web'], resume_note=sessions.resume_note(role))
     sessions.record(role, step['id'], session_id)
-    with (step_dir / 'searches.txt').open('a') as file:  # every web search the writer ran in this step, across revisions
-        file.write(''.join(query + '\n' for query in searches))
+    save_searches(step_dir, searches)
+    return written
+
+
+def write(client, roles, skills_dir, campaign, step, step_dir, revision):
+    role, sessions, saved = step['role'], Sessions(campaign), None
+    for stale in ('review.json', 'review.md'):
+        (step_dir / stale).unlink(missing_ok=True)
+    if step['id'] == '08-reel':
+        render_presenter(campaign, step_dir, read_character(campaign))  # before the prompt: the reel's inputs include presenter.json
+    allowed = WEB_TOOLS if step['web'] else []
+    if revision is None:
+        draft_prompt = step_header(step['id'], allowed) + writer_prompt(skills_dir, campaign, step)
+        draft_hash = hashlib.sha256(draft_prompt.encode('utf-8')).hexdigest()
+        saved = saved_passes(step, step_dir, sessions, draft_hash)  # an interrupted run continues at its next skill pass
+        if saved is None:
+            (step_dir / 'searches.txt').unlink(missing_ok=True)
+            (step_dir / REVIEW_STARTED).unlink(missing_ok=True)  # a new draft gets its first review
+            (step_dir / 'passes.md').unlink(missing_ok=True)
+    print(f"[{step['id']}] writer working...")
+    if revision is not None:
+        review, notes = revision
+        log.info('[%s] revising: %s', step['id'], 'owner notes' if notes else 'automatic rewrite of the review findings')
+        written = writer_call(client, roles, step, step_dir, campaign, sessions, revision_prompt(step, review, notes),
+                              sessions.start(role, step['id'], 'revision'), 'writer')
+        return written, materialize(step, step_dir, written, campaign)
+    if saved is not None:
+        completed, written = saved
+        errors = checked_now(step, step_dir, campaign, written)  # the checks the interrupted run never got to put to the next pass
+        log.info('[%s] resuming at skill pass %d of %d: %s', step['id'], completed + 1, len(step['writer_skills']), step['writer_skills'][completed])
+    else:
+        log.info('[%s] first draft', step['id'])
+        written = writer_call(client, roles, step, step_dir, campaign, sessions, draft_prompt, sessions.start(role, step['id'], None), 'writer')
+        completed, errors = 1, checked_now(step, step_dir, campaign, written)
+        save_passes(step_dir, step, draft_hash, sessions, completed)
+    for index in range(completed, len(step['writer_skills'])):  # each later skill refines the draft in the same session
+        skill = step['writer_skills'][index]
+        log.info('[%s] skill pass %d of %d: %s', step['id'], index + 1, len(step['writer_skills']), skill)
+        reply = writer_call(client, roles, step, step_dir, campaign, sessions, skill_pass_prompt(step, skill, index + 1, errors),
+                            sessions.start(role, step['id'], 'skill pass'), f'writer-{skill}')
+        unchanged = reply.get('unchanged', False) or not has_deliverable(step['kind'], reply)
+        if unchanged:  # the draft stands, so writer.json holds it rather than the empty reply
+            (step_dir / 'writer.json').write_text(json.dumps(written, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+        else:
+            written = dict(without_unchanged(reply), notes=written.get('notes', ''))  # pass notes go to passes.md, not the deliverable
+        status, note = ('unchanged' if unchanged else 'changed'), (reply.get('notes') or '').strip() or 'no note'
+        print(f"[{step['id']}] writer pass: {skill} ({status})")
+        with (step_dir / 'passes.md').open('a', encoding='utf-8') as file:
+            file.write(f'{skill}: {status} - {note}\n')
+        errors = checked_now(step, step_dir, campaign, written) if index + 1 < len(step['writer_skills']) else []
+        save_passes(step_dir, step, draft_hash, sessions, index + 1)
     return written, materialize(step, step_dir, written, campaign)
+
+
+def save_searches(step_dir, searches):
+    with (step_dir / 'searches.txt').open('a') as file:  # every web search the writer ran in this step, across revisions and passes
+        file.write(''.join(query + '\n' for query in searches))
+
+
+def without_unchanged(reply):
+    return {key: value for key, value in reply.items() if key != 'unchanged'}
+
+
+def has_deliverable(kind, reply):
+    key = {'text': 'output', 'images': 'projects', 'video': 'files', 'script': 'lines'}[kind]
+    return bool(reply.get(key))
+
+
+def save_passes(step_dir, step, draft_hash, sessions, completed):
+    """Where the skill passes stand, so an interrupted run continues at the next skill instead of drafting again."""
+    state = {'hash': draft_hash, 'skills': step['writer_skills'], 'done': completed,
+             'complete': completed >= len(step['writer_skills']), 'session': sessions.load()[step['role']]['id']}
+    (step_dir / 'passes.json').write_text(json.dumps(state, indent=2) + '\n', encoding='utf-8')
+
+
+def saved_passes(step, step_dir, sessions, draft_hash):
+    """(completed, draft) when an interrupted run can continue; None when the draft must start over."""
+    path, entry = step_dir / 'passes.json', sessions.load().get(step['role'])
+    if not path.is_file() or not (step_dir / 'writer.json').is_file() or entry is None:
+        return None
+    state = json.loads(path.read_text(encoding='utf-8'))
+    if (state['hash'] != draft_hash or state['skills'] != step['writer_skills'] or state['complete']
+            or not 1 <= state['done'] < len(step['writer_skills']) or state['session'] != entry['id'] or step['id'] not in entry['steps']):
+        return None
+    return state['done'], without_unchanged(json.loads((step_dir / 'writer.json').read_text(encoding='utf-8')))
+
+
+def checked_now(step, step_dir, campaign, written):
+    """The step's own checks on the draft so far. Failures go into the next pass's prompt; they never stop the loop."""
+    if step['check'] is None or step['kind'] not in ('text', 'script'):
+        return []
+    try:
+        materialize(step, step_dir, written, campaign)
+        return run_checks(step, step_dir, campaign)
+    except (WorkflowError, OSError) as error:
+        return [str(error)]
 
 
 def without_hooks(text):
@@ -1952,6 +2070,7 @@ def fingerprint(step, skills_dir, campaign):
     for name in step['writer_skills'] + step['review_skills']:
         path = LIBRARY_DIR / name / 'SKILL.md'
         parts.append(path.read_text() if path.is_file() else '')
+        parts += [reference.read_text() for reference in sorted((LIBRARY_DIR / name / 'references').glob('*.md'))]
     for name in step.get('second_review_skills', []):
         path = PRIVATE_SKILLS_DIR / name / 'SKILL.md'
         parts.append(path.read_text() if path.is_file() else 'missing')  # a missing private skill keeps the approval stale
@@ -2262,11 +2381,20 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
     return final
 
 
-def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
+def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES, issue_data=None):
+    """Imports one issue. With issue_data (the issue as read from It's a Plan, saved to a file), the importer gets that text and no tools:
+    the headless It's a Plan connector never connects in claude -p, so it cannot be used here."""
     check_tools(client, roles)
-    prompt = '\n\n'.join([load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)])
-    written, _, _ = call_model(client, roles, 'importer', prompt, campaign, WRITER_SCHEMAS['text'], campaign / 'import.json', 'importer',
-                               cwd=campaign, session=('--session-id', str(uuid.uuid4())), importer=True)
+    parts = [load_skill(skills_dir, 'import', 'SKILL.md'), FORMAT_RULES['text'], block('issue identifier', issue)]
+    if issue_data is None:
+        written, _, _ = call_model(client, roles, 'importer', '\n\n'.join(parts), campaign, IMPORT_SCHEMA, campaign / 'import.json', 'importer',
+                                   cwd=campaign, session=('--session-id', str(uuid.uuid4())), importer=True)
+    else:
+        parts += ['You have no tools. The issue and its linked documents, as read from It\'s a Plan, are below; use only this text. '
+                  'A linked document that is not below is not available: say so in notes.',
+                  block('issue content', json.dumps(issue_data, ensure_ascii=False, indent=2))]
+        written, _, _ = call_model(client, roles, 'importer', '\n\n'.join(parts), campaign, IMPORT_SCHEMA, campaign / 'import.json', 'importer',
+                                   cwd=campaign, session=('--session-id', str(uuid.uuid4())))
     output = written['output']
     errors = check_task(output, design=False)  # the owner sets the design system when checking 00-task.md
     log.info('import: task text %d characters; task check %s', len(output), 'passed' if not errors else 'failed: ' + '; '.join(errors))
@@ -2277,9 +2405,11 @@ def import_issue(client, campaign, issue, skills_dir=SKILLS_DIR, roles=ROLES):
     return output
 
 
-def cmd_new(name, task_file, issue):
+def cmd_new(name, task_file, issue, issue_file=None):
     if (task_file is None) == (issue is None):
         raise WorkflowError('give either a task file or --issue, not both and not neither')
+    if issue_file is not None and issue is None:
+        raise WorkflowError('--issue-file goes with --issue')
     if not NAME_RE.match(name):
         raise WorkflowError('campaign name must use lowercase letters, digits and hyphens')
     campaign = CAMPAIGNS_DIR / name
@@ -2298,12 +2428,18 @@ def cmd_new(name, task_file, issue):
         return
     if not ISSUE_RE.match(issue):
         raise WorkflowError(f'issue must look like MC-32, not {issue!r}')
+    issue_data = None
+    if issue_file is not None:
+        issue_path = Path(issue_file)
+        if not issue_path.is_file():
+            raise WorkflowError(f'issue file not found: {issue_path}')
+        issue_data = json.loads(issue_path.read_text(encoding='utf-8'))
     campaign.mkdir(parents=True)
     with campaign_log(campaign):
-        log.info('importing %s', issue)
+        log.info('importing %s%s', issue, ' from a saved copy' if issue_data is not None else '')
         try:
-            with ClaudeClient(stderr_path=campaign / 'claude-stderr.log') as client:  # the import needs It's a Plan in Claude Code
-                task = import_issue(client, campaign, issue)
+            with ClaudeClient(stderr_path=campaign / 'claude-stderr.log') as client:  # without --issue-file, the import needs It's a Plan in Claude Code
+                task = import_issue(client, campaign, issue, issue_data=issue_data)
         except WorkflowError as error:
             raise WorkflowError(f'{error} Delete {campaign} before trying again.') from None
     print(task)
@@ -2392,6 +2528,7 @@ def main():
     new.add_argument('name')
     new.add_argument('task_file', nargs='?')
     new.add_argument('--issue', help='an It\'s a Plan issue identifier, for example MC-32')
+    new.add_argument('--issue-file', help='the issue as It\'s a Plan returns it (JSON), for when the headless import cannot reach It\'s a Plan')
     run = sub.add_parser('run', help='run or continue a campaign')
     run.add_argument('name')
     status = sub.add_parser('status', help='show where a campaign is')
@@ -2408,7 +2545,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == 'new':
-            cmd_new(args.name, args.task_file, args.issue)
+            cmd_new(args.name, args.task_file, args.issue, args.issue_file)
         elif args.command == 'run':
             cmd_run(args.name)
         elif args.command == 'publish':

@@ -1,4 +1,4 @@
-> Copied from social-media-skills:hook-writer, copied 2026-11-03. The owner may replace this file.
+> Copied from social-media-skills:hook-writer, copied 2026-11-03, then tuned for the marketing pipeline (campaign rules below). The owner may replace this file.
 
 ---
 name: hook-writer
@@ -108,6 +108,20 @@ If it doesn't pass "would a stranger need the next beat?", it isn't a hook yet.
   off.
 - **Tempted to overpromise for reach:** don't. A truthful, slightly less sensational hook that
   the content delivers beats a viral-bait line that burns trust and bounces.
+
+## Campaign pipeline rules
+
+When a campaign step asks for hooks, these override the 5–10 candidates and 2–3 options above.
+
+- **Count:** return exactly the number the step asks for (three for LinkedIn), one hook per line.
+- **Reader problems:** each hook comes from a different reader problem in the `positioning` input's Reader problems. Rewording the same problem does not count. Never invent a problem.
+- **Mechanisms:** vary the mechanism across the set: number-led, contrarian, before/after, authority reference, admission, future shock.
+- **Truth:** use only numbers and facts from the brief's Facts. Never invent a first-person experience; if no real one is supplied, use an evidence-backed angle.
+- **Length:** a LinkedIn hook is one line of 140 characters or fewer. Count it. Shorter is stronger.
+- **Form:** digits over spelled-out numbers. No em dashes. No question marks. No "X, not Y", "not X, it's Y" or "rather than" contrasts.
+- **Banned first-line words:** may, might, describes, positions, offers, various.
+- **Never mention** the brief, supplied facts, supplied evidence or sources in a hook.
+- **Voice:** British English unless `voice` says otherwise.
 
 ## Related skills
 

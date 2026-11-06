@@ -107,10 +107,12 @@ class FakeClient(claude_client.ClaudeClient):
     """Replaces the process that starts claude. Each turn gets a scripted reply; every argv and prompt is recorded."""
 
     def __init__(self, verdicts, writer_text=None, writer_outputs=(), searches=(), help_text=None, plan_status='connected', turn_stdout=None,
-                 plan_tools=None, compact=False):
+                 plan_tools=None, compact=False, pass_outputs=()):
         self.verdicts = list(verdicts)
         self.writer_text = writer_text
         self.writer_outputs = list(writer_outputs)  # JSON texts for the writer's calls, in order
+        self.pass_outputs = list(pass_outputs)  # JSON texts for skill passes, in order; a pass without one hands back the draft
+        self.session_costs = {}  # claude reports each session's running cost, so every session keeps its own total
         self.searches = list(searches)  # web search queries each turn reports
         self.help_text = FAKE_HELP if help_text is None else help_text
         self.plan_status = plan_status  # the It's a Plan status the init line reports
@@ -119,6 +121,8 @@ class FakeClient(claude_client.ClaudeClient):
         self.cwds = []  # the working folder of each call
         self.turn_stdout = turn_stdout  # when set, every turn prints exactly this text
         self.prompts, self.calls, self.web_searches, self.argvs = [], [], [], []
+        self.current_prompt = ''  # the prompt of the call being answered
+        self.last_writer = None  # the last draft the writer returned; a skill pass hands it back
         self.thread_params = []  # the session each call resumed (None for a new session), named thread-1, thread-2, ...
         self.session_names = {}
         super().__init__(process=self.fake_process)
@@ -131,6 +135,7 @@ class FakeClient(claude_client.ClaudeClient):
         self.argvs.append(argv)
         self.cwds.append(cwd)
         self.prompts.append(prompt)
+        self.current_prompt = prompt
         self.calls.append((argv[argv.index('--model') + 1], argv[argv.index('--effort') + 1]))
         allowed = argv[argv.index('--allowedTools') + 1] if '--allowedTools' in argv else ''
         self.web_searches.append(allowed)
@@ -153,6 +158,15 @@ class FakeClient(claude_client.ClaudeClient):
             else:
                 findings = [] if verdict == 'pass' else [{'severity': 'blocking', 'issue': 'too short', 'fix': 'make it longer'}]
             return {'verdict': verdict, 'summary': 'Checked.', 'findings': findings}
+        if 'This is the next pass on step' in self.current_prompt:
+            if self.pass_outputs:
+                return self.parse(self.pass_outputs.pop(0))
+            if self.last_writer is not None:
+                return self.last_writer  # a skill pass returns the draft unchanged unless a scripted pass reply says otherwise
+        self.last_writer = self.next_writer()
+        return self.last_writer
+
+    def next_writer(self):
         if self.writer_outputs:
             return self.parse(self.writer_outputs.pop(0))
         if self.writer_text is not None:
@@ -174,10 +188,11 @@ class FakeClient(claude_client.ClaudeClient):
                        for query in self.searches]
         if self.compact:
             events.append({'type': 'system', 'subtype': 'compact_boundary'})
+        self.session_costs[session_id] = self.session_costs.get(session_id, 0.0) + 0.01
         events.append({'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': session_id,
                        'result': json.dumps(structured), 'structured_output': structured,
                        'usage': {'input_tokens': 10, 'cache_creation_input_tokens': 20, 'cache_read_input_tokens': 30, 'output_tokens': 5},
-                       'total_cost_usd': 0.01, 'num_turns': 1, 'permission_denials': []})
+                       'total_cost_usd': round(self.session_costs[session_id], 4), 'num_turns': 1, 'permission_denials': []})
         return ''.join(json.dumps(event) + '\n' for event in events)
 
 
@@ -200,6 +215,94 @@ class RunTest(unittest.TestCase):
 
     def go(self, client, ask):
         return run.run_campaign(self.campaign, client, ask=ask, steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES)
+
+    def test_skills_run_as_passes_on_one_session(self):
+        step = dict(TEXT_STEPS[0], id='02-loop', skill='x', writer_skills=['stop-slop', 'on-page-seo', 'internal-linking'],
+                    review_skills=['stop-slop'])
+        client = FakeClient(['pass'])
+        with mock.patch.object(run, 'materialize', wraps=run.materialize) as materialize:
+            run.run_campaign(self.campaign, client, ask=answers('a'), steps=[step], skills_dir=self.skills, roles=ROLES)
+        self.assertEqual(len(client.prompts), 4)  # draft, two skill passes, reviewer
+        self.assertEqual(materialize.call_count, 1)  # only the final draft is materialized
+        draft_id = client.argvs[0][-1]
+        self.assertEqual(client.argvs[0][-2], '--session-id')
+        for index in (1, 2):  # both passes resume the writer's session
+            self.assertEqual(client.argvs[index][-2:], ['--resume', draft_id])
+        self.assertIn('--- BEGIN skill: stop-slop ---', client.prompts[0])
+        self.assertNotIn('--- BEGIN skill: on-page-seo ---', client.prompts[0])
+        self.assertIn('--- BEGIN skill: on-page-seo ---', client.prompts[1])
+        self.assertNotIn('--- BEGIN skill: stop-slop ---', client.prompts[1])
+        self.assertIn('--- BEGIN skill: internal-linking ---', client.prompts[2])
+        for skill in ('stop-slop', 'on-page-seo', 'internal-linking'):  # the reviewer loads every skill the step uses
+            self.assertIn(f'--- BEGIN skill: {skill} ---', client.prompts[3])
+
+    def test_each_writer_call_costs_only_its_own_share(self):
+        step = dict(TEXT_STEPS[0], id='02-loop', skill='x', writer_skills=['stop-slop', 'on-page-seo', 'internal-linking'], review_skills=[])
+        run.run_campaign(self.campaign, FakeClient(['pass']), ask=answers('a'), steps=[step], skills_dir=self.skills, roles=ROLES)
+        records = [json.loads(line) for line in (self.campaign / '02-loop' / 'claude-usage.jsonl').read_text().splitlines()]
+        writer = [record for record in records if record['role'] == 'writer']
+        self.assertEqual([round(record['session_cost_usd'], 4) for record in writer], [0.01, 0.02, 0.03])  # the session's running total
+        self.assertEqual([round(record['cost_usd'], 4) for record in writer], [0.01, 0.01, 0.01])  # each call's own share
+
+    def test_unchanged_pass_keeps_the_draft_and_logs_its_note(self):
+        step = dict(TEXT_STEPS[0], id='02-loop', skill='x', writer_skills=['stop-slop', 'on-page-seo'], review_skills=[])
+        step_dir = self.campaign / '02-loop'
+        step_dir.mkdir()
+        client = FakeClient([], writer_outputs=[json.dumps({'output': 'Draft.', 'notes': 'from the draft'})],
+                            pass_outputs=[json.dumps({'output': '', 'notes': 'nothing to fix', 'unchanged': True})])
+        run.write(client, ROLES, self.skills, self.campaign, step, step_dir, None)
+        self.assertEqual((step_dir / 'output.md').read_text(), 'Draft.\n')
+        self.assertIn('on-page-seo: unchanged - nothing to fix', (step_dir / 'passes.md').read_text())
+        self.assertEqual(json.loads((step_dir / 'writer.json').read_text())['output'], 'Draft.')
+
+    def test_a_failing_check_is_put_to_the_next_pass(self):
+        step = dict(TEXT_STEPS[0], id='02-loop', skill='x', check='x', writer_skills=['stop-slop', 'on-page-seo'], review_skills=[])
+        step_dir = self.campaign / '02-loop'
+        step_dir.mkdir()
+        client = FakeClient([], writer_outputs=[json.dumps({'output': 'Draft.', 'notes': ''})])
+        self.assertTrue(run.check_x('Draft.\n', task_text(), None))  # the draft really fails the check
+        run.write(client, ROLES, self.skills, self.campaign, step, step_dir, None)
+        self.assertIn('Checked now', client.prompts[1])
+
+    def test_an_interrupted_run_continues_at_its_next_skill(self):
+        step = dict(TEXT_STEPS[0], id='02-loop', skill='x', writer_skills=['stop-slop', 'on-page-seo', 'internal-linking'], review_skills=[])
+        step_dir = self.campaign / '02-loop'
+        step_dir.mkdir()
+        real, calls = run.writer_call, []
+
+        def dies_on_third_call(*args):
+            calls.append(args[-1])
+            if len(calls) == 3:
+                raise RuntimeError('killed')
+            return real(*args)
+        with mock.patch.object(run, 'writer_call', side_effect=dies_on_third_call):
+            with self.assertRaises(RuntimeError):
+                run.write(FakeClient([]), ROLES, self.skills, self.campaign, step, step_dir, None)
+        resumed = FakeClient([])
+        run.write(resumed, ROLES, self.skills, self.campaign, step, step_dir, None)
+        self.assertEqual(len(resumed.prompts), 1)  # only the interrupted skill runs again
+        self.assertIn('--- BEGIN skill: internal-linking ---', resumed.prompts[0])
+        self.assertEqual(resumed.argvs[0][-2], '--resume')
+        self.assertTrue(json.loads((step_dir / 'passes.json').read_text())['complete'])
+
+    def test_changed_inputs_start_the_draft_again(self):
+        step = dict(TEXT_STEPS[0], id='02-loop', skill='x', writer_skills=['stop-slop', 'on-page-seo', 'internal-linking'], review_skills=[])
+        step_dir = self.campaign / '02-loop'
+        step_dir.mkdir()
+        real, calls = run.writer_call, []
+
+        def dies_on_third_call(*args):
+            calls.append(args[-1])
+            if len(calls) == 3:
+                raise RuntimeError('killed')
+            return real(*args)
+        with mock.patch.object(run, 'writer_call', side_effect=dies_on_third_call):
+            with self.assertRaises(RuntimeError):
+                run.write(FakeClient([]), ROLES, self.skills, self.campaign, step, step_dir, None)
+        (self.campaign / '00-task.md').write_text(task_text() + '\nA new line.\n')
+        fresh = FakeClient([])
+        run.write(fresh, ROLES, self.skills, self.campaign, step, step_dir, None)
+        self.assertEqual(len(fresh.prompts), 3)  # a new draft and both passes
 
     def test_approving_every_step_builds_final_package(self):
         client = FakeClient(['pass', 'pass'])
@@ -837,8 +940,8 @@ class FilmLookTest(unittest.TestCase):
     def test_look_problems_become_check_errors(self):
         client = FakeClient(['pass'], writer_outputs=[self.projects(), self.projects()])
         self.run_images(client, look_failures=1)
-        self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with the problems, reviewer
-        revision = client.prompts[1]
+        self.assertEqual(len(client.prompts), 4)  # writer, one skill pass, one rewrite with the problems, reviewer
+        revision = client.prompts[2]
         for problem in ['film.html:9: style is not an attribute of a track',
                         'film.html:10: <iframe src="scenes/card.html#t=0,3">: position would move the clip',
                         'film.html:10: <iframe src="scenes/card.html#t=0,3">: display would move the clip']:
@@ -848,15 +951,15 @@ class FilmLookTest(unittest.TestCase):
         client = FakeClient([], writer_outputs=[self.projects(), self.projects()])
         with self.assertRaisesRegex(run.WorkflowError, 'film.html has 3 problems') as caught:
             self.run_images(client, look_failures=99)
-        self.assertEqual(len(client.prompts), 2)  # no reviewer call after the second failure
+        self.assertEqual(len(client.prompts), 3)  # writer, one skill pass, one rewrite; no reviewer call after the second failure
         self.assertIn('stderr:', str(caught.exception))
 
     def test_single_look_problem_becomes_check_error(self):
         client = FakeClient(['pass'], writer_outputs=[self.projects(), self.projects()])
         self.run_images(client, look_failures=1, look_stdout='✗ film.html:10: position would move the clip')
-        self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with one problem, reviewer
-        self.assertEqual(client.prompts[1].count('[blocking]'), 1)
-        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[1])
+        self.assertEqual(len(client.prompts), 4)  # writer, one skill pass, one rewrite with one problem, reviewer
+        self.assertEqual(client.prompts[2].count('[blocking]'), 1)
+        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[2])
 
     def test_skills_ban_clip_position(self):
         line = "A clip's style places it only with left, top, width, height and rotate. Never put position, display, inset, right, bottom, margin, transform, translate, scale, z-index, visibility, animation or transition in a clip's style."
@@ -868,7 +971,7 @@ class FilmLookTest(unittest.TestCase):
         client = FakeClient([], writer_outputs=[self.projects(), self.projects()])
         with self.assertRaises(run.WorkflowError):
             self.run_images(client, look_failures=99, look_stdout='segmentation fault')
-        self.assertEqual(len(client.prompts), 1)
+        self.assertEqual(len(client.prompts), 2)  # writer and one skill pass; the look fails before any rewrite
 
     def test_video_steps_load_openfilm_manual(self):
         images = next(step for step in run.STEPS if step['id'] == '07-images')
@@ -878,14 +981,14 @@ class FilmLookTest(unittest.TestCase):
 
     def test_reel_skill_list(self):
         reel = next(step for step in run.STEPS if step['id'] == '08-reel')
-        self.assertEqual(reel['writer_skills'], ['openfilm-manual', 'motion-graphics', 'short-form-video-script', 'hook-writer', 'reels-script', 'instagram-reels-publishing'])
-        self.assertEqual(reel['review_skills'], ['openfilm-manual', 'short-form-video-script', 'reels-script'])
+        self.assertEqual(reel['writer_skills'], ['openfilm-manual', 'motion-graphics', 'instagram-reels-publishing'])
+        self.assertEqual(reel['review_skills'], ['openfilm-manual', 'instagram-reels-publishing'])
 
     def test_reel_script_skill_list(self):
         script = next(step for step in run.STEPS if step['id'] == '08-reel-script')
         expected = ['stop-slop', 'hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']
-        self.assertEqual(script['writer_skills'], expected)
-        self.assertEqual(script['review_skills'], expected)
+        self.assertEqual(script['writer_skills'], expected + ['moderaty-voice', 'stop-slop'])  # the voice pass, then stop-slop again as the last pass
+        self.assertEqual(script['review_skills'], expected + ['moderaty-voice'])
         library = run.library_block(script['writer_skills'])
         self.assertIn('--- BEGIN skill: heygen-video ---', library)
         self.assertIn('Write for the ear.', library)
@@ -1226,14 +1329,27 @@ class HeyGenReelTest(unittest.TestCase):
         self.assertTrue((step_dir / 'reel.mp4').is_file())
         self.assertIn('The presenter is an AI avatar.', (step_dir / 'output.md').read_text())
 
+    def test_the_reel_writer_is_prompted_after_the_presenter_clips_exist(self):
+        campaign, step_dir = self.make_campaign()
+        seen = []
+
+        def stop_at_the_prompt(*args):
+            seen.append((campaign / '08-reel' / 'presenter.json').is_file())
+            raise RuntimeError('stop at the prompt')
+        step = dict(next(step for step in run.STEPS if step['id'] == '08-reel'))  # the real inputs, including presenter.json
+        with self.heygen(FakeHeyGen(durations=(2.0, 2.0, 2.0))), mock.patch.object(run, 'writer_prompt', side_effect=stop_at_the_prompt):
+            with self.assertRaises(RuntimeError):
+                run.write(FakeClient([]), ROLES, run.SKILLS_DIR, campaign, step, step_dir, None)
+        self.assertEqual(seen, [True])
+
     def test_film_with_the_wrong_presenter_time_goes_back_once(self):
         campaign, step_dir = self.make_campaign()
         fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
         client = FakeClient(['pass'], writer_outputs=[self.film((0.0, 3.0, 4.0)), self.film((0.0, 2.0, 4.0))])
         with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
             run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
-        self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with the timing problem, reviewer
-        self.assertIn('[blocking] assets/p2.mp4 must start at 2.0 s', client.prompts[1])
+        self.assertEqual(len(client.prompts), 5)  # writer, two skill passes, one rewrite with the timing problem, reviewer
+        self.assertIn('[blocking] assets/p2.mp4 must start at 2.0 s', client.prompts[3])
         self.assertEqual(len(fake.created), 3)  # the rewrite reused every render
 
     def test_reel_looks_before_render(self):
@@ -1244,8 +1360,8 @@ class HeyGenReelTest(unittest.TestCase):
         with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=1)):
             run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
         self.assertEqual(calls, ['look', 'look', 'render --subtitles'])  # the failed look stops before the render
-        self.assertEqual(len(client.prompts), 3)  # writer, one rewrite with the look problem, reviewer
-        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[1])
+        self.assertEqual(len(client.prompts), 5)  # writer, two skill passes, one rewrite with the look problem, reviewer
+        self.assertIn('[blocking] film.html:10: position would move the clip', client.prompts[3])
         self.assertTrue((step_dir / 'APPROVED').is_file())
 
     def test_reel_look_still_failing_stops(self):
@@ -1259,7 +1375,7 @@ class HeyGenReelTest(unittest.TestCase):
         self.assertEqual(calls, ['look', 'look'])  # no render
         self.assertIn('stdout:', str(caught.exception))
         self.assertIn('stderr:', str(caught.exception))
-        self.assertEqual(len(client.prompts), 2)  # no reviewer call after the second failure
+        self.assertEqual(len(client.prompts), 4)  # writer, two skill passes, one rewrite; no reviewer call after the second failure
 
     def test_final_package_has_the_ai_label_line(self):
         campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
@@ -1394,7 +1510,8 @@ class LibraryTest(unittest.TestCase):
             (folder / 'APPROVED').write_text('done\n')
         social = [step for step in run.STEPS if step['id'] in ('04-linkedin', '05-x', '06-instagram')]
         prompts = [run.writer_prompt(run.SKILLS_DIR, self.campaign, step) for step in social]
-        self.assertIn('--- END skill: hook-writer ---', os.path.commonprefix(prompts))
+        self.assertIn('--- END skill: stop-slop ---', os.path.commonprefix(prompts))  # the first skill drafts; hook-writer comes in a later pass
+        self.assertNotIn('--- BEGIN skill: hook-writer ---', prompts[0])
 
 
 class LengthTest(unittest.TestCase):
@@ -1517,6 +1634,16 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(run.check_task((self.campaign / '00-task.md').read_text()), [])
         self.assertIn('MC-32', client.prompts[0])
 
+    def test_import_from_a_saved_issue_uses_no_tools(self):
+        client = FakeClient([], writer_text=json.dumps({'output': task_text(), 'notes': ''}), plan_status='pending')
+        run.import_issue(client, self.campaign, 'MC-32', skills_dir=self.tmp / 'skills', roles=ROLES,
+                         issue_data={'identifier': 'MC-32', 'title': 'Saved issue text'})
+        self.assertEqual(run.check_task((self.campaign / '00-task.md').read_text()), [])  # a pending connector does not stop it
+        self.assertIn('Saved issue text', client.prompts[0])
+        self.assertIn('You have no tools', client.prompts[0])
+        self.assertNotIn('--allowedTools', client.argvs[0])
+        self.assertEqual(client.argvs[0][client.argvs[0].index('--tools') + 1], '')
+
     def test_import_with_empty_output_stops(self):
         client = FakeClient([], writer_text=json.dumps({'output': '', 'notes': 'tracker unreachable'}))
         with self.assertRaises(run.WorkflowError):
@@ -1614,7 +1741,7 @@ class NewRulesTest(unittest.TestCase):
         self.assertTrue(any('Channel idea is' in e for e in errors))
 
     def test_library_preface_and_step_lists(self):
-        self.assertIn('Files these skills point to under references/', run.LIBRARY_PREFACE)
+        self.assertIn('Reference files a skill points to under references/ follow its SKILL.md', run.LIBRARY_PREFACE)
         for step in run.STEPS:
             for key in ('writer_skills', 'review_skills'):
                 self.assertNotIn('accessibility-review', step[key])
@@ -1703,10 +1830,10 @@ class ClaudeCallTest(unittest.TestCase):
     def test_each_role_starts_claude_with_its_model_effort_and_budget(self):
         client = FakeClient(['pass'])
         for role, model, effort, budget in [('writer', 'claude-haiku-5-5', 'xhigh', '1.00'),
-                                            ('script', 'claude-opus-5-5', 'medium', '4.00'),
+                                            ('script', 'claude-sonnet-5-5', 'high', '4.00'),
                                             ('importer', 'claude-sonnet-5-5', 'medium', '5.00'),
                                             ('strategist', 'claude-sonnet-5-5', 'high', '3.00'),
-                                            ('creator', 'claude-opus-5-5', 'high', '6.00')]:
+                                            ('creator', 'claude-sonnet-5-5', 'xhigh', '6.00')]:
             self.call(client, role)
             argv = client.argvs[-1]
             self.assertEqual(argv[argv.index('--model') + 1], model)

@@ -29,6 +29,7 @@ Nothing is published unless the task has `## Publish to` and you approve step 09
 ```sh
 python3 marketing/run.py brand moderaty                  # once per brand: draft positioning.md (see Brand kit)
 python3 marketing/run.py new mc-32 --issue MC-32         # create a campaign from an It's a Plan issue
+python3 marketing/run.py new mc-32 --issue MC-32 --issue-file issue.json  # the same, from a saved copy of the issue (the headless import cannot reach It's a Plan)
 python3 marketing/run.py new spring-launch my-task.md    # or from a task file
 python3 marketing/run.py run mc-32                       # run; stops at every step for your decision
 python3 marketing/run.py status mc-32                    # where it is, and the tokens each step used
@@ -41,6 +42,8 @@ At each step you see the output and the review, then type:
 - `q` to quit; run the same command later to come back to the same step
 
 A step that fails the automatic checks goes back to the writer without a reviewer call. If the reviewer says revise, or a pass has minor findings, the writer rewrites automatically once, then the reviewer checks again before the step comes to you. A failed check uses the same one rewrite.
+
+A step's writer skills run in order. The first skill drafts; each later skill is a pass on the same writer session that refines the draft, and the step's own checks run between passes, with any failures passed to the next pass. A pass may report `unchanged`, which keeps the draft. `passes.md` in the step folder logs what each pass changed. An interrupted run continues at the next skill if the draft's prompt and the skill list are unchanged. The reviewer loads every skill the step uses, but reviews once.
 
 ## What the checks enforce
 
@@ -116,11 +119,11 @@ Each step and the import uses one of six roles. The roles are set in `ROLES` at 
 | Role | Used for | Model | Effort | Budget per call |
 | --- | --- | --- | --- | --- |
 | writer | the brand command, and steps 01, 03 to 06 | `claude-haiku-5-5` | `xhigh` | $1.00 |
-| script | the reel script (08-reel-script) | `claude-opus-5-5` | `medium` | $4.00 |
+| script | the reel script (08-reel-script) | `claude-sonnet-5-5` | `high` | $4.00 |
 | importer | the import (`new --issue`) | `claude-sonnet-5-5` | `medium` | $5.00 |
 | strategist | the brief (step 02) | `claude-sonnet-5-5` | `high` | $3.00 |
 | reviewer | the review of every step | `claude-sonnet-5-5` | `medium` | $4.00 |
-| creator | images and reel | `claude-opus-5-5` | `high` | $6.00 |
+| creator | images and reel | `claude-sonnet-5-5` | `xhigh` | $6.00 |
 
 Before any step runs, the program runs `claude --version` and `claude --help`: every flag it uses must be in the help, and each role's effort must be one of the `--effort` choices. If one is not, it stops with an `error:` message. There is no model list: a model Claude Code does not know fails its first call.
 
@@ -139,7 +142,7 @@ campaigns/<name>/final/index.md
 campaigns/<name>/09-publish/plan.json, APPROVED, publish.jsonl, media/   (only with ## Publish to)
 ```
 
-Each step folder has `claude-usage.jsonl` (one line per Claude call: tokens, cost and context size), `calls/` (each prompt and the full stream of replies) and `review-started.txt`, which marks that the reviewer has seen the current draft, so the next review is a re-review. `status` adds the tokens and cost up.
+Each step folder has `claude-usage.jsonl` (one line per Claude call: tokens, cost and context size), `calls/` (each prompt and the full stream of replies) and `review-started.txt`, which marks that the reviewer has seen the current draft, so the next review is a re-review. `status` adds the tokens and cost up. Each call's `cost_usd` is its own share: claude reports each session's running total. Records written before this change hold the running total, so their `status` cost is too high; a campaign's true cost is the largest value per session.
 
 ### Sessions
 
