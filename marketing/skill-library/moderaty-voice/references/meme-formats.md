@@ -24,14 +24,10 @@ Read this before writing any funny Moderaty copy. Everything here is raw materia
 2. Pick a format from section 3 that fits the job and platform (section 9).
 3. Fill it with Moderaty nouns from section 1. Specific beats generic: name the archetype, give the fake quote, give the verdict.
 4. Add one mechanic from section 2.
-5. Check every factual word against the facts list in `SKILL.md`.
-6. Cut to one joke per line. Keep the strongest, delete the rest.
+5. Cut to one joke per line. Keep the strongest, delete the rest.
 
 Rules for all material below:
-- Formats are structures. Recreate visuals with original art or the capybara mascot. Never copy a meme's original caption, image, or audio branding verbatim.
-- Never name or mock a real person. Never reference a real film, show, or character by name; describe the emotion or situation instead ("exhausted face closing a laptop").
 - A format that feels stale to the audience loses. If unsure, pick a different one.
-- A joke that changes a product fact fails. Fact first, joke second.
 
 ---
 
@@ -72,12 +68,10 @@ bonk, hammer, "the hammer swings first", receipts (the audit log), the review qu
 7. **Callback.** Reuse "bonk", "Chad", "touch grass" later in the same piece.
 8. **Fake-humble flex.** Brag about restraint. "We have never once posted as you. We have standards."
 9. **Escalation ladder.** Three reactions, each bigger. "Hold. Reject. Delete. Ban. Touch grass."
-10. **Anti-hype honesty.** Self-aware truth is funnier than hype. "YouTube Studio might be all you need. Rare for us to say."
-11. **Direct address to the troll.** "No you didn't, Chad."
-12. **Meme grammar on a boring feature.** Describe an audit log in a meme format. "Receipts: every bonk, timestamped."
-13. **Plain-then-joke.** One literal sentence, then the joke. "Deletions are permanent. Choose violence responsibly."
-14. **Fake UI/notification.** Show a mock queue line. "@sub4sub_andy: REJECTED. rule: REGEX promo pattern."
-15. **Contrast of scale.** Tiny tool, huge dramatic reaction. "$5 a month. Cheaper than the therapy."
+10. **Direct address to the troll.** "No you didn't, Chad."
+11. **Meme grammar on a boring feature.** Describe an audit log in a meme format. "Receipts: every bonk, timestamped."
+12. **Fake UI/notification.** Show a mock queue line. "@sub4sub_andy: REJECTED. rule: REGEX promo pattern."
+13. **Contrast of scale.** Tiny tool, huge dramatic reaction. "$5 a month. Cheaper than the therapy."
 
 ---
 
@@ -90,13 +84,11 @@ Headshot or mascot plus a list of deliberately terrible advice for one situation
 - THINGS TO SAY TO THE CRYPTO BOT: "Chad, I know it's you." / "How's the 8,412 dollars?" / "Is that the same link as last video?" / "The hammer is already warm."
 - THINGS TO SAY TO A CREATOR AFTER 400 COMMENTS: "I'm fine." / "I didn't read them." / "I only read the first one." / "It was 'first!!'."
 - THINGS TO SAY TO THE ACKCHYUALLY GUY: "You're right about 4:12." / "You're also right about everything else." / "Please take it to the review queue."
-Watch out: lines must be bad advice that blows up the situation, not cruelty toward real people. Use only the structure; the original meme has a crude origin.
 
 ### 3.2 Top 5 horror movies
 Ordinary dread ranked as horror films. Template: "Top 5 horror movies:" then 5 mundane horrors.
 - "1. Opening notifications at 3 a.m. 2. 'Ackchyually…' 3. 'sub4sub anyone?' 4. The Brigadier arriving four minutes after upload. 5. Reading the comments."
 - Landing page version: a section titled "Our top 5 horror films" listing the five troll types, followed by one plain sentence about the workflow.
-Watch out: horror list stays relatable, never about real viewers' identities.
 
 ### 3.3 The saxophones are getting louder
 A calm situation sliding toward inevitable disaster. Template: "[normal moment], and the saxophones keep getting louder."
@@ -121,7 +113,6 @@ A good start that gets derailed. Template: "[warm line]… [pivot to disaster]."
 Setup "I need therapy", reveal a small comfort. Template: "I need therapy. The therapy: [product]."
 - "I need therapy. The therapy: a review queue with six comments instead of 47."
 - "I need therapy. The therapy: $5 a month."
-Watch out: this is playful, never a claim about mental health treatment. No health claims.
 
 ### 3.7 Suspect lineup
 Friends or family narrated like suspects with quirky traits. Template: police-lineup voiceover listing habits.
@@ -132,7 +123,7 @@ Friends or family narrated like suspects with quirky traits. Template: police-li
 Rival groups join forces against one common target. Template: "[Group A] and [Group B] have put aside their differences to deal with [common enemy]."
 - "Gaming channels and cooking channels have put aside their differences to deal with the crypto bot."
 - "Every creator, every niche, one common enemy: the same self-promo pasted under every video."
-Watch out: the common target must be bots or spam. Never a real work, group, or person.
+Watch out: the common target must be bots or spam.
 
 ### 3.9 Meme dump / "the memes I showed my therapist this week"
 A carousel of saved memes with a joking caption on the first slide. Template: cover line plus 5 to 10 slides.
@@ -158,12 +149,10 @@ Watch out: both sides should feel recognizable, not mocked.
 A news-style headline that turns absurd. Template: "Scientists reveal [absurd thing]."
 - "Local creator reveals the hi."
 - "Area man discovers comment section was bots the whole time."
-Watch out: never invent statistics or fake studies. Absurd claims only.
 
 ### 3.14 Hold to see…
 Interactive reel where viewers press and hold while images flash. Template: "Hold to see [outcome]."
 - "Hold to see which troll you get today." Flash archetype cards. Final frame: the product CTA.
-Watch out: end with a legitimate CTA, not a fake result.
 
 ### 3.15 Buffering / blank-stare reaction
 Face with a loading symbol, used for confusion. Template: "[question]. Me: [loading]."
@@ -199,7 +188,6 @@ Hundreds of cats staring upward, mesmerized. Template: "A street full of [group]
 ### 3.22 Nostalgia slideshow ("Mom, what were you like in the 90s?")
 A present-day clip followed by old photos set to a nostalgic song. Template: "[question]" then slideshow.
 - "Creator, what were your comments like before Moderaty?" Then screenshots of scenes from a past era of mess (illustrative only, mocked-up).
-Watch out: use mock-ups, never real commenters' screenshots.
 
 ### 3.23 Not-you imposter callout
 Spotting an obvious fake. Template: "you're blatantly just not [real thing]."
@@ -451,11 +439,10 @@ Joke goes around the button: "Ready to go touch grass?" above "Connect your YouT
 ### 7.4 Pricing lines
 - "Choose your fighter."
 - Self-hosted: "$0 Moderaty subscription. Free as in free. You bring the OpenAI key and the server."
-- Hosted: "$5 a month. Cheaper than the therapy." (then plain: 100 AI classifications a month, shared between scoring and enabled feedback digests.)
-- Lifetime: "$49 once. One-time payment, no monthly subscription. Limited to 1,000 lifetime places, subject to availability. You supply your own OpenAI key."
-- "Fine print, but make it honest."
+- Hosted: "$5 a month. Cheaper than the therapy."
+- Lifetime: "$49 once. One-time payment, no monthly subscription. Limited to 1,000 lifetime places. You supply your own OpenAI key."
 
-### 7.5 FAQ (plain then joke)
+### 7.5 FAQ
 - Does Moderaty replace YouTube Studio? "No. YouTube Studio may be all you need if its controls fit. Rare for us to say."
 - Does Moderaty reply for me? "No. We never post as you. We have standards."
 - Can I undo an action? "Held and rejected comments can be restored. Deletions are permanent. Choose violence responsibly."
@@ -543,7 +530,7 @@ Transactional emails (billing, access, deletion, security): plain first, one lig
 | Threads | Deadpan, timed one-liners | Understated; try-hard callbacks fail |
 | LinkedIn | Image memes with a plain sentence of real value | Self-aware marketing humor, lighter slang |
 | Email | Subject line is the joke, body is plain | One CTA |
-| Landing page | Joke headline, plain subhead, plain CTA | Funny line, then one factual sentence |
+| Landing page | Joke headline, plain subhead, plain CTA | Funny opening line |
 
 ---
 
@@ -555,24 +542,12 @@ Use quickly, then retire. Trends age fast.
 - Holiday chaos: cat typing furiously (prep panic).
 - The "Hold to see" reel with archetype cards.
 - Weekly series: "Meet the regulars" every week, one archetype.
-- Lifetime offer copy must reflect the real terms only: limited to 1,000 places, subject to availability. Never invent a countdown or fake scarcity.
 
 ---
 
-## 11. Hard limits and final checklist
+## 11. Final checklist
 
-Never:
-- Mock real people, real commenters by name, protected groups, or viewers who leave real criticism.
-- Reference or reproduce copyrighted characters, film or show catchphrases, song lyrics, celebrities' faces, or trademarked meme characters.
-- Join political, tragic, or divisive trends.
-- Present AI-made images as human-made without labeling.
-- Invent statistics, studies, or testimonials.
-- Joke about billing errors, data loss, access problems, or permanent actions without the plain fact first.
-- Claim Moderaty auto-replies, posts as the creator, scans live chat, or guarantees results.
-
-Final checklist before sending:
-1. Is every factual claim accurate and plain? 
-2. Is there exactly one joke per line?
-3. Is the target a troll, bot, or situation, never a real person?
-4. Does the format feel current for this platform?
-5. Would a real creator laugh and still trust the product?
+1. Is there exactly one joke per line?
+2. Is the target a troll, bot, or situation?
+3. Does the format feel current for this platform?
+4. Would a real creator laugh?

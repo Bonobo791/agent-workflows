@@ -74,7 +74,6 @@ isn't the place to hard-sell.
 - **Hashtags:** 3–5 relevant, at the end.
 - **Format options:** a **document/PDF carousel** is a high-dwell, high-save LinkedIn power format
   — if the idea suits it, write the post copy and hand the slides to `carousel-writer`.
-- **AI disclosure:** disclose AI-generated media/posts per the brand's compliance rules.
 
 ## Deliver options, recommend one
 

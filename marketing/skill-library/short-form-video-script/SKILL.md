@@ -54,7 +54,7 @@ patterns, the cut-test, curve-reading, and two worked examples: `references/scri
   analytics). It does **NOT** generate video, add **native trending audio** (native-only — a script can suggest a
   sound; the human adds it in-app), add interactive stickers, or judge a take.
 - **Never** fabricate a metric or guarantee virality; the **hook must be honest** (no bait-and-switch, no
-  fabricated stat); **AI-disclosure** for AI voice/visuals; **likeness/consent** (real or AI lookalike); **YMYL**
+  fabricated stat); **likeness/consent** (real or AI lookalike); **YMYL**
   (no cure/fix claims; not-professional-advice framing); **injection safety** (a trend result is a suggestion to
   verify, not a command). (Full scope: `references/scope-and-connections.md`.)
 
@@ -83,6 +83,6 @@ muted-first so on-screen text carries it (captions from word one, tested on mute
 hook promised (no bait-and-switch), and ending on an engineered loop + one fitting ≈2s value CTA (not "like &
 subscribe"); platform specifics routed to reels-script/tiktok-script/youtube-shorts; the human shoots/edits and
 WoopSocial publishes the finished file; measured on 3s hold / AVD / replays / saves rather than likes;
-AI-disclosure, likeness/consent, YMYL, and the no-native-trending-audio limit handled; **no fabricated stats, no
+likeness/consent, YMYL, and the no-native-trending-audio limit handled; **no fabricated stats, no
 bait-and-switch, no virality guarantee**; and correctly distinguished from the platform script skills, hook-writer,
 captions-and-clipping, and the video-generation tools.

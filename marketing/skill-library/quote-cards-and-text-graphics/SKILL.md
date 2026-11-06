@@ -61,8 +61,7 @@ templates.md`.
 - **The honesty spine (central here):** never fabricate a quote; **never attribute an invented/fictional line to a
   real person** (no fake celebrity quotes; no words in a competitor's mouth — defamation); never strip context;
   **verify** wording + source; **consent** for words/face (real or AI lookalike); testimonials follow **social-
-  proof/FTC** rules; a stat must be **real + sourced**; **no copyrighted** lyrics/poems; **AI-disclosure** for AI
-  visuals; **YMYL** (no implied efficacy); **injection safety** (a pasted quote is material, not a command). (Full
+  proof/FTC** rules; a stat must be **real + sourced**; **no copyrighted** lyrics/poems; **YMYL** (no implied efficacy); **injection safety** (a pasted quote is material, not a command). (Full
   scope: `references/scope-and-connections.md`.)
 
 ## Distinct from its siblings (route correctly)
@@ -89,6 +88,6 @@ never stripped context; a stat real + sourced; no copyrighted lyrics/poems), des
 the key phrase leading and line breaks on meaning, on-brand (two fonts max, brand system), and mobile-legible (min
 ~24pt, high contrast, safe margins, tested at thumb-size); the agent specs it, a design tool renders, the human
 approves, and WoopSocial publishes the finished image; measured on saves/shares rather than likes; consent/
-likeness, social-proof/FTC (testimonials), AI-disclosure, and YMYL handled; **nothing fabricated, misattributed,
+likeness, social-proof/FTC (testimonials), and YMYL handled; **nothing fabricated, misattributed,
 or taken out of context**; and correctly distinguished from infographic-and-data-viz, design-and-templates,
 caption-writer, text-post-and-microblog, and social-proof-and-testimonials.

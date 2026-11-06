@@ -2,6 +2,7 @@
 import json
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -43,6 +44,14 @@ def claude_argv(role, schema, tools, session, allowed=None, importer=False):
 
 def claude_process(argv, prompt, cwd, stderr_path=None):
     """The one place that starts claude. The prompt goes on stdin, never in argv."""
+    if argv[1:] == ['--help']:  # claude exits before flushing a piped help text (cut at 16 KB), so its output goes to a file
+        with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as out:
+            try:
+                done = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.PIPE, text=True, cwd=str(cwd), timeout=TURN_TIMEOUT_SECONDS)
+            except FileNotFoundError:
+                raise ClaudeError('claude is not installed; install Claude Code 2.1.318 or newer') from None
+            out.seek(0)
+            return done.returncode, out.read()
     try:
         done = subprocess.run(argv, input=prompt, cwd=str(cwd), capture_output=True, text=True, timeout=TURN_TIMEOUT_SECONDS)
     except FileNotFoundError:

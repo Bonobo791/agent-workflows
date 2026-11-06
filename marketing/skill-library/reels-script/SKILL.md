@@ -78,8 +78,7 @@ caption. Keyword research + the search-first caption → `instagram-seo`; captio
 For unproven hooks/formats, recommend a **Trial Reel** (shown to non-followers first — a free test
 that doesn't touch follower-facing stats). Default to **native filming** for faces and voices. For
 **faceless niches, b-roll, or unfilmable shots**, use the bundled Veo prompt pack
-(`references/veo-prompt-pack.md`; API layer in `tools/integrations/veo.md`) — and follow Meta's
-AI-labeling rules for generated media (disclosure on Instagram is native/manual, not automatic).
+(`references/veo-prompt-pack.md`; API layer in `tools/integrations/veo.md`) 
 
 ## Step 8 — Hand off
 
