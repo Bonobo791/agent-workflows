@@ -4,6 +4,7 @@ sources -> brief -> SEO article -> social copy, images and reel (as the Delivera
 Every step: a Claude writer, Python checks, then a fresh Claude reviewer, then the owner approves or rejects.
 """
 import argparse
+import base64
 import difflib
 import hashlib
 import inspect
@@ -62,11 +63,17 @@ MAX_AUTO_REVISIONS = 1  # one automatic rewrite, shared by a failed check, a rev
 MAX_REVIEW_FRAMES = 10
 WORDS_PER_SECOND = 2.5  # the whole script, against the reel length in the reel skill
 PRESENTER_ON_SCREEN_SECONDS = 2
-HEYGEN_BASE = 'https://api.heygen.com'
-HEYGEN_POLL_SECONDS = 10
-HEYGEN_MAX_POLLS = 180
-HEYGEN_TIMEOUT = 120
-CHARACTER_SECTIONS = ['Name', 'Personality', 'Avatar id', 'Voice id', 'Do', "Don't"]
+ELEVENLABS_BASE = 'https://api.elevenlabs.io'
+ELEVENLABS_MODEL = 'eleven_v4'  # the voiceover model: expressive, with audio tags
+ELEVENLABS_TIMEOUT = 120
+ALIGNMENT_KEYS = ('characters', 'character_start_times_seconds', 'character_end_times_seconds')
+CLIP_LENGTH_TOLERANCE = 0.3  # seconds: the owner's avatar clip and the voiceover must match this closely
+SUBTITLE_CUE_WORDS = 6
+SUBTITLE_CUE_SECONDS = 2.5
+AUDIO_TAGS = {'laughs', 'sighs', 'gasps', 'whispers', 'sarcastic', 'excited', 'playful', 'smug'}  # the only tags a script may use
+MAX_AUDIO_TAGS = 4
+TAG_RE = re.compile(r'\[([^\[\]\n]*)\]')  # one audio tag; group 1 is its name
+CHARACTER_SECTIONS = ['Name', 'Personality', 'Voice id', 'Do', "Don't"]
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 ISSUE_RE = re.compile(r'^[A-Z][A-Z0-9]*-[0-9]+$')
 URL_RE = re.compile(r'https?://\S+')
@@ -198,8 +205,8 @@ STEPS = [
      'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'moderaty-voice']},
     {'id': '08-reel-script', 'skill': 'reel-script', 'kind': 'script', 'role': 'script', 'deliverable': 'reel', 'web': False, 'check': 'reel-script', 'register': 'script',
      'inputs': REEL_SCRIPT_WRITER_INPUTS, 'review_inputs': REEL_SCRIPT_INPUTS,
-     'writer_skills': ['video-hooks', 'short-form-video-script', 'reels-script', 'heygen-video', 'moderaty-voice'],
-     'review_skills': ['video-hooks', 'short-form-video-script', 'reels-script', 'heygen-video', 'moderaty-voice']},
+     'writer_skills': ['video-hooks', 'short-form-video-script', 'reels-script', 'voiceover-script', 'moderaty-voice'],
+     'review_skills': ['video-hooks', 'short-form-video-script', 'reels-script', 'voiceover-script', 'moderaty-voice']},
     {'id': '08-reel-package', 'skill': 'reel-package', 'kind': 'text', 'role': 'script', 'deliverable': 'reel', 'web': False, 'check': 'reel-package', 'register': 'post',
      'inputs': REEL_PACKAGE_WRITER_INPUTS, 'review_inputs': REEL_PACKAGE_REVIEW_INPUTS,
      'writer_skills': ['video-titles', 'video-captions', 'video-metadata', 'moderaty-voice'], 'review_skills': ['moderaty-voice']},
@@ -1708,8 +1715,7 @@ def check_character(brand):
 def read_character(campaign):
     brand = brand_of((campaign / '00-task.md').read_text())
     found = sections(brand_file(brand, 'character.md').read_text())
-    return {'name': first_line(found.get('Name', '')), 'avatar_id': first_line(found.get('Avatar id', '')),
-            'voice_id': first_line(found.get('Voice id', ''))}
+    return {'name': first_line(found.get('Name', '')), 'voice_id': first_line(found.get('Voice id', ''))}
 
 
 def reel_seconds():
@@ -1725,20 +1731,22 @@ def check_reel_script(output, task, brief):
     errors = []
     if not script:
         errors.append('the script is empty; write it as one continuous text under "## Script"')
-    if re.search(r'link in bio', script, re.IGNORECASE):
+    errors += audio_tag_errors(script)
+    spoken = TAG_RE.sub(' ', script)  # the words the voiceover says: an audio tag is not a word
+    if re.search(r'link in bio', spoken, re.IGNORECASE):
         errors.append('never have the script say "Link in bio"')
-    words = len(re.findall(r"\b[\w'-]+\b", script))
+    words = len(re.findall(r"\b[\w'-]+\b", spoken))
     seconds = reel_seconds()
     limit = int(WORDS_PER_SECOND * seconds)
     if words > limit:
         errors.append(f'the script has {words} words; the limit for a {seconds} s reel is {limit}')
-    if PROCESS_RE.search(script):
+    if PROCESS_RE.search(spoken):
         errors.append('remove this internal process line from the script')
-    hedge = next((word for word in HEDGE_WORDS if re.search(rf'\b{word}\b', script, re.IGNORECASE)), None)
+    hedge = next((word for word in HEDGE_WORDS if re.search(rf'\b{word}\b', spoken, re.IGNORECASE)), None)
     if hedge:
         errors.append(f'the script uses "{hedge}"; open on the reader\'s problem instead')
-    errors += wording_errors(script)
-    errors += rhythm_errors(script)
+    errors += wording_errors(spoken)
+    errors += rhythm_errors(spoken)
     return errors
 
 
@@ -1836,119 +1844,199 @@ def materialize_script(step_dir, written, presenter):
     return []
 
 
-class HeyGenError(WorkflowError):
+class ElevenLabsError(WorkflowError):
     pass
 
 
-def heygen_request(method, path, body=None, query=None):
-    key = os.environ.get('HEYGEN_API_KEY')
+def elevenlabs_request(method, path, body=None, query=None):
+    key = os.environ.get('ELEVENLABS_API_KEY')
     if not key:
-        raise WorkflowError('HEYGEN_API_KEY is not set; set it in the environment before a reel run')
-    url = HEYGEN_BASE + path + (f"?{urllib.parse.urlencode(query)}" if query else '')
+        raise WorkflowError('ELEVENLABS_API_KEY is not set; set it in the environment first')
+    url = ELEVENLABS_BASE + path + (f"?{urllib.parse.urlencode(query)}" if query else '')
     data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(url, data=data, method=method, headers={'x-api-key': key, 'Content-Type': 'application/json'})
+    headers = {'xi-api-key': key, 'Content-Type': 'application/json'}
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=HEYGEN_TIMEOUT) as response:
+        with urllib.request.urlopen(request, timeout=ELEVENLABS_TIMEOUT) as response:
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as error:
-        raise HeyGenError(f"HeyGen {method} {path} returned HTTP {error.code}: {error.read().decode(errors='replace')}") from None
+        raise ElevenLabsError(f"ElevenLabs {method} {path} returned HTTP {error.code}: {error.read().decode(errors='replace')}") from None
     except (urllib.error.URLError, TimeoutError) as error:
-        raise HeyGenError(f'HeyGen {method} {url} could not be reached: {error}') from None
+        raise ElevenLabsError(f'ElevenLabs {method} {url} could not be reached: {error}') from None
 
 
-def heygen_download(url):
-    try:
-        with urllib.request.urlopen(url, timeout=HEYGEN_TIMEOUT) as response:
-            return response.read()
-    except (urllib.error.URLError, TimeoutError) as error:
-        raise HeyGenError(f'HeyGen download from {url} failed: {error}') from None
+def speak(text, voice_id):
+    """One voiceover with the time of each character. Returns the MP3 bytes and ElevenLabs' alignment."""
+    data = elevenlabs_request('POST', f'/v1/text-to-speech/{voice_id}/with-timestamps', body={'text': text, 'model_id': ELEVENLABS_MODEL})
+    alignment = data.get('alignment') or {}
+    if not data.get('audio_base64') or not all(key in alignment for key in ALIGNMENT_KEYS):
+        raise ElevenLabsError(f"ElevenLabs returned no audio or no alignment: {json.dumps(data)[:300]}")
+    return base64.b64decode(data['audio_base64']), alignment
 
 
-def heygen_list(path, query):
-    items, token = [], None
+def elevenlabs_voices(search=''):
+    voices, token = [], None
     while True:
-        page = heygen_request('GET', path, query=dict(query, **({'token': token} if token else {})))
-        items += page['data']
-        if not page.get('has_more'):
-            return items
-        token = page.get('next_token')
+        query = {'page_size': 100, **({'search': search} if search else {}), **({'next_page_token': token} if token else {})}
+        page = elevenlabs_request('GET', '/v2/voices', query=query)
+        voices += page['voices']
+        token = page.get('next_page_token')
+        if not page.get('has_more') or not token:
+            return voices
 
 
-def srt_to_vtt(srt):
-    raw = srt.replace('\r\n', '\n').replace('\r', '\n').lstrip('﻿').split('\n')
-    lines = ['WEBVTT', '']
-    for index, line in enumerate(raw):
-        stripped = line.strip()
-        if '-->' in stripped:
-            start, end = (part.strip().replace(',', '.') for part in stripped.split('-->', 1))
-            lines.append(f'{start} --> {end}')
-        elif stripped.isdigit() and index + 1 < len(raw) and '-->' in raw[index + 1]:
-            continue  # the SRT cue number
+def audio_tag_errors(script):
+    """The audio tags are the only brackets a script may have: a few names from AUDIO_TAGS, each in square brackets."""
+    errors = []
+    if '[' in TAG_RE.sub('', script) or ']' in TAG_RE.sub('', script):
+        errors.append('brackets are only for audio tags such as [laughs]; remove the other bracket')
+    names = TAG_RE.findall(script)
+    unknown = [name for name in names if name.strip().lower() not in AUDIO_TAGS]
+    if unknown:
+        errors.append(f'the audio tag [{unknown[0]}] is not on the list; use only: {", ".join(sorted(AUDIO_TAGS))}')
+    if len(names) > MAX_AUDIO_TAGS:
+        errors.append(f'the script has {len(names)} audio tags; the limit is {MAX_AUDIO_TAGS}')
+    return errors
+
+
+def spoken_words(script):
+    """The words the voiceover says: the script without its audio tags."""
+    return TAG_RE.sub(' ', script).split()
+
+
+def words_from_alignment(alignment):
+    """Each spoken word with its start and end in seconds. A tag is skipped: it is neither spoken nor shown."""
+    words, text, start, end, in_tag = [], '', 0.0, 0.0, False
+    for char, begin, finish in zip(*(alignment[key] for key in ALIGNMENT_KEYS)):
+        if char == '[':
+            in_tag = True
+        elif char == ']' and in_tag:
+            in_tag = False
+        elif in_tag:
+            continue
+        elif char.isspace():
+            if text:
+                words.append((text, start, end))
+                text = ''
         else:
-            lines.append(line.rstrip())
-    return '\n'.join(lines).rstrip() + '\n'
+            if not text:
+                start = begin
+            text += char
+            end = finish
+    if text:
+        words.append((text, start, end))
+    return words
 
 
-def render_one(text, character, pending, label):
-    """Render the presenter video once. The video id is saved before polling, so a rerun polls that video instead of starting another."""
-    if pending.is_file():
-        video_id = json.loads(pending.read_text())['video_id']
-        log.info('[08-reel] %s: polling the video started earlier (%s)', label, video_id)
-    else:
-        created = heygen_request('POST', '/v3/videos', body={
-            'type': 'avatar', 'avatar_id': character['avatar_id'], 'voice_id': character['voice_id'], 'script': text,
-            'aspect_ratio': '9:16', 'resolution': '1080p', 'output_format': 'mp4', 'caption': {'file_format': 'srt'}})
-        video_id = created['data']['video_id']
-        pending.write_text(json.dumps({'video_id': video_id}) + '\n')
-    for _ in range(HEYGEN_MAX_POLLS):
-        status = heygen_request('GET', f'/v3/videos/{video_id}')
-        data = status['data']
-        if data.get('status') == 'completed':
-            break
-        if data.get('status') == 'failed':
-            pending.unlink(missing_ok=True)
-            raise HeyGenError(f"HeyGen render of the {label} failed. Full response: {json.dumps(status)}")
-        time.sleep(HEYGEN_POLL_SECONDS)
-    else:
-        raise HeyGenError(f"HeyGen render of the {label} did not finish. Last response: {json.dumps(status)}")
-    if not data.get('subtitle_url'):
-        raise WorkflowError(f"HeyGen finished the {label} without a subtitle_url. Delete {pending} to render it again.")
-    if not data.get('video_url') or data.get('duration') is None:
-        raise HeyGenError(f"HeyGen finished the {label} without a video_url or duration. Full response: {json.dumps(status)}. "
-                          f'Delete {pending} to render it again.')
-    subtitles = heygen_download(data['subtitle_url']).decode('utf-8-sig')
-    return float(data['duration']), heygen_download(data['video_url']), srt_to_vtt(subtitles)
+def subtitle_words(alignment, script):
+    """The spoken words with their times. Raises when they are not the script's words, so a wrong timing never reaches the subtitles."""
+    if len({len(alignment[key]) for key in ALIGNMENT_KEYS}) != 1:
+        raise ElevenLabsError('ElevenLabs returned timing lists of different lengths')
+    words = words_from_alignment(alignment)
+    got, expected = [word for word, _, _ in words], spoken_words(script)
+    if got != expected:
+        at = next((i for i, pair in enumerate(zip(got, expected)) if pair[0] != pair[1]), min(len(got), len(expected)))
+        raise ElevenLabsError(f"the word timings do not match the script at word {at + 1}: "
+                              f"ElevenLabs has {got[at:at + 1] or ['nothing']}, the script has {expected[at:at + 1] or ['nothing']}")
+    return words
 
 
-def render_presenter(campaign, step_dir, character):
-    """Render the whole script as one presenter video, cache it by its text and the character, and write presenter.json."""
-    script = json.loads((campaign / '08-reel-script' / 'script.json').read_text())
-    text = script['script'].strip()
+def vtt_time(seconds):
+    millis = round(seconds * 1000)
+    hours, millis = divmod(millis, 3600000)
+    minutes, millis = divmod(millis, 60000)
+    secs, millis = divmod(millis, 1000)
+    return f'{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}'
+
+
+def vtt_from_words(words):
+    """WebVTT for OpenFilm: a cue of up to SUBTITLE_CUE_WORDS words, ended early at a comma or full stop, with a timestamp tag at each word."""
+    cues, cue = [], []
+    for index, (word, start, end) in enumerate(words):
+        cue.append((word, start, end))
+        too_long = len(cue) >= SUBTITLE_CUE_WORDS or end - cue[0][1] >= SUBTITLE_CUE_SECONDS
+        if word[-1] in '.!?,;:' or too_long or index == len(words) - 1:
+            cues.append(cue)
+            cue = []
+    lines = ['WEBVTT', '']
+    for cue in cues:
+        lines.append(f'{vtt_time(cue[0][1])} --> {vtt_time(cue[-1][2])}')
+        lines.append(' '.join(f'<{vtt_time(start)}>{word}' for word, start, _ in cue))
+        lines.append('')
+    return '\n'.join(lines) + '\n'
+
+
+def media_info(path):
+    """The duration in seconds and the kinds of stream (video, audio) in a media file."""
+    if shutil.which('ffprobe') is None:
+        raise WorkflowError('ffprobe is not on PATH; the avatar clip checks need ffmpeg')
+    proc = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration:stream=codec_type', '-of', 'json', str(path)],
+                          capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        raise WorkflowError(f'ffprobe could not read {path}: {proc.stderr.strip()}')
+    data = json.loads(proc.stdout)
+    duration = data.get('format', {}).get('duration')
+    if duration is None:
+        raise WorkflowError(f'ffprobe found no duration in {path}')
+    return float(duration), {stream.get('codec_type') for stream in data.get('streams', [])}
+
+
+def check_clip(clip, voice_length, seconds):
+    """The owner's avatar clip: a video with its own sound, as long as the voiceover, and within the reel limit."""
+    length, kinds = media_info(clip)
+    if 'video' not in kinds:
+        raise WorkflowError(f'{clip} has no video track; export the avatar clip as a video')
+    if 'audio' not in kinds:
+        raise WorkflowError(f'{clip} has no sound track; export the avatar clip with the voiceover in it')
+    if abs(length - voice_length) > CLIP_LENGTH_TOLERANCE:
+        raise WorkflowError(f'{clip} is {length:.2f} s; the voiceover is {voice_length:.2f} s, and they must be within {CLIP_LENGTH_TOLERANCE} s of each other')
+    if length > seconds:
+        raise WorkflowError(f'{clip} is {length:.1f} s; the reel limit is {seconds} s')
+    return length
+
+
+def clip_needed(assets, voiceover, voice_length, presenter):
+    message = (f'Make the avatar clip from {voiceover} ({voice_length:.1f} s), with its own sound, save it as {presenter}, '
+               f'then run the same command again.')
+    others = sorted(path.name for path in assets.glob('*.mp4'))
+    if others:
+        message += f' If {others[0]} in assets/ is the clip, rename it to presenter.mp4.'
+    return message
+
+
+def prepare_presenter(campaign, step_dir, character):
+    """The reel's voice and presenter files. The voiceover is spoken once per script, voice and model, and cached. The owner's avatar clip
+    is checked against it and cached too. Without a clip the run stops and names the file to put in assets/."""
+    text = json.loads((campaign / '08-reel-script' / 'script.json').read_text())['script'].strip()
     seconds = reel_seconds()
-    cache = campaign.parent / '.heygen-cache'  # campaigns/.heygen-cache: shared by every campaign, and kept when a step is deleted
+    cache = campaign.parent / '.elevenlabs-cache'  # campaigns/.elevenlabs-cache: shared by every campaign, kept when a step is deleted
     cache.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256('\n'.join([text, character['voice_id'], ELEVENLABS_MODEL]).encode()).hexdigest()
+    audio, meta, clip = cache / f'{key}.mp3', cache / f'{key}.json', cache / f'{key}.clip.mp4'
     assets = step_dir / 'assets'
-    assets.mkdir(exist_ok=True)
-    key = hashlib.sha256('\n'.join([text, character['avatar_id'], character['voice_id']]).encode()).hexdigest()
-    video, subtitles, meta = cache / f'{key}.mp4', cache / f'{key}.vtt', cache / f'{key}.json'
-    pending = cache / f'{key}.pending.json'  # the video id of a render that has started but not finished
-    if video.is_file() and subtitles.is_file() and meta.is_file():
-        duration = json.loads(meta.read_text())['duration']
-        log.info('[08-reel] the presenter video was reused from an earlier render: %.1f s', duration)
-    else:
-        started = time.monotonic()
-        duration, mp4_bytes, vtt_text = render_one(text, character, pending, 'presenter video')
-        video.write_bytes(mp4_bytes)
-        subtitles.write_text(vtt_text)
-        meta.write_text(json.dumps({'duration': duration}))
-        pending.unlink(missing_ok=True)  # cached, so the video id is no longer needed
-        log.info('[08-reel] rendered the presenter video: %.1f s in %.0f s', duration, time.monotonic() - started)
-    if duration > seconds:
-        raise WorkflowError(f"the presenter video is {duration:.1f} s; the reel limit is {seconds} s. "
+    assets.mkdir(parents=True, exist_ok=True)
+    presenter = assets / 'presenter.mp4'
+    if not (audio.is_file() and meta.is_file()):  # a new voiceover: a clip already in assets/ was made for an older script
+        if presenter.is_file():
+            raise WorkflowError(f'{presenter} was made for an older script; move it out of assets/, then run the same command again')
+        audio_bytes, alignment = speak(text, character['voice_id'])
+        audio.write_bytes(audio_bytes)
+        meta.write_text(json.dumps({'alignment': alignment}) + '\n')
+    words = subtitle_words(json.loads(meta.read_text())['alignment'], text)
+    voiceover = step_dir / 'voiceover.mp3'
+    shutil.copyfile(audio, voiceover)
+    voice_length = media_info(voiceover)[0]
+    if voice_length > seconds:
+        raise WorkflowError(f"the voiceover is {voice_length:.1f} s; the reel limit is {seconds} s. "
                             f"Shorten the script, then run: rm -r {campaign / '08-reel-script'} {step_dir}")
-    shutil.copyfile(video, assets / 'presenter.mp4')
-    (assets / 'presenter.vtt').write_text(subtitles.read_text(encoding='utf-8'), encoding='utf-8')
-    clips = [{'id': 'presenter', 'text': text, 'duration': duration, 'at': 0.0}]
+    if not presenter.is_file() and clip.is_file():
+        shutil.copyfile(clip, presenter)  # the owner's clip from an earlier run, kept in the cache
+    if not presenter.is_file():
+        raise WorkflowError(clip_needed(assets, voiceover, voice_length, presenter))
+    clip_length = check_clip(presenter, voice_length, seconds)
+    shutil.copyfile(presenter, clip)
+    (assets / 'presenter.vtt').write_text(vtt_from_words(words), encoding='utf-8')
+    clips = [{'id': 'presenter', 'text': text, 'duration': clip_length, 'at': 0.0}]
     (step_dir / 'presenter.json').write_text(json.dumps(clips, indent=2, ensure_ascii=False) + '\n')
     return clips
 
@@ -1974,13 +2062,9 @@ def presenter_film_errors(files, presenter):
     return errors
 
 
-def cmd_heygen(what):
-    if what == 'avatars':
-        for item in heygen_list('/v3/avatars/looks', {'limit': 50}):
-            print(f"{item['id']}\t{item.get('name', '')}")
-    else:
-        for item in heygen_list('/v3/voices', {'limit': 100}):
-            print(f"{item['voice_id']}\t{item.get('name', '')}")
+def cmd_elevenlabs(search):
+    for voice in elevenlabs_voices(search):
+        print(f"{voice['voice_id']}\t{voice.get('name', '')}\t{voice.get('category', '')}")
 
 
 def materialize(step, step_dir, written, campaign):
@@ -2072,7 +2156,7 @@ def write(client, roles, skills_dir, campaign, step, step_dir, revision):
     for stale in ('review.json', 'review.md'):
         (step_dir / stale).unlink(missing_ok=True)
     if step['id'] == '08-reel':
-        render_presenter(campaign, step_dir, read_character(campaign))  # before the prompt: the reel's inputs include presenter.json
+        prepare_presenter(campaign, step_dir, read_character(campaign))  # before the prompt: the reel's inputs include presenter.json
     allowed = WEB_TOOLS if step['web'] else []
     if revision is None:
         draft_prompt = step_header(step['id'], allowed) + writer_prompt(skills_dir, campaign, step)
@@ -2631,12 +2715,12 @@ def publish_gate(campaign, ask, http=publish.http_request):
         print('Type a or q.')
 
 
-def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES, http=publish.http_request, start_at=None):
+def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES, http=publish.http_request, start_at=None, end_at=None):
     steps = campaign_steps(campaign, steps)
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
+    ids = [step['id'] for step in steps]
     to_run = steps
     if start_at is not None:  # --from: the steps before it must already be approved, and their stale approvals are not checked
-        ids = [step['id'] for step in steps]
         if start_at not in ids:
             raise WorkflowError(f'{start_at} is not a step of this task; the steps are: {", ".join(ids)}')
         first = ids.index(start_at)
@@ -2645,6 +2729,13 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
             raise WorkflowError(f"--from {start_at} needs these steps approved first: {', '.join(unapproved)}")
         to_run = steps[first:]
         log.info('starting at %s; earlier steps stay as approved', start_at)
+    if end_at is not None:  # --to: the steps after it wait for a later run, and so does the final package
+        if end_at not in ids:
+            raise WorkflowError(f'{end_at} is not a step of this task; the steps are: {", ".join(ids)}')
+        if start_at is not None and ids.index(end_at) < ids.index(start_at):
+            raise WorkflowError(f'--to {end_at} comes before --from {start_at}')
+        to_run = [step for step in to_run if ids.index(step['id']) <= ids.index(end_at)]
+        log.info('stopping after %s', end_at)
     check_skills(skills_dir, steps)
     task = (campaign / '00-task.md').read_text()
     errors = check_task(task)  # before any model call, so campaigns made before a rule are caught too
@@ -2663,8 +2754,6 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
         errors = check_character(brand_of((campaign / '00-task.md').read_text()))
         if errors:
             raise WorkflowError('; '.join(errors))
-        if not os.environ.get('HEYGEN_API_KEY') and not (campaign / '08-reel' / 'APPROVED').is_file():
-            raise WorkflowError('HEYGEN_API_KEY is not set; set it in the environment before a reel run')
     recheck_approved(campaign, to_run)  # before any model call
     register_warnings(campaign, steps)  # approved copy the register check would now flag: listed for the owner, never blocked
     check_tools(client, roles)  # every role is checked before the first call
@@ -2673,6 +2762,10 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
             log.info('[%s] already approved; skipping', step['id'])
         else:
             run_step(client, roles, skills_dir, campaign, step, ask)
+    if end_at is not None and end_at != ids[-1]:  # --to: the rest waits for a later run
+        later = ids[ids.index(end_at) + 1:]
+        print(f"\nStopped after {end_at}. Not run: {', '.join(later)}. To run them, use --from {later[0]}; add --to {later[-1]} to stop again after the last one.")
+        return None
     publishing = bool(publish_targets((campaign / '00-task.md').read_text()))
     if (campaign / PUBLISH_STEP / 'APPROVED').is_file():
         final = campaign / 'final'  # the approved posts and their Published list stay as they are
@@ -2805,14 +2898,14 @@ def cmd_status(name):
         print(f"final package: {campaign / 'final' / 'index.md'}")
 
 
-def cmd_run(name, start_at=None):
+def cmd_run(name, start_at=None, end_at=None):
     campaign = CAMPAIGNS_DIR / name
     if not campaign.is_dir():
         raise WorkflowError(f'no campaign at {campaign}')
     with campaign_log(campaign):
         log.info('run %s started', name)
         with ClaudeClient(stderr_path=campaign / 'claude-stderr.log') as client:
-            run_campaign(campaign, client, start_at=start_at)
+            run_campaign(campaign, client, start_at=start_at, end_at=end_at)
 
 
 def cmd_publish(due, retry):
@@ -2837,6 +2930,7 @@ def main():
     run = sub.add_parser('run', help='run or continue a campaign')
     run.add_argument('name')
     run.add_argument('--from', dest='start_at', metavar='STEP', help='start at this step, for example 08-reel-script; earlier steps must be approved')
+    run.add_argument('--to', dest='end_at', metavar='STEP', help='stop after this step, for example 08-reel-package, so the audio and video steps do not run')
     status = sub.add_parser('status', help='show where a campaign is')
     status.add_argument('name')
     posting = sub.add_parser('publish', help='post approved campaigns, or clear a failed or unknown item')
@@ -2846,20 +2940,21 @@ def main():
     brand = sub.add_parser('brand', help="draft and approve a brand's positioning.md from its One line")
     brand.add_argument('name')
     brand.add_argument('--refresh', action='store_true', help='research again and show the differences from the approved file')
-    heygen = sub.add_parser('heygen', help='list HeyGen avatars or voices to fill in character.md')
-    heygen.add_argument('what', choices=['avatars', 'voices'])
+    elevenlabs = sub.add_parser('elevenlabs', help='list ElevenLabs voices to fill in character.md')
+    elevenlabs.add_argument('what', choices=['voices'])
+    elevenlabs.add_argument('search', nargs='?', default='', help='narrow the list by name, for example Andrew')
     args = parser.parse_args()
     try:
         if args.command == 'new':
             cmd_new(args.name, args.task_file, args.issue, args.issue_file)
         elif args.command == 'run':
-            cmd_run(args.name, args.start_at)
+            cmd_run(args.name, args.start_at, args.end_at)
         elif args.command == 'publish':
             cmd_publish(args.due, args.retry)
         elif args.command == 'brand':
             cmd_brand(args.name, args.refresh)
-        elif args.command == 'heygen':
-            cmd_heygen(args.what)
+        elif args.command == 'elevenlabs':
+            cmd_elevenlabs(args.search)
         else:
             cmd_status(args.name)
     except (WorkflowError, publish.PublishError) as error:

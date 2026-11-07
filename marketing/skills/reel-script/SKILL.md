@@ -16,4 +16,5 @@ Rules:
 - One idea per reel. Say what the reader should do once, near the end.
 - No scene breaks, parts or separate segments: one continuous take.
 - Never write "Link in bio" in the script. End with a call to action in the character's own words.
+- Audio tags are the only brackets: at most 4, each from the list in the voiceover-script skill.
 - No em dashes.

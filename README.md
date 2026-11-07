@@ -21,7 +21,7 @@ Nothing is published unless the task has `## Publish to` and you approve step 09
 5. `07-images`: three still images (if Deliverables has `images`)
 6. `08-reel-script`: the reel's spoken script, one continuous take (if Deliverables has `reel`). You approve it first.
 7. `08-reel-package`: the reel's titles, first-frame text, YouTube Short description, TikTok caption, hashtags and pinned comment. You approve it next.
-8. `08-reel`: a 30-second vertical video with a HeyGen presenter (if Deliverables has `reel`). Only then are the presenter video rendered and the film made.
+8. `08-reel`: a 30-second vertical video with a presenter (if Deliverables has `reel`). The run first makes the voiceover and stops for your avatar clip (`08-reel/assets/presenter.mp4`); then it makes the film.
 9. `09-publish`: shows every post exactly as it will go out, and queues them when you approve (only if the task has `## Publish to`)
 
 `article` is always made. `images` and `reel` need `social` in Deliverables.
@@ -111,7 +111,7 @@ Each brand has a folder, `marketing/brands/<brand>/`, with five files. Every cam
 - `voice.md`: how the brand sounds.
 - `positioning.md`: what the product sells, to whom, the reader problems, the proof and the alternatives.
 - `pages.md`: the pages the article may link to.
-- `character.md`: the reel presenter's name, personality, HeyGen avatar and voice ids, and what they do and don't do on camera. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
+- `character.md`: the reel presenter's name, personality, ElevenLabs voice id, and what they do and don't do on camera. Fill the voice id in with `python3 marketing/run.py elevenlabs voices <name>`, which needs `ELEVENLABS_API_KEY`.
 
 Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. `character.md` is needed only for reels. Replace each `Template note:` line with your text. A run stops before any model call if a file is missing or still has a template note.
 
