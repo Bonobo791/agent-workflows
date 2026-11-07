@@ -30,7 +30,7 @@ Moderaty (https://moderaty.com) is comment protection for YouTube creators: your
 
 ## Proof
 
-- Checked 2026-11-04: published top-level comments on connected, active YouTube channels are eligible for screening and automatic moderation actions; replies, live chat, and a separate sweep of YouTube's Held or spam queues are included too. [Coverage and workflow](https://moderaty.com/how-it-works/).
+- Checked 2026-11-04: published top-level comments and replies on connected, active YouTube channels are eligible for screening and automatic moderation actions; live chat and a separate sweep of YouTube's Held or spam queues are included too. [Coverage and workflow](https://moderaty.com/how-it-works/).
 - Checked 2026-11-04: protected handles bypass rules and AI; scoring covers 13 categories; uncertain results and scoring failures go to review. [Workflow](https://moderaty.com/).
 - Checked 2026-11-04: requested holds await YouTube confirmation; deletions are permanent; author bans cannot be lifted inside Moderaty. [Action limits](https://moderaty.com/).
 - Checked 2026-11-04: self-hosting costs $0 from Moderaty under PolyForm Shield 1.0.0; infrastructure and OpenAI usage cost extra. [Pricing](https://moderaty.com/pricing).
