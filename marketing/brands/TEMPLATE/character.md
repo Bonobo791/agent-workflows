@@ -1,6 +1,6 @@
 # Character: <brand>
 
-Template note: fill in every section below. Then run python3 marketing/run.py heygen avatars and python3 marketing/run.py heygen voices to find the ids.
+Template note: fill in every section below. Then run python3 marketing/run.py elevenlabs voices <name> to find the voice id.
 
 ## Name
 Template note: the presenter's name, as the script names them.
@@ -8,11 +8,8 @@ Template note: the presenter's name, as the script names them.
 ## Personality
 Template note: three lines: who the presenter is, how they talk, and what they never do.
 
-## Avatar id
-Template note: the look id from python3 marketing/run.py heygen avatars, on one line.
-
 ## Voice id
-Template note: the voice id from python3 marketing/run.py heygen voices, on one line.
+Template note: the ElevenLabs voice id from python3 marketing/run.py elevenlabs voices <name>, on one line.
 
 ## Do
 Template note: what the presenter does on camera.
