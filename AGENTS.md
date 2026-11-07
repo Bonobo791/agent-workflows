@@ -20,6 +20,7 @@ Rules for any agent working in this repo. The main code is the marketing pipelin
 - `python3 marketing/run.py run <name>`: runs the steps. It stops at each step for an owner decision: `a` approve, `r` reject with notes, `q` quit.
 - `python3 marketing/run.py run <name> --from 08-reel-script`: resumes at that step. Earlier steps must be approved; their stale approvals are not checked, so they are not re-run.
 - `python3 marketing/run.py run <name> --to 08-reel-package`: stops after that step, so the audio and video steps (08-reel) do not run. Combine with `--from` to run a range.
+- `python3 marketing/run.py run <name> --skip-voice`: the reel uses the owner's avatar clip at `08-reel/assets/presenter.mp4` as it is. No ElevenLabs voiceover is made, so no key is needed and there are no subtitles unless the owner adds `presenter.vtt`.
 - `python3 marketing/run.py status <name>`: step states and token and cost totals.
 - `python3 marketing/run.py brand <brand>`: drafts `positioning.md`.
 - `python3 marketing/run.py elevenlabs voices [search]`: lists ElevenLabs voices (id, name, category), to fill in `character.md`.
