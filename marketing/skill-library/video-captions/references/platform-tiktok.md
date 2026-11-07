@@ -42,7 +42,7 @@ Creator analyses (third-party) report holding 85%+ past second 3 pulls several t
 
 ## 4. Script shapes by length
 **21 to 34s (default cold reach):** 0 to 3s HOOK (payoff/stake; visual + line) · 3 to 8s ESCALATION 1 (the number or named thing) · 8 to 18s ESCALATION 2 (raise stakes; one re-hook around second 12 if energy plateaus) · 18 to 28s PAYOFF (visible result) · 28 to 34s LOOP or one CTA.
-**60s (Creator Rewards eligible):** HOOK 0 to 3 · PROMISE STACK 3 to 10 ("here is what you'll see") · ESCALATION 1 10 to 25 (open loop) · RE-HOOK 25 to 28 · ESCALATION 2 28 to 45 (close loop 1) · PAYOFF 45 to 52 · LOOP 52 to 60.
+**Over 60s (Creator Rewards needs videos over 60 seconds):** HOOK 0 to 3 · PROMISE STACK 3 to 10 ("here is what you'll see") · ESCALATION 1 10 to 25 (open loop) · RE-HOOK 25 to 28 · ESCALATION 2 28 to 45 (close loop 1) · PAYOFF 45 to 52 · LOOP 52 to 62.
 **90s+:** HOOK promises the payoff · SETUP 3 to 15 (stakes, one loop) · RE-HOOK 1 15 to 18 · ACT 1 18 to 45 · RE-HOOK 2 45 to 50 · ACT 2 50 to 75 · PAYOFF 1 75 to 85 · PAYOFF 2 85 to 95 · LOOP/CTA. Hardest points: seconds 25 to 35 and 60 to 70, so plan a visual reset at each.
 If you cannot honestly fill 60 seconds, do not stretch; pad-stretched videos lose on completion.
 Save-bait patterns: a list of 3 or 5, "send this to a friend who…", "save this for next time you…", a concrete payoff visible at the end.
@@ -64,7 +64,7 @@ Save-bait patterns: a list of 3 or 5, "send this to a friend who…", "save this
 
 ## 7. Anti-patterns that quietly demote
 TikTok watermark on Reels/Shorts cross-posts (reported reach reductions up to about 40%); generic "follow for more / like and share" CTAs (engagement bait); repetitive low-effort AI content; hashtag stuffing and #fyp as strategy; delayed-hook intros (logo, "hey guys welcome back", "today I'm going to talk about…", a musical sting before the first line); Business account for a creator who wants trending sounds; deleting low performers; engagement-baiting replies (one-word reply spam, bot-pattern phrasing, "comment for part 2" on every post); pad-stretching to 60s; cross-posting without re-shooting the hook.
-Use instead: "save this for next time you…", "send to a friend who…", "comment X if you want the rest", or no CTA and let the loop carry it.
+Use instead: "save this for next time you…", "send to a friend who…", "which part would you change?", or no CTA and let the loop carry it.
 
 ## 8. Monetization and Shop
 - **Creator Rewards** (source-reported eligibility; verify current rules): 10,000 followers, 100,000 qualifying views in 30 days, age 18+, account in an eligible country (US, UK, Germany, France, Japan, Brazil), Creator account, videos over 60 seconds. Reported RPM about $0.20 to $1.00 standard, higher in finance/tech/education.
