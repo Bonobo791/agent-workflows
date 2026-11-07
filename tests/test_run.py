@@ -1557,6 +1557,19 @@ class ReelVoiceTest(unittest.TestCase):
         self.assertEqual(run.check_reel_script(script(' '.join([twenty] * 3) + ' ' + tags), '', None), [])
 
 
+class FilmSubtitlesTest(unittest.TestCase):
+    def test_subtitles_are_used_only_when_a_clip_has_a_vtt_beside_it(self):
+        project = Path(tempfile.mkdtemp())
+        (project / 'assets').mkdir()
+        (project / 'assets' / 'presenter.mp4').write_bytes(b'clip')
+        (project / 'film.html').write_text('<video src="assets/presenter.mp4" at="0"></video>', encoding='utf-8')
+        self.assertFalse(run.film_has_subtitles(project))
+        (project / 'assets' / 'presenter.vtt').write_text('WEBVTT\n', encoding='utf-8')
+        self.assertTrue(run.film_has_subtitles(project))
+        (project / 'film.html').write_text('<img src="assets/card.png">', encoding='utf-8')  # the film no longer uses the clip
+        self.assertFalse(run.film_has_subtitles(project))
+
+
 class ReelSkipVoiceTest(unittest.TestCase):
     def owner_clip_in_assets(self, campaign, step_dir):
         (step_dir / 'assets').mkdir(exist_ok=True)
