@@ -9,7 +9,6 @@ This pass sets the Description. Keep the other sections as they are.
 - One or two sentences of context a viewer would find useful. Use only the brief's Facts.
 - No chapters, no social links and no hashtag stuffing. Hashtags belong in the Hashtags section.
 - The last line is exactly [ARTICLE LINK].
-- Keep the description on the same promise as the lead title. Never invent a figure, a date, a client or a result.
 
 ## Output
 Write only the sections the step asks for. Do not report scores, formula names, checklists, questions or hand-offs, and do not mention scripts or tools. The examples in the references are shapes: use only the brief's Facts, never an example's numbers, names or results.

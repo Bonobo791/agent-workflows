@@ -108,7 +108,7 @@ that doesn't touch follower-facing stats). Default to **native filming** for fac
 - **"Guarantee this goes viral"** → no guarantees; a strong hook + send-worthy idea stacks the
   odds, and a Trial Reel tests it risk-free.
 - **Thin concept** → shape the one idea; don't pad to fill a length tier.
-- **Regulated/sensitive** → carry guardrails; only verifiable claims; required disclaimers.
+- **Regulated/sensitive** → carry guardrails; only verifiable claims.
 
 ## Related skills
 
@@ -125,5 +125,5 @@ that doesn't touch follower-facing stats). Default to **native filming** for fac
 - `references/reels-mechanics.md` — the Reels discovery engine, signals, gates, length tiers, Trial Reels, the grid.
 - `references/hooks-and-retention.md` — the 3-second hook, sound-off design, watch-through tactics, the sends lever.
 - `references/formats-and-audio.md` — Reels formats + original vs trending audio (and the native-only limit).
-- `references/veo-prompt-pack.md` — AI-video pack for faceless/b-roll, with disclosure and film-first caveats.
+- `references/veo-prompt-pack.md` — AI-video pack for faceless/b-roll,.
 - `references/examples.md` — worked production docs with cover briefs, sends design, and IG keywords.

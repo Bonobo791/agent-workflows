@@ -99,8 +99,7 @@ reason tied to the goal.
   say so.
 - **Company announcement** → can run from the page, but suggest a personal founder/employee post
   alongside for reach.
-- **Regulated/sensitive** → carry compliance guardrails; no unverifiable claims; required
-  disclaimers.
+- **Regulated/sensitive** → carry compliance guardrails; no unverifiable claims.
 - **Hard-sell request** → reframe toward value-first; LinkedIn punishes overt selling.
 - **No real story/insight** → don't manufacture a fake parable; sharpen the actual point or pick a
   format that fits what's true.

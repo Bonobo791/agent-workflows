@@ -10,15 +10,14 @@ The copy layer around the video decides whether a good video is distributed, sav
 5. Hashtags
 6. CTAs
 7. Pinned comments and comment seeding
-8. Anti-patterns and bait check
+8. Anti-patterns
 
 ## 1. Principles
 1. **The caption is the SEO now**: Instagram indexes captions for in-app search and Google; TikTok reads captions as a main categorization input; Shorts treats the title and the first about 125 characters of the description as ranking signals. Words, not hashtags, are the discovery lever.
 2. **Most viewers watch muted** (source: roughly 85% of social video is watched silent): burn captions in; do not trust auto-captions.
 3. **Sends and saves beat likes and follows.** One ask per video, matched to the content type.
-4. **Engagement bait is a distribution tax**: "comment YES for the link", "tag a friend", "like for part 2", "follow for more".
-5. **Native, not cross-posted**: different cutoffs, keyword vocabulary and hashtag conventions per platform.
-6. Pattern-matching, not prediction.
+4. **Native, not cross-posted**: different cutoffs, keyword vocabulary and hashtag conventions per platform.
+5. Pattern-matching, not prediction.
 
 ## 2. Workflow
 Clarify (platform, topic and format, audience, goal: search reach / sends / saves / long-form click, brand voice) → pick the primary action (tutorial or list = save; story or recommendation = send; opinion = comment with a stance; cliffhanger = watch the long-form) → write the caption to the platform cutoff → spec the on-screen text → decide hashtags (3 to 5 niche) → write the CTA (place it about 5 seconds before the known drop-off, otherwise around the 70% mark) → set up the comment section.
@@ -50,7 +49,7 @@ The caption, the on-screen text (read by OCR) and the spoken audio (read by ASR)
 Specific beats broad (#retinolroutine not #skincare); do not reuse an identical set every post; branded hashtags are navigation, not reach. Put the effort into caption and on-screen text instead.
 
 ## 6. CTAs
-Hierarchy by reach lift: **send to a specific person** (heaviest on Instagram) > **save** > **watch-to-end/rewatch** (earned by structure; the nearest CTA is the cliffhanger to a longer video) > **comment with a stance** > like/follow/"comment YES" (low weight, bait-shaped; avoid).
+Hierarchy by reach lift: **send to a specific person** (heaviest on Instagram) > **save** > **watch-to-end/rewatch** (earned by structure; the nearest CTA is the cliffhanger to a longer video) > **comment with a stance** > like/follow/"comment YES" (low weight).
 | Content | Primary action |
 |---|---|
 | tutorial, how-to, list | save |
@@ -59,23 +58,20 @@ Hierarchy by reach lift: **send to a specific person** (heaviest on Instagram) >
 | opinion, hot take | comment with a stance |
 | cliffhanger from a longer piece | watch the full video |
 | pure entertainment | none (let it loop) |
-- **Send CTAs name the recipient**: "send this to your friend who keeps buying the wrong serum" (named, implicit "your dog walker will know what to do with this", or stakes). Avoid "share with 5 friends", "tag 3 people".
-- **Save CTAs name the future moment**: "save this before your next sourdough attempt"; implicit mid-video "if you're saving these…".
+- **Send CTAs name the recipient**: "send this to your friend who keeps buying the wrong serum" (named, implicit "your dog walker will know what to do with this", or stakes).- **Save CTAs name the future moment**: "save this before your next sourdough attempt"; implicit mid-video "if you're saving these…".
 - **Comment CTAs ask for content, not the act**: "tell me I'm wrong about [claim]", "which would you pick?", "what's the dumbest thing you've spent money on?". "Comment YES" is the act.
-- **Cliffhanger to long-form**: deliver about 60% in the Short, cut at the curiosity peak, name what they get ("the full breakdown of why this works is on my channel"); a pure tease reads as an ad.
+- **Cliffhanger to long-form**: deliver about 60% in the Short, cut at the curiosity peak, name what they get ("the full breakdown of why this works is on my channel").
 - Placement: layered (implicit at about 70%, explicit near the end); better, find the real drop-off in analytics and put the primary CTA about 5 seconds before it; never lead with a CTA; for loops the final line can loop to the hook so the rewatch is the CTA.
 - Open questions drive comments but rarely beat instruction CTAs on saves and sends. Do not stack asks.
-- "Follow for more" backfire: bait-shaped, low weight, and viewers who liked the content follow from the profile on their own (source: subscribe rate from a viral Short can run 10x to 100x lower than from long-form at the same views). Use the real estate for a send or save. CTA matrix: `assets/cta-picker.md`.
+- "Follow for more" backfire: low weight, and viewers who liked the content follow from the profile on their own (source: subscribe rate from a viral Short can run 10x to 100x lower than from long-form at the same views). Use the real estate for a send or save. CTA matrix: `assets/cta-picker.md`.
 
 ## 7. Pinned comments and comment seeding
 - **Instagram**: pin your own comments, up to 3 per post (most recently pinned shows first); pin immediately after publishing. **TikTok**: pinning your own comment has not been broadly available; the working substitute is a **video reply** to a comment (it sticks near the top and is a second piece of content). **YouTube Shorts**: heart plus pin from the creator account.
 - Patterns: (1) **second hook / context extension** ("Day 14 update: still no flaking"); (2) **link / list / what did not fit** (products in order, full recipe, long-form link with the specific extra); (3) **second hook into a related video** (prequel/sequel).
-- Never "comment YES for the link", never repeat the caption or hook, never "thanks for watching, follow for more", never link to a bait-and-switch. Pin within the first 30 to 60 minutes and edit as the conversation develops.
-- Self-replying a genuine question or opinion as the first comment seeds the thread (not bait when it is real). Predict the one comment everyone is about to leave and either pre-empt it or leave space and answer with a pinned or video reply.
-- Comment-to-DM automation (Instagram via Meta's official API: about 200 automated DMs per hour, only to users who engaged in the last 24 hours) banks conversions but the "comment YES" trigger is bait-shaped; use a topical trigger word ("comment ROUTINE") and deliver in the DM before any pitch. Template: `assets/pinned-comment-template.md`.
+- Never repeat the caption or hook, never "thanks for watching, follow for more". Pin within the first 30 to 60 minutes and edit as the conversation develops.
+- Self-replying a genuine question or opinion as the first comment seeds the thread. Predict the one comment everyone is about to leave and either pre-empt it or leave space and answer with a pinned or video reply.
+- Comment-to-DM automation (Instagram via Meta's official API: about 200 automated DMs per hour, only to users who engaged in the last 24 hours) banks conversions; use a topical trigger word ("comment ROUTINE") and deliver in the DM before any pitch. Template: `assets/pinned-comment-template.md`.
 
-## 8. Anti-patterns and bait check
-Bait phrases ("Like for part 2", "Comment YES if you agree", "Tag a friend who needs this", "Double-tap if X", "Share with 5 friends", "Follow for more", "Drop a heart if…", "Comment [emoji] for the link") · keyword stuffing · "thanks for watching" sign-offs (they trigger drop-off in the closing seconds; end on a loop line or one CTA, then cut) · repeating the hook verbatim in the caption (the caption adds context, payoff or a complementary angle) · multiple CTAs · CTA before the payoff · hashtag walls · bait-and-switch caption-to-DM · generic closers · a throwaway one-emoji caption on Instagram · vague "for everyone" framing (pick a person) · closing on a question that does not earn an answer · misaligned voiceover and caption stance.
-Bait test: are you asking for the content of the engagement (a real opinion, a specific story) or just the act? The act is bait.
-Rewrites that keep the intent: "Like for part 2" → "I'm filming the part nobody talks about. It goes up tomorrow." · "Comment YES for the routine" → "Full routine is in the pinned comment." · "Tag a friend" → "Send this to the friend who…" · "Follow for more X tips" → cut it, use a save or send.
-Worked caption (Reels, 45s retinol video): visible line "The reason your retinol is peeling your face has nothing to do with the retinol. Send this to your friend who keeps blaming the brand." · body "I switched two products and the flaking stopped. Step-by-step in the video, the full routine in the pinned comment." · 4 niche hashtags · pinned comment is one line with the link. (Use only true specifics.)
+## 8. Anti-patterns
+Keyword stuffing · "thanks for watching" sign-offs (they trigger drop-off in the closing seconds; end on a loop line or one CTA, then cut) · repeating the hook verbatim in the caption (the caption adds context, payoff or a complementary angle) · multiple CTAs · CTA before the payoff · hashtag walls · generic closers · a throwaway one-emoji caption on Instagram · vague "for everyone" framing (pick a person) · closing on a question that does not earn an answer · misaligned voiceover and caption stance.
+Worked caption (Reels, 45s retinol video): visible line "The reason your retinol is peeling your face has nothing to do with the retinol. Send this to your friend who keeps blaming the brand." · body "I switched two products and the flaking stopped. Step-by-step in the video, the full routine in the pinned comment." · 4 niche hashtags · pinned comment is one line with the link.

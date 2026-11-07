@@ -27,16 +27,13 @@ Stems borrowed from creators: "How to [desired result] without [pain point]" (Ho
 
 ## 2. Hard rules
 - YouTube's hard cap is 100 characters, but this pipeline allows at most 60. Aim 40 to 60: desktop search cuts near 60, a mobile home feed near 40. Put the click-deciding words before any colon.
-- A concrete noun plus curiosity. Never pure mystery ("This changes everything"), never a dry label.
+- A concrete noun plus curiosity. Never a dry label.
 - One specific number, name or date beats every adjective.
 - "How I" beats "How to" when there is a lived result.
 - Title and thumbnail never repeat words: different words, same promise.
 - At most two ALL-CAPS words; 0 to 1 emoji; no em dash (a colon reads cleaner).
-- The promise must survive the first 30 seconds of the video. A fast click-away is a quality penalty.
 - Search phrase appears once, naturally. No keyword stuffing.
 - Strip AI tells from a one-line title: "leverage", "game-changer", "deep dive", "unlock", reveal bridges ("here's what nobody tells you" as filler), sincerity framing ("honestly?", "real talk").
-- Never invent a number. If the figure would help and you do not have it, write the line without it.
-
 ## 3. Browse vs search
 | The video is… | Lead with | Shape |
 |---|---|---|
@@ -58,7 +55,7 @@ Stems borrowed from creators: "How to [desired result] without [pain point]" (Ho
 | Any Short | 3-second frame-one hook | the title matters less; the first frame is everything |
 
 ## 5. Per-title checklist
-Under 100 chars (ideally 40 to 60) · promise, not label · concrete noun + curiosity · one specific number where true · no thumbnail-word overlap · no AI vocabulary · no stuffing · the first 30 seconds can honor it · at least 3 variants spanning at least 2 formulas.
+Under 100 chars (ideally 40 to 60) · promise, not label · concrete noun + curiosity · one specific number where true · no thumbnail-word overlap · no AI vocabulary · no stuffing · at least 3 variants spanning at least 2 formulas.
 
 ## 6. Process
 1. Gather: topic, the real payoff, target viewer, main search phrase, long-form or Short.

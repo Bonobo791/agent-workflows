@@ -24,7 +24,7 @@ Shorts runs on its own ranking lane, separate from long-form: a Short does not l
 7. Pattern-matching, not prediction.
 
 ## 2. What the Shorts Feed ranks (roughly in order)
-VVSA → average percentage viewed (about 65% for under-30s, about 50% for 30 to 60s, about 40 to 45% for 60s+) → loop rate (a rewatch within about 2 seconds of the end counts as a partial new view) → shares (heavy weight; they predict reach outside the algorithm) → first-frame engagement → likes and comments (weak for distribution). Viewer satisfaction (post-view surveys) is also an input: a bait-and-switch scores high on watch time and still underperforms.
+VVSA → average percentage viewed (about 65% for under-30s, about 50% for 30 to 60s, about 40 to 45% for 60s+) → loop rate (a rewatch within about 2 seconds of the end counts as a partial new view) → shares (heavy weight; they predict reach outside the algorithm) → first-frame engagement → likes and comments (weak for distribution). Viewer satisfaction (post-view surveys) is also an input.
 
 ## 3. Seeding
 A new Short starts with a small test audience (source: roughly 50 to 500 viewers, about 70% non-subscribers), so write the opening as if nobody knows the channel. Each upload is one swing of many: nine can die in seeding while one crosses a million. Not rewarded: subscriber count on a single Short, upload frequency as a standalone signal, trending sounds for channels under roughly 50k subs (original audio tends to win), cross-platform watermarks.
@@ -37,7 +37,7 @@ First 3 seconds: a visual that earns the next second (no logo, animated intro or
 Re-upload a fixed Short as a new Short; the algorithm grades from upload, not edit history.
 
 ## 5. Workflow and script shape
-Clarify (niche, goal: reach/subs/long-form clicks/monetization, target length, existing long-form to bridge to, constraints) → pick length and true 9:16 → write the first 3 seconds first → structure for the curve (promise, turn at 5 to 8s, payoff before the natural drop, loop-back) → decide the funnel move → monetization pass → anti-pattern sweep → close honestly (watch VVSA and the curve, not raw views).
+Clarify (niche, goal: reach/subs/long-form clicks/monetization, target length, existing long-form to bridge to, constraints) → pick length and true 9:16 → write the first 3 seconds first → structure for the curve (promise, turn at 5 to 8s, payoff before the natural drop, loop-back) → decide the funnel move → monetization pass → anti-pattern sweep → close on the right metric (watch VVSA and the curve, not raw views).
 Script skeleton (30 to 45s): 0 to 3s HOOK (payoff or stake, 3 to 5 bold words, no intro) · 3 to 8s ESCALATION 1 (turn, stakes raise, specificity) · 8 to about 25s ESCALATION 2 ("but/therefore") · about 25 to 38s PAYOFF (show the result) · last 5s LONG-FORM CALLOUT naming the video, or a hold/loop frame. Fields to fill: hook archetype, goal, long-form to bridge to, loop design, original audio?, aspect ratio, captions burned in and in the safe zone, promise/payoff match. Template: `assets/short-script-template.md`.
 
 ## 6. Short → long-form funnel

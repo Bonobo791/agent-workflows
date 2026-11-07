@@ -9,8 +9,6 @@ This pass sets the Caption, the Hashtags and the Pinned comment. Keep the other 
 - The caption adds context the reel does not say. It does not repeat the on-screen text.
 - One ask, matched to the content: a send, a save, or a watch to the end. Name the person or the moment it is for. Put it after a line of value, not in the opening seconds.
 - Never write "Link in bio".
-- Bait check. The caption fails if it asks for the act of engagement instead of the content ("comment YES"); if it uses a bait phrase ("like for part 2", "tag a friend", "double-tap if", "share with 5 friends", "follow for more", "drop a heart if"); if it stacks asks (like, save, share, follow, comment); if it promises something the reel does not give; or if its closing line has no value before it.
-- Read it the way a friend would. If a friend would not send that exact sentence in a DM with a straight face, rewrite it.
 
 ## Hashtags
 Three to five, on one line, specific to the reel's topic.
