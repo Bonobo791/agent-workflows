@@ -8,7 +8,6 @@ Checked:
 - No hedge word: may, might, describes, positions, offers, various.
 - No banned phrase, no contrast ("X, not Y", "not X, it's Y", "rather than"), and no more than three sentences start with the same two words.
 - The script never says "Link in bio".
-- The brand is written "Moderahtee", one word with no dashes, and never "Moderaty".
 
 Judge the script as the character speaking to a viewer scrolling a busy feed, in one continuous take.
 

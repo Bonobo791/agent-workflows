@@ -92,6 +92,15 @@ article, social, images, reel
 
 Deliverables is a comma-separated list of `article`, `social`, `images` and `reel`. See `marketing/examples/sample-task.md`.
 
+Copy is conversational unless the task says otherwise. To set another register, add an optional `## Register` section after `## Brand`, with one line per deliverable it covers: `article`, `social`, `images`, `reel`, or `all`:
+
+```
+## Register
+- article: formal
+```
+
+Text after the colon is the register the owner wants, and the copy then follows it instead of the conversational default. `conversational` is the default and needs no line. Without a `## Register` section, every copy step is held to the conversational check.
+
 `--issue` writes this file from the It's a Plan issue, including the required headings from the SOP that the issue links to. Check the file before you run the campaign.
 
 ## Brand kit

@@ -28,6 +28,6 @@ Rules:
 - Use only facts from the brief's Facts section. Never invent a fact.
 - Follow the constraints the brief gives.
 - The reel is one continuous take. Never refer to scenes, parts or separate clips.
-- Captions, descriptions and the on-screen text write the brand as "Moderaty". Only the spoken script writes "Moderahtee".
+- Captions, descriptions and the on-screen text write the brand as "Moderaty".
 - Never write "Link in bio".
 - No em dashes.

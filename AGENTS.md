@@ -6,7 +6,7 @@ Rules for any agent working in this repo. The main code is the marketing pipelin
 
 - `claude --help` is read from a file, not a pipe: a piped help text is cut at 16 KB. Every required flag must appear in it.
 
-- Commands run from the repo root. Tests: `python3 -m unittest discover -s tests` (currently 432, all passing).
+- Commands run from the repo root. Tests: `python3 -m unittest discover -s tests` (currently 448, all passing).
 - Campaigns live in `campaigns/<name>/` and are not tracked by git. Do not add them to commits.
 - Brand folders live in `marketing/brands/<brand>/` (`voice.md`, `positioning.md`, `pages.md`, `design-system.md`, `character.md`). Folder names are lowercase. A task's `## Brand` line must match the folder name exactly.
 - No secrets in the repo. `HEYGEN_API_KEY` comes from the environment only.
@@ -83,6 +83,7 @@ The reviewer of every copy step also loads moderaty-voice. Steps 01-sources and 
 
 Enforced by `COPY_RULE` and `COPY_REVIEW_RULE` in `marketing/run.py`, sent to every copy writer and reviewer:
 
+- All copy and scripts are conversational unless the task's `## Register` section says otherwise. Each copy step has a register check (sentence length, stiff words, and "you" or "I"), and the reviewer judges tone. An owner's register replaces both.
 - Copy never has a disclaimer, caveat, hedge, or legal wording. Never add one, ever.
 - Copy never states what the product cannot do or cannot guarantee.
 - Copy never repeats a never-claim or any rule from the instructions.
@@ -103,13 +104,14 @@ Inputs by writers and reviewers:
 - Skill: `marketing/skill-library/moderaty-voice/` (`SKILL.md` plus `references/meme-formats.md`, the joke bank). The bank is sent in the same block as its skill. It is not a separate pass.
 - `brands/moderaty/voice.md` is the brand's voice only: personality, tone (funny), sentence style, words we use and never use, one example post. It holds no legal, honesty or fact directives.
 - The voice skill contains no facts list, no disclaimers, no copyright or real-person rules, and no "watch out" limit notes. Product facts come from the brief and positioning.
-- The brand is spoken as "Moderahtee" in spoken scripts (one word, no dashes, never "Moderaty"). Captions show "Moderaty". `check_reel_script` enforces the spoken form. The reel script never says "Link in bio".
+- The brand is always written "Moderaty", in captions, scripts and subtitles. The reel script never says "Link in bio".
 - Presenter rules in `character.md`: no disclosure section and no sample lines. The moderaty-voice skill supplies the voice. Never joke about threats, doxxing, self-harm, emergencies or real people.
 - Stop-slop is not used in any step. It was removed because it flattened the voice. The clickbait-video skill's anti-AI-tell polish pass (its Stage 6) is not used either.
 
 ## Brand and task files
 
 - Task files must have these sections: Deliverables, Goal, Audience, Details, Sources, Required headings, Constraints, Brand. The check is `check_task` in `marketing/run.py`.
+- An optional `## Register` section sets another register for copy: one line per deliverable (article, social, images, reel, or all), such as `- article: formal`. Without it, copy is conversational.
 - Start and due dates go in a `Schedule:` line. Do not put other process lines in the task (issue numbers, due dates, approval routes, "recheck after").
 - Sources are URLs. No forum sites.
 - Images and reel deliverables need a design system.
