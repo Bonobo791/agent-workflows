@@ -6,7 +6,7 @@ Rules for any agent working in this repo. The main code is the marketing pipelin
 
 - `claude --help` is read from a file, not a pipe: a piped help text is cut at 16 KB. Every required flag must appear in it.
 
-- Commands run from the repo root. Tests: `python3 -m unittest discover -s tests` (currently 413, all passing).
+- Commands run from the repo root. Tests: `python3 -m unittest discover -s tests` (currently 432, all passing).
 - Campaigns live in `campaigns/<name>/` and are not tracked by git. Do not add them to commits.
 - Brand folders live in `marketing/brands/<brand>/` (`voice.md`, `positioning.md`, `pages.md`, `design-system.md`, `character.md`). Folder names are lowercase. A task's `## Brand` line must match the folder name exactly.
 - No secrets in the repo. `HEYGEN_API_KEY` comes from the environment only.
@@ -45,8 +45,9 @@ Steps (`STEPS` in `marketing/run.py`). A step's writer skills run in order; its 
 - 05-x (writer): hook-writer, thread-writer, then moderaty-voice last.
 - 06-instagram (writer): hook-writer, caption-writer, hashtag-strategy, instagram-seo, then moderaty-voice last.
 - 07-images (creator): openfilm-manual, quote-cards-and-text-graphics, then moderaty-voice last.
-- 08-reel-script (script): hook-writer, short-form-video-script, reels-script, heygen-video, then moderaty-voice last. One continuous script in one take: no scenes, parts or separate clips.
-- 08-reel (creator): openfilm-manual, motion-graphics, instagram-reels-publishing, then moderaty-voice last. Writing skills stay with 08-reel-script.
+- 08-reel-script (script): video-hooks, short-form-video-script, reels-script, heygen-video, then moderaty-voice last. One continuous script in one take: no scenes, parts or separate clips.
+- 08-reel-package (script): video-titles, video-captions, video-metadata, then moderaty-voice last. The reel's titles, first-frame text, Short description, TikTok caption and hashtags, and pinned comment. The YouTube Short and the TikTok post take their text from it; the pinned comment is posted by hand.
+- 08-reel (creator): openfilm-manual, motion-graphics, instagram-reels-publishing, then moderaty-voice last. Its first scene shows the package's On-screen text. Writing skills stay with 08-reel-script and 08-reel-package.
 - 01-positioning (brand command only): content-research-and-sourcing.
 
 The reviewer of every copy step also loads moderaty-voice. Steps 01-sources and 02-brief do not get the voice.
@@ -95,7 +96,7 @@ Inputs by writers and reviewers:
 - Social writers get voice, reader problems, value, and the brief's angle, keywords, channel ideas and facts. They do not get "positioning#Claims we never make".
 - Reviewers of social steps get the claims list, so they can check claims against it.
 - The 03-article writer does not get "positioning#Objections" (its answers carried limit sentences). The 03-article writer does get Proof, Alternatives and the brief.
-- The reel-script writer does not get the claims list either. Its reviewer does.
+- The reel-script and reel-package writers do not get the claims list either. Their reviewers do.
 
 ## Moderaty voice
 
@@ -104,7 +105,7 @@ Inputs by writers and reviewers:
 - The voice skill contains no facts list, no disclaimers, no copyright or real-person rules, and no "watch out" limit notes. Product facts come from the brief and positioning.
 - The brand is spoken as "Moderahtee" in spoken scripts (one word, no dashes, never "Moderaty"). Captions show "Moderaty". `check_reel_script` enforces the spoken form. The reel script never says "Link in bio".
 - Presenter rules in `character.md`: no disclosure section and no sample lines. The moderaty-voice skill supplies the voice. Never joke about threats, doxxing, self-harm, emergencies or real people.
-- Stop-slop is not used in any step. It was removed because it flattened the voice.
+- Stop-slop is not used in any step. It was removed because it flattened the voice. The clickbait-video skill's anti-AI-tell polish pass (its Stage 6) is not used either.
 
 ## Brand and task files
 
@@ -120,11 +121,12 @@ Inputs by writers and reviewers:
 - Do not use the author's voice or likeness in brand content.
 - `seo-geo-planning` does not exist here. Do not add a skill with that name without checking.
 - Do not add a HeyGen avatar disclosure, an AI label, or a legal notice to any copy or script.
+- Do not add the clickbait-video skill's AI and sponsorship disclosure items, its thumbnail and chapter steps, or its "disclosures set" checklist line. The pipeline never posts the package; the owner posts it.
 
 ## Skill copies
 
 - Each `marketing/skill-library/<name>/SKILL.md` starts with a provenance line that says where it came from and when. Keep it.
-- Library skills do not get reference files except where listed (only moderaty-voice has `references/`).
+- Library skills do not get reference files except where listed: moderaty-voice, and video-hooks, video-titles, video-captions and video-metadata. Those four hold copies of the clickbait-video skill's references, with the lines that conflict with the copy rules removed or changed; `marketing/skill-library/ATTRIBUTION-clickbait-video.md` keeps its MIT notice.
 - The reference-file preface in `LIBRARY_PREFACE` says reference files follow the skill's `SKILL.md`.
 
 ## Tests and changes

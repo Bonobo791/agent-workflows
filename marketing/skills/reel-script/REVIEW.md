@@ -14,6 +14,8 @@ Judge the script as the character speaking to a viewer scrolling a busy feed, in
 
 Blocking findings:
 - The first sentence does not name a moment, a number or a mistake the reader recognises.
+- The first sentence promises something the rest of the script does not pay off.
+- A viewer scrolling past would not need the next line after the first sentence.
 - A fact the brief's Facts section does not state, or a claim that Claims we never make in positioning.md excludes.
 - No single idea, or no clear action for the reader.
 - A line the character would not say aloud.

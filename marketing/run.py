@@ -96,8 +96,9 @@ DESIGN_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]*$')
 DESIGN_SECTIONS = ['Colors', 'Typography', 'Layout', 'Logo', 'Imagery', 'Do not']
 PUBLISH_STEP = '09-publish'
 PLATFORMS = ['linkedin', 'instagram', 'youtube', 'tiktok']  # also the posting order
-PLATFORM_NEEDS = {'linkedin': {'social'}, 'instagram': {'social', 'images'}, 'youtube': {'reel'}, 'tiktok': {'social', 'reel'}}
-PLATFORM_STEPS = {'linkedin': ['04-linkedin'], 'instagram': ['06-instagram'], 'youtube': ['08-reel'], 'tiktok': ['06-instagram', '08-reel']}
+PLATFORM_NEEDS = {'linkedin': {'social'}, 'instagram': {'social', 'images'}, 'youtube': {'reel'}, 'tiktok': {'reel'}}
+PLATFORM_STEPS = {'linkedin': ['04-linkedin'], 'instagram': ['06-instagram'], 'youtube': ['08-reel-package', '08-reel'],
+                  'tiktok': ['08-reel-package', '08-reel']}
 SCHEDULE_RE = re.compile(r'^- (linkedin|instagram|youtube|tiktok): (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)$')
 ARTICLE_URL_RE = re.compile(r'^https://\S+$')
 YOUTUBE_TITLE_MAX = 100
@@ -121,6 +122,19 @@ REPEAT_LIMIT = 3
 CONTRAST_RE = re.compile(r"\b(?:is|are|was|were|isn't|aren't)?\s*\w[\w\s']{0,40},\s+not\s+\w", re.I)  # "X, not Y"
 NOT_IT_RE = re.compile(r"\bnot (?:just |only )?\w[\w\s']{0,30}[,;]\s+(?:it[’']s|it is|but)\b", re.I)  # "not X, it's Y"
 RATHER_RE = re.compile(r'\brather than\b', re.IGNORECASE)  # "X rather than Y"
+PACKAGE_SECTIONS = ['Titles', 'On-screen text', 'Description', 'Caption', 'Hashtags', 'Pinned comment']
+PACKAGE_TITLE_MAX = 60  # title.py's desktop cut
+PACKAGE_ON_SCREEN_WORDS = (3, 8)
+DESCRIPTION_LINE_MAX = 125  # the first line is all a Shorts viewer sees before "Show more"
+CAPTION_LINE_MAX = 100  # about what TikTok shows before its cut
+BAIT_RE = re.compile(r'\b(?:comment yes|tag a friend|like for part|follow for more|double[- ]tap|drop a heart|share with \d+ friends|tag \d+ friends)\b',
+                     re.IGNORECASE)  # the bait phrases in video-captions
+DISCLOSURE_RE = re.compile(r"\bdisclosure\b|\bdisclos(?:e|ed|es|ing)\s+(?:that\s+|this\s+|our\s+|the\s+)?(?:ai|sponsor|paid|partner)|\bmade with ai\b"
+                           r"|\bai avatar\b|\b(?:this|our|the) (?:reel|video|presenter|avatar|voice|character|script|clip) (?:is|was|are|were)\b[^.!?\n]{0,20}\bai[- ]generated\b"
+                           r"|\bpaid partnership\b|\bsponsored (?:post|video|content)\b|#ad\b|\bin partnership with\b", re.IGNORECASE)  # disclosure labels, not product copy about AI
+STOP_WORDS = {'a', 'an', 'the', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'for', 'with', 'at', 'by', 'from', 'is', 'are', 'was', 'be',
+              'it', 'its', 'this', 'that', 'you', 'your', 'i', 'my', 'me', 'we', 'our', 'so', 'if', 'not', 'no', 'do', 'how', 'what', 'why',
+              'when', 'just', 'about', 'than', 'as', 'up', 'out'}  # words that do not make a title and a first frame share a subject
 
 # What each writer reads, and what each reviewer reads. The social steps share these lists so their prompts start the same.
 SOCIAL_INPUTS = ['voice', 'positioning#Reader problems', 'positioning#Value', 'positioning#Claims we never make',
@@ -130,11 +144,13 @@ CLAIMS_INPUT = 'positioning#Claims we never make'  # the writer never sees it: i
 SOCIAL_WRITER_INPUTS = [spec for spec in SOCIAL_INPUTS if spec != CLAIMS_INPUT]
 IMAGE_INPUTS = ['design-system', 'voice', 'positioning#Value', '02-brief#Angle', '02-brief#Core message', '02-brief#Facts',
                 '02-brief#Visual ideas', '04-linkedin', '05-x', '06-instagram']
-REEL_INPUTS = ['design-system', 'voice', 'positioning#Value', 'character', 'presenter', '08-reel-script', '02-brief#Angle',
+REEL_INPUTS = ['design-system', 'voice', 'positioning#Value', 'character', 'presenter', '08-reel-script', '08-reel-package#On-screen text', '02-brief#Angle',
                '02-brief#Core message', '02-brief#Facts', '02-brief#Visual ideas', '06-instagram']
 REEL_SCRIPT_INPUTS = ['voice', 'character', 'positioning#Reader problems', 'positioning#Value', 'positioning#Claims we never make',
                       '02-brief#Angle', '02-brief#Facts', '02-brief#Visual ideas']
 REEL_SCRIPT_WRITER_INPUTS = [spec for spec in REEL_SCRIPT_INPUTS if spec != CLAIMS_INPUT]
+REEL_PACKAGE_REVIEW_INPUTS = SOCIAL_REVIEW_INPUTS + ['positioning#Call to action', '08-reel-script']
+REEL_PACKAGE_WRITER_INPUTS = [spec for spec in REEL_PACKAGE_REVIEW_INPUTS if spec != CLAIMS_INPUT]
 STEPS = [
     {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources',
      'inputs': ['00-task', 'positioning#Proof', 'positioning#Alternatives'], 'review_inputs': ['00-task', 'positioning#Proof', 'positioning#Alternatives'],
@@ -166,8 +182,11 @@ STEPS = [
      'review_skills': ['openfilm-manual', 'quote-cards-and-text-graphics', 'moderaty-voice']},
     {'id': '08-reel-script', 'skill': 'reel-script', 'kind': 'script', 'role': 'script', 'deliverable': 'reel', 'web': False, 'check': 'reel-script',
      'inputs': REEL_SCRIPT_WRITER_INPUTS, 'review_inputs': REEL_SCRIPT_INPUTS,
-     'writer_skills': ['hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video', 'moderaty-voice'],
-     'review_skills': ['hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video', 'moderaty-voice']},
+     'writer_skills': ['video-hooks', 'short-form-video-script', 'reels-script', 'heygen-video', 'moderaty-voice'],
+     'review_skills': ['video-hooks', 'short-form-video-script', 'reels-script', 'heygen-video', 'moderaty-voice']},
+    {'id': '08-reel-package', 'skill': 'reel-package', 'kind': 'text', 'role': 'script', 'deliverable': 'reel', 'web': False, 'check': 'reel-package',
+     'inputs': REEL_PACKAGE_WRITER_INPUTS, 'review_inputs': REEL_PACKAGE_REVIEW_INPUTS,
+     'writer_skills': ['video-titles', 'video-captions', 'video-metadata', 'moderaty-voice'], 'review_skills': ['moderaty-voice']},
     {'id': '08-reel', 'skill': 'reel', 'kind': 'video', 'role': 'creator', 'deliverable': 'reel', 'web': False, 'check': None,
      'inputs': REEL_INPUTS, 'review_inputs': REEL_INPUTS,
      'writer_skills': ['openfilm-manual', 'motion-graphics', 'instagram-reels-publishing', 'moderaty-voice'],  # the script's writing skills stay with 08-reel-script
@@ -1582,6 +1601,72 @@ def check_reel_script(output, task, brief):
 CHECKS['reel-script'] = check_reel_script
 
 
+def package_titles(text):
+    """The lines under ## Titles, with any list marker removed."""
+    lines = [line.strip() for line in sections(text).get('Titles', '').splitlines() if line.strip()]
+    return [re.sub(r'^(?:[-*]|\d+[.)])\s+', '', line) for line in lines]
+
+
+def content_words(text):
+    return {word for word in re.findall(r"[a-z0-9']+", text.lower()) if word not in STOP_WORDS}
+
+
+def check_reel_package(output, task, brief):
+    errors = missing_sections(output, PACKAGE_SECTIONS)
+    found = sections(output)
+    titles = package_titles(output)
+    if len(titles) != 3:
+        errors.append(f'the Titles section has {len(titles)} titles; write exactly 3, the lead first')
+    for number, title in enumerate(titles, 1):
+        if len(title) > PACKAGE_TITLE_MAX:
+            errors.append(f'title {number} is {len(title)} characters; the limit is {PACKAGE_TITLE_MAX}')
+    if any(LINK in title for title in titles):
+        errors.append(f'the Titles must not contain {LINK}; the article link goes in the Description')
+    on_screen = found.get('On-screen text', '').strip()
+    low, high = PACKAGE_ON_SCREEN_WORDS
+    if not low <= len(on_screen.split()) <= high:
+        errors.append(f'the On-screen text has {len(on_screen.split())} words; the limit is {low} to {high}')
+    shared = content_words(on_screen) & content_words(titles[0]) if titles else set()
+    if shared:
+        errors.append(f'the On-screen text and the lead title share {", ".join(sorted(shared))}; the title and the first frame use different words')
+    description = found.get('Description', '')
+    lines = [line.strip() for line in description.splitlines() if line.strip()]
+    if lines and len(lines[0]) > DESCRIPTION_LINE_MAX:
+        errors.append(f'the first line of the Description is {len(lines[0])} characters; the limit is {DESCRIPTION_LINE_MAX}')
+    if not lines or lines[-1] != LINK or description.count(LINK) != 1:
+        errors.append(f'the Description must end with the line {LINK} and contain it once')
+    caption = [line.strip() for line in found.get('Caption', '').splitlines() if line.strip()]
+    if caption and len(caption[0]) > CAPTION_LINE_MAX:
+        errors.append(f'the first line of the Caption is {len(caption[0])} characters; the limit is {CAPTION_LINE_MAX}')
+    if caption and on_screen and caption[0].rstrip('.!?').lower() == on_screen.rstrip('.!?').lower():
+        errors.append('the Caption repeats the On-screen text; the caption adds what the first frame does not say')
+    hashtags = len(HASHTAG_RE.findall(found.get('Hashtags', '')))
+    if not 3 <= hashtags <= 5:
+        errors.append(f'the Hashtags section has {hashtags} hashtags; the limit is 3 to 5')
+    if found.get('Pinned comment', '').count(LINK) != 1:
+        errors.append(f'the Pinned comment must contain {LINK} once')
+    if len([line for line in found.get('Pinned comment', '').splitlines() if line.strip()]) != 1:
+        errors.append('the Pinned comment must be one line')
+    if re.search(r'link in bio', output, re.IGNORECASE):
+        errors.append('never write "Link in bio" in the package')
+    bait = BAIT_RE.search(output)
+    if bait:
+        errors.append(f'remove the bait phrase "{bait.group(0)}"; ask for the content, not the act')
+    disclosure = DISCLOSURE_RE.search(output)
+    if disclosure:
+        errors.append(f'remove "{disclosure.group(0)}"; the package carries no AI or sponsorship disclosure')
+    if '—' in output:
+        errors.append('remove the em dash; copy has none')
+    if caption:
+        errors += hedge_errors(caption[0])
+    errors += social_word_errors(output, 'package')
+    errors += wording_errors(output)
+    return errors
+
+
+CHECKS['reel-package'] = check_reel_package
+
+
 def materialize_script(step_dir, written, presenter):
     script = written['script'].strip()
     if not script:
@@ -2231,7 +2316,7 @@ def build_publish_plan(campaign):
     article_url = sections(task).get('Article URL', '').strip()  # empty until the article is live; only posts that link to it wait
     times = schedule_times(task)
     uses_images = 'images' in wanted and bool(set(targets) & {'linkedin', 'instagram'})
-    needed = ['03-article'] + [step for platform in targets for step in PLATFORM_STEPS[platform]] + (['07-images'] if uses_images else [])
+    needed = ['03-article'] + list(dict.fromkeys(step for platform in targets for step in PLATFORM_STEPS[platform])) + (['07-images'] if uses_images else [])
     for step in needed:
         if not (campaign / step / 'APPROVED').is_file():
             raise WorkflowError(f'{step} is not approved yet')
@@ -2256,28 +2341,27 @@ def build_publish_plan(campaign):
                       'media': image('linkedin.png'), 'depends_on': deps, 'not_before': times.get('linkedin')})
         items.append({'id': 'linkedin-comment', 'platform': 'linkedin', 'action': 'comment', 'text': comment,
                       'media': [], 'depends_on': ['linkedin-post'], 'not_before': times.get('linkedin')})
-    if 'instagram' in targets or 'tiktok' in targets:
-        text = (campaign / '06-instagram' / 'output.md').read_text()
-        caption, hashtags = section(text, 'Caption', '06-instagram'), section(text, 'Hashtags', '06-instagram')
-        social_text = fill_link(f'{caption}\n\n{hashtags}', article_url)  # Instagram and TikTok post the same caption
     if 'instagram' in targets:
-        items.append({'id': 'instagram-post', 'platform': 'instagram', 'action': 'post', 'text': social_text,
+        text = (campaign / '06-instagram' / 'output.md').read_text()
+        caption, hashtags = section(text, 'Post', '06-instagram'), section(text, 'Hashtags', '06-instagram')  # check_instagram's caption section
+        items.append({'id': 'instagram-post', 'platform': 'instagram', 'action': 'post', 'text': fill_link(f'{caption}\n\n{hashtags}', article_url),
                       'media': [instagram_jpeg(media_dir, images_dir / 'instagram.png')],
                       'depends_on': deps, 'not_before': times.get('instagram')})
+    if 'youtube' in targets or 'tiktok' in targets:
+        package = (campaign / '08-reel-package' / 'output.md').read_text()
     if 'youtube' in targets:
-        article = (campaign / '03-article' / 'output.md').read_text()
-        titles = [line[2:].strip() for line in article.splitlines() if line.startswith('# ')]
-        if len(titles) != 1:
-            raise WorkflowError(f'03-article must have exactly one "# " title line; it has {len(titles)}')
+        titles = package_titles(package)
+        if not titles:
+            raise WorkflowError('08-reel-package has no title under "## Titles"')
         if len(titles[0]) > YOUTUBE_TITLE_MAX:
-            raise WorkflowError(f'the article title is {len(titles[0])} characters; a YouTube title allows {YOUTUBE_TITLE_MAX}')
-        meta = article.splitlines()[0][len('Meta description: '):].strip()
+            raise WorkflowError(f'the lead title is {len(titles[0])} characters; a YouTube title allows {YOUTUBE_TITLE_MAX}')
         items.append({'id': 'youtube-short', 'platform': 'youtube', 'action': 'upload', 'title': titles[0],
-                      'text': fill_link(f'{meta}\n\n{article_url}', article_url).strip(),
+                      'text': fill_link(section(package, 'Description', '08-reel-package'), article_url).strip(),
                       'media': [copy_media(media_dir, campaign / '08-reel' / 'reel.mp4', 'reel.mp4')],
                       'depends_on': deps, 'not_before': times.get('youtube')})
     if 'tiktok' in targets:
-        items.append({'id': 'tiktok-video', 'platform': 'tiktok', 'action': 'upload', 'text': social_text,
+        social_text = f"{section(package, 'Caption', '08-reel-package')}\n\n{section(package, 'Hashtags', '08-reel-package')}"
+        items.append({'id': 'tiktok-video', 'platform': 'tiktok', 'action': 'upload', 'text': fill_link(social_text, article_url),
                       'media': [copy_media(media_dir, campaign / '08-reel' / 'reel.mp4', 'reel.mp4')],
                       'depends_on': deps, 'not_before': times.get('tiktok')})
     waiting = {item['id'] for item in items if LINK in item.get('text', '')}  # posts that link to the article wait for its URL

@@ -53,6 +53,7 @@ How to build it:
 - Inline CSS only. Do not load anything from the internet.
 - Use only facts from the brief's Facts section.
 - Change what is on screen every 2 to 4 seconds.
+- The first scene shows the On-screen text from 08-reel-package, word for word, inside the top 900 px.
 - Follow the constraints the brief gives.
 - No em dashes.
 

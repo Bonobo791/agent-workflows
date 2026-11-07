@@ -1001,12 +1001,153 @@ class FilmLookTest(unittest.TestCase):
 
     def test_reel_script_skill_list(self):
         script = next(step for step in run.STEPS if step['id'] == '08-reel-script')
-        expected = ['hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']
+        expected = ['video-hooks', 'short-form-video-script', 'reels-script', 'heygen-video']
         self.assertEqual(script['writer_skills'], expected + ['moderaty-voice'])  # the voice pass is last
         self.assertEqual(script['review_skills'], expected + ['moderaty-voice'])
         library = run.library_block(script['writer_skills'])
         self.assertIn('--- BEGIN skill: heygen-video ---', library)
         self.assertIn('Write for the ear.', library)
+
+
+GOOD_PACKAGE = """## Titles
+Why your comments need a bouncer
+How I stopped reading the mean ones
+Three minutes a day on comments
+
+## On-screen text
+Stop reading the mean ones
+
+## Description
+A moderation tool for YouTube comments.
+It holds back the spam and the trolls, so you read the ones that matter.
+[ARTICLE LINK]
+
+## Caption
+Your comment section is a mess. Here is what a bouncer looks like.
+
+## Hashtags
+#moderation #youtube #creators
+
+## Pinned comment
+The setup steps are in the write-up: [ARTICLE LINK]
+"""
+
+
+def package_with(old, new):
+    assert GOOD_PACKAGE.count(old) == 1, old
+    return GOOD_PACKAGE.replace(old, new)
+
+
+class ReelPackageTest(unittest.TestCase):
+    def test_reel_runs_script_then_package_then_video(self):
+        self.assertEqual([step['id'] for step in run.STEPS if step['deliverable'] == 'reel'],
+                         ['08-reel-script', '08-reel-package', '08-reel'])
+
+    def test_package_is_written_by_the_script_role_with_the_voice_last(self):
+        package = next(step for step in run.STEPS if step['id'] == '08-reel-package')
+        self.assertEqual(package['role'], 'script')
+        self.assertEqual(package['writer_skills'], ['video-titles', 'video-captions', 'video-metadata', 'moderaty-voice'])
+        self.assertEqual(package['review_skills'], ['moderaty-voice'])
+        self.assertTrue(run.is_copy_step(package))
+        self.assertEqual(run.step_skill_names(package), ['video-titles', 'video-captions', 'video-metadata', 'moderaty-voice'])
+        self.assertNotIn(run.CLAIMS_INPUT, package['inputs'])  # the writer never sees the claims list
+        self.assertIn(run.CLAIMS_INPUT, package['review_inputs'])
+
+    def test_video_reads_the_on_screen_text_of_the_package(self):
+        self.assertIn('08-reel-package#On-screen text', run.REEL_INPUTS)
+
+    def test_package_skills_and_check_are_wired(self):
+        run.check_skills(run.SKILLS_DIR, run.STEPS)
+        self.assertIs(run.CHECKS['reel-package'], run.check_reel_package)
+
+    def test_good_package_passes(self):
+        self.assertEqual(run.check_reel_package(GOOD_PACKAGE, '', None), [])
+
+    def test_product_copy_about_ai_generated_spam_is_not_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'It catches AI-generated spam and the trolls,')
+        self.assertFalse(any('AI or sponsorship disclosure' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_privacy_wording_is_not_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'It never discloses your comments, and it holds back the spam and the trolls,')
+        self.assertFalse(any('AI or sponsorship disclosure' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_a_label_about_this_reel_is_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'This reel is AI-generated, and it holds back the spam and the trolls,')
+        self.assertTrue(any('AI-generated' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_bait_phrases_match_whole_words_only(self):
+        text = package_with('Your comment section is a mess. Here is what a bouncer looks like.', 'Read the comment yesterday, then decide.')
+        self.assertFalse(any('bait phrase' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_each_package_rule_has_its_own_message(self):
+        cases = {
+            'two titles': (package_with('Three minutes a day on comments\n', ''), 'the Titles section has 2 titles'),
+            'title too long': (package_with('Three minutes a day on comments', 'T' * 61), 'title 3 is 61 characters'),
+            'on-screen text too long': (package_with('Stop reading the mean ones\n\n## Description',
+                                                     'Stop reading the mean ones right now and never look back\n\n## Description'),
+                                        'the On-screen text has 11 words'),
+            'on-screen text shares a word with the lead title': (package_with('Stop reading the mean ones\n\n## Description',
+                                                                              'Comments are the problem\n\n## Description'),
+                                                                 'share comments'),
+            'description first line too long': (package_with('A moderation tool for YouTube comments.', 'A' * 126),
+                                                'the first line of the Description is 126 characters'),
+            'description without the link at the end': (package_with('matter.\n[ARTICLE LINK]\n\n## Caption', 'matter.\n\n## Caption'),
+                                                        'the Description must end with the line [ARTICLE LINK]'),
+            'caption first line too long': (package_with('Your comment section is a mess. Here is what a bouncer looks like.', 'C' * 101),
+                                            'the first line of the Caption is 101 characters'),
+            'caption repeats the on-screen text': (package_with('Your comment section is a mess. Here is what a bouncer looks like.',
+                                                                'Stop reading the mean ones'),
+                                                   'the Caption repeats the On-screen text'),
+            'two hashtags': (package_with('#moderation #youtube #creators', '#moderation #youtube'), 'the Hashtags section has 2 hashtags'),
+            'pinned comment without the link': (package_with('write-up: [ARTICLE LINK]', 'write-up.'),
+                                                'the Pinned comment must contain [ARTICLE LINK] once'),
+            'link in bio': (package_with('Here is what a bouncer looks like.', 'Link in bio.'), 'never write "Link in bio"'),
+            'bait phrase': (package_with('Here is what a bouncer looks like.', 'Comment YES for the video.'), 'remove the bait phrase "Comment YES"'),
+            'AI disclosure': (package_with('A moderation tool for YouTube comments.', 'This reel is AI-generated.'),
+                              'is AI-generated'),
+            'em dash': (package_with('Here is what a bouncer looks like.', 'Here is what a bouncer looks like — read on.'), 'remove the em dash'),
+            'hedge in the first caption line': (package_with('Your comment section is a mess.', 'Your comment section may be a mess.'),
+                                                'the first line uses "may"'),
+            'on-screen text too short': (package_with('Stop reading the mean ones\n\n## Description', 'Stop now\n\n## Description'),
+                                         'the On-screen text has 2 words'),
+            'four titles': (package_with('Three minutes a day on comments\n', 'Three minutes a day on comments\nOne more title here\n'),
+                            'the Titles section has 4 titles'),
+            'link in a title': (package_with('Why your comments need a bouncer', 'Why [ARTICLE LINK] needs a bouncer'),
+                                'the Titles must not contain [ARTICLE LINK]'),
+            'six hashtags': (package_with('#moderation #youtube #creators', '#moderation #youtube #creators #a #b #c'),
+                             'the Hashtags section has 6 hashtags'),
+            'banned phrase': (package_with('Here is what a bouncer looks like.', 'This article shows what a bouncer looks like.'),
+                              'remove "this article"'),
+            'pinned comment on two lines': (package_with('write-up: [ARTICLE LINK]', 'write-up:\n[ARTICLE LINK]'),
+                                            'the Pinned comment must be one line'),
+        }
+        for name, (text, message) in cases.items():
+            with self.subTest(name):
+                errors = run.check_reel_package(text, '', None)
+                self.assertTrue(any(message in error for error in errors), errors)
+
+
+class VendoredSkillTest(unittest.TestCase):
+    NAMES = ['video-hooks', 'video-titles', 'video-captions', 'video-metadata']
+
+    def test_each_vendored_skill_starts_with_a_provenance_line(self):
+        for name in self.NAMES:
+            with self.subTest(name=name):
+                first = (run.LIBRARY_DIR / name / 'SKILL.md').read_text().splitlines()[0]
+                self.assertTrue(first.startswith('> Copied from the clickbait-video skill'), first)
+
+    def test_only_the_listed_library_skills_have_references(self):
+        with_references = sorted(path.parent.name for path in run.LIBRARY_DIR.glob('*/references'))
+        self.assertEqual(with_references, sorted(['moderaty-voice', *self.NAMES]))
+
+    def test_the_clickbait_attribution_is_kept_in_the_library(self):
+        self.assertTrue((run.LIBRARY_DIR / 'ATTRIBUTION-clickbait-video.md').is_file())
+
+    def test_vendored_references_carry_no_disclosure_or_sponsorship_advice(self):
+        for name in self.NAMES:
+            for path in (run.LIBRARY_DIR / name / 'references').glob('*.md'):
+                with self.subTest(path=path.name):
+                    self.assertNotRegex(path.read_text(), r'(?i)disclos|sponsored|before you say')
 
 
 class RecheckTest(unittest.TestCase):
