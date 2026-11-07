@@ -97,7 +97,7 @@ If the first line is weak, rewrite it before anything else. It's 80% of the resu
   length, hashtags, and CTA to each platform's mechanics (see `cross-platform-repurposing` for
   doing this at scale).
 - **Regulated/sensitive brand:** apply the brand profile's compliance guardrails — no
-  forbidden claims, required disclaimers, careful CTAs.
+  forbidden claims, careful CTAs.
 - **Carousel / multi-image:** the caption supports the swipe — the first line should pull
   people *into* slide 1; consider a "keep reading / swipe" nudge only if it fits the voice.
 - **Link-driven goal on a no-link platform** (e.g., Instagram feed): route to "link in bio"

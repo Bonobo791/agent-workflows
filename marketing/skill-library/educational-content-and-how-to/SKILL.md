@@ -31,8 +31,7 @@ likes.**
 (Depth: `references/the-teach-framework.md`.)
 - **T — Target one teachable thing:** one process/point/next-step; flashcard not chapter; useful + within real
   expertise; if it can't be taught well in one piece, **split into a series.**
-- **E — Earn trust with accuracy:** be correct; **cite sources**; stay within expertise; **YMYL → disclaimer +
-  point to a pro**; never fabricate steps/stats.
+- **E — Earn trust with accuracy:** be correct; **cite sources**; stay within expertise; never fabricate steps/stats.
 - **A — Arrange the lesson:** hook/cover ("is this for me?" + payoff) → context/problem → one step/idea per unit
   → recap → specific CTA; structure step-by-step / PAS / myth-bust / data; 8–12 units, each earns its place.
 - **C — Carry it to the right format:** carousel (`carousel-writer`) / tutorial video (`reels-script`/
@@ -50,7 +49,7 @@ hook/cover (specific, <8–10 words) → context → one step/idea per unit → 
 step/PAS/myth/data; 8–12 units (12–20 deep), every unit earns its place. Format spread: carousel (save king) /
 tutorial video / thread / post — same lesson, route to the writer. CTAs: save / send to X / comment GUIDE (→
 lead-magnets). Serialize + evergreen → repurpose; **measure saves/sends, not likes.** **Accuracy gate:** cite
-sources, stay within expertise, YMYL disclaimer + extra care, never fabricate: `references/educational-content-
+sources, stay within expertise, extra care on YMYL topics, never fabricate: `references/educational-content-
 2026-reality.md`. The teaching structures, the format-spread table, the accuracy/YMYL checklist, the CTA
 library, the WoopSocial flow + worked examples: `references/structures-formats-and-accuracy.md`.
 
@@ -62,7 +61,7 @@ library, the WoopSocial flow + worked examples: `references/structures-formats-a
 - **WoopSocial publishes + schedules the series.** It does **NOT** verify accuracy, generate the asset, or
   teach.
 - **Accuracy is non-negotiable** (wrong info destroys authority); **cite sources**; **stay within expertise**;
-  **YMYL → not-professional-advice disclaimer + point to a pro**; **never fabricate steps/stats** or pad;
+  **never fabricate steps/stats** or pad;
   **saves/sends = the metric.** (Scope, distinctions + connections: `references/scope-and-connections.md`.)
 
 ## Distinct from its siblings (route correctly)
@@ -87,7 +86,7 @@ A lesson that teaches one genuinely useful thing completely (flashcard not chapt
 expertise, structured as hook/cover (is-this-for-me + a specific payoff) → context → one step or idea per unit
 → recap → a specific CTA (save / send to X / comment GUIDE), using the right structure (step-by-step / PAS /
 myth-bust / data) at 8–12 units where every unit earns its place; accurate and sourced, within genuine
-expertise, with a not-professional-advice disclaimer + a pointer to a qualified pro for any YMYL topic and
+expertise, with a pointer to a qualified pro for any YMYL topic and
 nothing fabricated; carried to the right format via the format writer, the cover to hook-writer and visuals to
 the design tools; serialized into a series in the content-calendar and published via WoopSocial; measured on
 saves/sends, not likes; correctly distinguished from carousel-writer, the other format writers, and

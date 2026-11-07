@@ -1,4 +1,4 @@
-> Built from the on-page-seo and stop-slop skill(s). The owner may replace this file.
+> Built from the on-page-seo skill(s). The owner may replace this file.
 
 # SEO article writer
 

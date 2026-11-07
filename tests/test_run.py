@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import re
@@ -317,6 +319,48 @@ class RunTest(unittest.TestCase):
     def test_from_needs_the_earlier_steps_approved(self):
         with self.assertRaisesRegex(run.WorkflowError, 'needs these steps approved first: 01-brief'):
             run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, start_at='02-article')
+
+    def test_to_stops_after_the_named_step_and_builds_no_final_package(self):
+        client = FakeClient(['pass'])
+        result = run.run_campaign(self.campaign, client, ask=answers('a'), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, end_at='01-brief')
+        self.assertIsNone(result)
+        self.assertTrue((self.campaign / '01-brief' / 'APPROVED').is_file())
+        self.assertFalse((self.campaign / '02-article').exists())  # the steps after it do not run, so nothing after it is made
+        self.assertFalse((self.campaign / 'final').exists())
+        self.assertEqual(len(client.prompts), 2)  # 01-brief's draft and its review
+
+    def test_to_prints_how_to_continue(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            run.run_campaign(self.campaign, FakeClient(['pass']), ask=answers('a'), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, end_at='01-brief')
+        self.assertIn('Not run: 02-article', out.getvalue())
+        self.assertIn('use --from 02-article', out.getvalue())
+
+    def test_to_before_from_is_refused(self):
+        folder = self.campaign / '01-brief'
+        folder.mkdir()
+        (folder / 'output.md').write_text('brief')
+        (folder / 'APPROVED').write_text('2026-11-01 10:00\nfingerprint: 0000\n')
+        with self.assertRaisesRegex(run.WorkflowError, '--to 01-brief comes before --from 02-article'):
+            run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, start_at='02-article', end_at='01-brief')
+
+    def test_to_the_last_step_builds_the_final_package(self):
+        final = run.run_campaign(self.campaign, FakeClient(['pass', 'pass']), ask=answers('a', 'a'), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, end_at='02-article')
+        self.assertTrue((final / 'index.md').is_file())
+
+    def test_from_and_to_the_same_step_runs_only_that_step(self):
+        folder = self.campaign / '01-brief'
+        folder.mkdir()
+        (folder / 'output.md').write_text('brief')
+        (folder / 'APPROVED').write_text('2026-11-01 10:00\nfingerprint: 0000\n')
+        client = FakeClient(['pass'])
+        run.run_campaign(self.campaign, client, ask=answers('a'), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, start_at='02-article', end_at='02-article')
+        self.assertEqual(len(client.prompts), 2)  # 02-article's draft and its review only
+        self.assertTrue((self.campaign / '02-article' / 'APPROVED').is_file())
+
+    def test_to_must_name_a_step_of_the_task(self):
+        with self.assertRaisesRegex(run.WorkflowError, 'is not a step of this task'):
+            run.run_campaign(self.campaign, FakeClient([]), ask=answers(), steps=TEXT_STEPS, skills_dir=self.skills, roles=ROLES, end_at='09-publish')
 
     def test_approving_every_step_builds_final_package(self):
         client = FakeClient(['pass', 'pass'])
@@ -1001,12 +1045,154 @@ class FilmLookTest(unittest.TestCase):
 
     def test_reel_script_skill_list(self):
         script = next(step for step in run.STEPS if step['id'] == '08-reel-script')
-        expected = ['hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']
+        expected = ['video-hooks', 'short-form-video-script', 'reels-script', 'voiceover-script']
         self.assertEqual(script['writer_skills'], expected + ['moderaty-voice'])  # the voice pass is last
         self.assertEqual(script['review_skills'], expected + ['moderaty-voice'])
         library = run.library_block(script['writer_skills'])
-        self.assertIn('--- BEGIN skill: heygen-video ---', library)
-        self.assertIn('Write for the ear.', library)
+        self.assertIn('--- BEGIN skill: voiceover-script ---', library)
+        self.assertIn('write for the ear', library)
+
+
+GOOD_PACKAGE = """## Titles
+Why your comments need a bouncer
+How I stopped reading the mean ones
+Three minutes a day on comments
+
+## On-screen text
+Stop reading the mean ones
+
+## Description
+A moderation tool for YouTube comments.
+It holds back the spam and the trolls, so you read the ones that matter.
+[ARTICLE LINK]
+
+## Caption
+Your comment section is a mess. Here is what a bouncer looks like.
+
+## Hashtags
+#moderation #youtube #creators
+
+## Pinned comment
+The setup steps are in the write-up: [ARTICLE LINK]
+"""
+
+
+def package_with(old, new):
+    assert GOOD_PACKAGE.count(old) == 1, old
+    return GOOD_PACKAGE.replace(old, new)
+
+
+class ReelPackageTest(unittest.TestCase):
+    def test_reel_runs_script_then_package_then_video(self):
+        self.assertEqual([step['id'] for step in run.STEPS if step['deliverable'] == 'reel'],
+                         ['08-reel-script', '08-reel-package', '08-reel'])
+
+    def test_package_is_written_by_the_script_role_with_the_voice_last(self):
+        package = next(step for step in run.STEPS if step['id'] == '08-reel-package')
+        self.assertEqual(package['role'], 'script')
+        self.assertEqual(package['writer_skills'], ['video-titles', 'video-captions', 'video-metadata', 'moderaty-voice'])
+        self.assertEqual(package['review_skills'], ['moderaty-voice'])
+        self.assertTrue(run.is_copy_step(package))
+        self.assertEqual(run.step_skill_names(package), ['video-titles', 'video-captions', 'video-metadata', 'moderaty-voice'])
+        self.assertNotIn(run.CLAIMS_INPUT, package['inputs'])  # the writer never sees the claims list
+        self.assertIn(run.CLAIMS_INPUT, package['review_inputs'])
+
+    def test_video_reads_the_on_screen_text_of_the_package(self):
+        self.assertIn('08-reel-package#On-screen text', run.REEL_INPUTS)
+
+    def test_package_skills_and_check_are_wired(self):
+        run.check_skills(run.SKILLS_DIR, [step for step in run.STEPS if step['id'] == '08-reel-package'])
+        self.assertIs(run.CHECKS['reel-package'], run.check_reel_package)
+
+    def test_good_package_passes(self):
+        self.assertEqual(run.check_reel_package(GOOD_PACKAGE, '', None), [])
+
+    def test_product_copy_about_ai_generated_spam_is_not_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'It catches AI-generated spam and the trolls,')
+        self.assertFalse(any('AI or sponsorship disclosure' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_privacy_wording_is_not_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'It never discloses your comments, and it holds back the spam and the trolls,')
+        self.assertFalse(any('AI or sponsorship disclosure' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_a_label_about_this_reel_is_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'This reel is AI-generated, and it holds back the spam and the trolls,')
+        self.assertTrue(any('AI-generated' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_bait_phrases_match_whole_words_only(self):
+        text = package_with('Your comment section is a mess. Here is what a bouncer looks like.', 'Read the comment yesterday, then decide.')
+        self.assertFalse(any('bait phrase' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_each_package_rule_has_its_own_message(self):
+        cases = {
+            'two titles': (package_with('Three minutes a day on comments\n', ''), 'the Titles section has 2 titles'),
+            'title too long': (package_with('Three minutes a day on comments', 'T' * 61), 'title 3 is 61 characters'),
+            'on-screen text too long': (package_with('Stop reading the mean ones\n\n## Description',
+                                                     'Stop reading the mean ones right now and never look back\n\n## Description'),
+                                        'the On-screen text has 11 words'),
+            'on-screen text shares a word with the lead title': (package_with('Stop reading the mean ones\n\n## Description',
+                                                                              'Comments are the problem\n\n## Description'),
+                                                                 'share comments'),
+            'description first line too long': (package_with('A moderation tool for YouTube comments.', 'A' * 126),
+                                                'the first line of the Description is 126 characters'),
+            'description without the link at the end': (package_with('matter.\n[ARTICLE LINK]\n\n## Caption', 'matter.\n\n## Caption'),
+                                                        'the Description must end with the line [ARTICLE LINK]'),
+            'caption first line too long': (package_with('Your comment section is a mess. Here is what a bouncer looks like.', 'C' * 101),
+                                            'the first line of the Caption is 101 characters'),
+            'caption repeats the on-screen text': (package_with('Your comment section is a mess. Here is what a bouncer looks like.',
+                                                                'Stop reading the mean ones'),
+                                                   'the Caption repeats the On-screen text'),
+            'two hashtags': (package_with('#moderation #youtube #creators', '#moderation #youtube'), 'the Hashtags section has 2 hashtags'),
+            'pinned comment without the link': (package_with('write-up: [ARTICLE LINK]', 'write-up.'),
+                                                'the Pinned comment must contain [ARTICLE LINK] once'),
+            'link in bio': (package_with('Here is what a bouncer looks like.', 'Link in bio.'), 'never write "Link in bio"'),
+            'bait phrase': (package_with('Here is what a bouncer looks like.', 'Comment YES for the video.'), 'remove the bait phrase "Comment YES"'),
+            'numbered people': (package_with('Here is what a bouncer looks like.', 'Share with 5 people today.'), 'remove the bait phrase'),
+            'AI disclosure': (package_with('A moderation tool for YouTube comments.', 'This reel is AI-generated.'),
+                              'is AI-generated'),
+            'em dash': (package_with('Here is what a bouncer looks like.', 'Here is what a bouncer looks like — read on.'), 'remove the em dash'),
+            'hedge in the first caption line': (package_with('Your comment section is a mess.', 'Your comment section may be a mess.'),
+                                                'the first line uses "may"'),
+            'on-screen text too short': (package_with('Stop reading the mean ones\n\n## Description', 'Stop now\n\n## Description'),
+                                         'the On-screen text has 2 words'),
+            'four titles': (package_with('Three minutes a day on comments\n', 'Three minutes a day on comments\nOne more title here\n'),
+                            'the Titles section has 4 titles'),
+            'link in a title': (package_with('Why your comments need a bouncer', 'Why [ARTICLE LINK] needs a bouncer'),
+                                'the Titles must not contain [ARTICLE LINK]'),
+            'six hashtags': (package_with('#moderation #youtube #creators', '#moderation #youtube #creators #a #b #c'),
+                             'the Hashtags section has 6 hashtags'),
+            'banned phrase': (package_with('Here is what a bouncer looks like.', 'This article shows what a bouncer looks like.'),
+                              'remove "this article"'),
+            'pinned comment on two lines': (package_with('write-up: [ARTICLE LINK]', 'write-up:\n[ARTICLE LINK]'),
+                                            'the Pinned comment must be one line'),
+        }
+        for name, (text, message) in cases.items():
+            with self.subTest(name):
+                errors = run.check_reel_package(text, '', None)
+                self.assertTrue(any(message in error for error in errors), errors)
+
+
+class VendoredSkillTest(unittest.TestCase):
+    NAMES = ['video-hooks', 'video-titles', 'video-captions', 'video-metadata']
+
+    def test_each_vendored_skill_starts_with_a_provenance_line(self):
+        for name in self.NAMES:
+            with self.subTest(name=name):
+                first = (run.LIBRARY_DIR / name / 'SKILL.md').read_text().splitlines()[0]
+                self.assertTrue(first.startswith('> Copied from the clickbait-video skill'), first)
+
+    def test_only_the_listed_library_skills_have_references(self):
+        with_references = sorted(path.parent.name for path in run.LIBRARY_DIR.glob('*/references'))
+        self.assertEqual(with_references, sorted(['moderaty-voice', *self.NAMES]))
+
+    def test_the_clickbait_attribution_is_kept_in_the_library(self):
+        self.assertTrue((run.LIBRARY_DIR / 'ATTRIBUTION-clickbait-video.md').is_file())
+
+    def test_vendored_references_carry_no_disclosure_or_sponsorship_advice(self):
+        for name in self.NAMES:
+            for path in (run.LIBRARY_DIR / name / 'references').glob('*.md'):
+                with self.subTest(path=path.name):
+                    self.assertNotRegex(path.read_text(), r'(?i)disclos|sponsored|before you say')
 
 
 class RecheckTest(unittest.TestCase):
@@ -1100,213 +1286,278 @@ class ReviewRulesInPromptTest(unittest.TestCase):
         self.assertEqual(notes, 'first note\nsecond note')
 
 
-CHARACTER = {'name': 'Ada', 'avatar_id': 'avatar-1', 'voice_id': 'voice-1', }
+CHARACTER = {'name': 'Ada', 'voice_id': 'voice-1'}
 SCRIPT_LINES = ['First line.', 'Second line.', 'Third line.']
 
 
-class FakeHeyGen:
-    SRT = '1\n00:00:01,200 --> 00:00:03,400\nHello, there.\n\n2\n00:00:03,500 --> 00:00:05,000\nBye.\n'
-
-    def __init__(self, durations=(2.0, 2.0, 2.0, 2.0), failing=None, missing_subtitle=None, processing_polls=0):
-        self.durations, self.failing, self.missing_subtitle = list(durations), failing, missing_subtitle
-        self.processing_polls = processing_polls  # status polls that still answer 'processing'
-        self.created, self.videos = [], {}
-
-    def request(self, method, path, body=None, query=None):
-        if method == 'POST' and path == '/v3/videos':
-            self.created.append(body)
-            video_id = f'v{len(self.created)}'
-            duration = self.durations[len(self.created) - 1] if len(self.created) <= len(self.durations) else 2.0
-            self.videos[video_id] = (body['script'], duration)
-            return {'data': {'video_id': video_id, 'status': 'waiting'}}
-        if method == 'GET' and path.startswith('/v3/videos/'):
-            video_id = path.rsplit('/', 1)[1]
-            if self.processing_polls:
-                self.processing_polls -= 1
-                return {'data': {'video_id': video_id, 'status': 'processing'}}
-            text, duration = self.videos[video_id]
-            if text == self.failing:
-                return {'data': {'video_id': video_id, 'status': 'failed', 'failure_message': 'avatar unavailable'}}
-            subtitle = None if text == self.missing_subtitle else f'https://cdn.example/{video_id}.srt'
-            return {'data': {'video_id': video_id, 'status': 'completed', 'video_url': f'https://cdn.example/{video_id}.mp4',
-                             'duration': duration, 'subtitle_url': subtitle}}
-        raise AssertionError((method, path))
-
-    def download(self, url):
-        return b'mp4 bytes' if url.endswith('.mp4') else self.SRT.encode()
+def fake_alignment(text):
+    """What ElevenLabs returns: one start and end time per character, the audio tags included."""
+    return {'characters': list(text), 'character_start_times_seconds': [i * 0.1 for i in range(len(text))],
+            'character_end_times_seconds': [(i + 1) * 0.1 for i in range(len(text))]}
 
 
-class HeyGenReelTest(unittest.TestCase):
-    def make_campaign(self, lines=SCRIPT_LINES, brand='demo'):
-        campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
-        (campaign / '08-reel-script').mkdir(parents=True)
-        (campaign / '08-reel-script' / 'script.json').write_text(json.dumps(
-            {'presenter': 'Ada', 'script': ' '.join(lines), 'notes': ''}))
-        (campaign / '00-task.md').write_text(task_text('article, social, images, reel', brand=brand))
-        step_dir = campaign / '08-reel'
-        step_dir.mkdir()
-        return campaign, step_dir
+class FakeEleven:
+    """Stands in for the ElevenLabs call and for ffprobe. The test chooses the voiceover and clip lengths and tracks."""
 
-    def heygen(self, fake):
-        return mock.patch.multiple(run, heygen_request=fake.request, heygen_download=fake.download, HEYGEN_POLL_SECONDS=0)
+    def __init__(self, seconds=2.0, clip_seconds=None, clip_kinds=('video', 'audio'), failing=None):
+        self.seconds, self.failing = seconds, failing
+        self.clip_seconds = seconds if clip_seconds is None else clip_seconds
+        self.clip_kinds = set(clip_kinds)
+        self.spoken = []
 
-    def test_reel_needs_character_and_key(self):
-        write_brand('nochar')
-        (BRANDS_TMP / 'nochar' / 'character.md').unlink()
-        write_brand('noavatar', **{'character.md': CHARACTER_TEXT.replace('## Avatar id\navatar-1\n', '## Avatar id\n\n')})
-        script = dict(next(step for step in run.STEPS if step['id'] == '08-reel-script'), inputs=[], review_inputs=[])
-        reel = dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
-        cases = [('nochar', 'nochar/character.md is missing'),
-                 ('noavatar', 'character.md: section "## Avatar id" is missing or empty'),
-                 ('demo', 'HEYGEN_API_KEY is not set')]
-        for brand, expected in cases:
-            with self.subTest(brand=brand):
-                campaign, _ = self.make_campaign(brand=brand)
-                env = {'HEYGEN_API_KEY': 'test-key'} if brand != 'demo' else {}
-                with mock.patch.dict(os.environ, env, clear=False):
-                    os.environ.pop('HEYGEN_API_KEY', None) if brand == 'demo' else None
-                    with self.assertRaisesRegex(run.WorkflowError, expected):
-                        run.run_campaign(campaign, FakeClient([]), ask=answers(), steps=[script, reel], skills_dir=run.SKILLS_DIR, roles=ROLES)
+    def speak(self, text, voice_id):
+        self.spoken.append((text, voice_id))
+        if text == self.failing:
+            raise run.ElevenLabsError('the voice is unavailable')
+        return b'mp3 bytes', fake_alignment(text)
 
-    def test_script_checks_the_whole_length(self):
+    def media_info(self, path):
+        if path.name == 'voiceover.mp3':
+            return self.seconds, {'audio'}
+        if path.name == 'presenter.mp4':
+            return self.clip_seconds, self.clip_kinds
+        raise AssertionError(f'unexpected file: {path}')
+
+
+def speaking(fake):
+    return mock.patch.multiple(run, speak=fake.speak, media_info=fake.media_info)
+
+
+def make_reel_campaign(lines=SCRIPT_LINES, brand='demo'):
+    campaign = Path(tempfile.mkdtemp()) / 'campaigns' / 'demo'
+    (campaign / '08-reel-script').mkdir(parents=True)
+    (campaign / '08-reel-script' / 'script.json').write_text(json.dumps({'presenter': 'Ada', 'script': ' '.join(lines), 'notes': ''}))
+    (campaign / '00-task.md').write_text(task_text('article, social, images, reel', brand=brand))
+    step_dir = campaign / '08-reel'
+    step_dir.mkdir()
+    return campaign, step_dir
+
+
+def owner_clip(campaign, step_dir, fake):
+    """The owner's flow: the first run makes the voiceover and stops for the clip, then the owner places the clip."""
+    with speaking(fake), contextlib.suppress(run.WorkflowError):
+        run.prepare_presenter(campaign, step_dir, CHARACTER)
+    (step_dir / 'assets').mkdir(exist_ok=True)
+    (step_dir / 'assets' / 'presenter.mp4').write_bytes(b'owner clip')
+
+
+class FakeResponse:
+    def __init__(self, body):
+        self.body = json.dumps(body).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+
+class ElevenLabsTest(unittest.TestCase):
+    def test_requests_carry_the_key(self):
+        with mock.patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'test-key'}), \
+                mock.patch.object(run.urllib.request, 'urlopen', return_value=FakeResponse({'voices': []})) as opened:
+            run.elevenlabs_request('GET', '/v2/voices', query={'page_size': 100})
+        request = opened.call_args.args[0]
+        self.assertEqual(request.get_header('Xi-api-key'), 'test-key')
+        self.assertEqual(request.full_url, 'https://api.elevenlabs.io/v2/voices?page_size=100')
+
+    def test_a_missing_key_is_named(self):
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop('ELEVENLABS_API_KEY', None)
+            with self.assertRaisesRegex(run.WorkflowError, 'ELEVENLABS_API_KEY is not set'):
+                run.elevenlabs_request('GET', '/v2/voices')
+
+    def test_http_errors_are_named_with_the_status(self):
+        error = run.urllib.error.HTTPError('https://api.elevenlabs.io/v1/x', 422, 'Unprocessable', {}, io.BytesIO(b'{"detail": []}'))
+        with mock.patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'test-key'}), mock.patch.object(run.urllib.request, 'urlopen', side_effect=error):
+            with self.assertRaisesRegex(run.ElevenLabsError, 'returned HTTP 422'):
+                run.elevenlabs_request('POST', '/v1/x', body={})
+
+    def test_speak_returns_the_audio_and_needs_the_alignment(self):
+        body = {'audio_base64': run.base64.b64encode(b'mp3').decode(), 'alignment': fake_alignment('Hi.')}
+        with mock.patch.object(run, 'elevenlabs_request', return_value=body) as request:
+            audio, alignment = run.speak('Hi.', 'voice-1')
+        self.assertEqual(audio, b'mp3')
+        self.assertEqual(request.call_args.args, ('POST', '/v1/text-to-speech/voice-1/with-timestamps'))
+        self.assertEqual(request.call_args.kwargs['body'], {'text': 'Hi.', 'model_id': 'eleven_v4'})
+        with mock.patch.object(run, 'elevenlabs_request', return_value={'audio_base64': 'bXA='}):
+            with self.assertRaisesRegex(run.ElevenLabsError, 'no audio or no alignment'):
+                run.speak('Hi.', 'voice-1')
+
+    def test_voices_follow_the_next_page_token(self):
+        pages = [{'voices': [{'voice_id': 'a', 'name': 'Andrew - Pro'}], 'has_more': True, 'next_page_token': 't1'},
+                 {'voices': [{'voice_id': 'b', 'name': 'Alex'}], 'has_more': False, 'next_page_token': None}]
+        with mock.patch.object(run, 'elevenlabs_request', side_effect=pages) as request:
+            voices = run.elevenlabs_voices('And')
+        self.assertEqual([voice['voice_id'] for voice in voices], ['a', 'b'])
+        self.assertEqual(request.call_args_list[0].kwargs['query'], {'page_size': 100, 'search': 'And'})
+        self.assertEqual(request.call_args_list[1].kwargs['query'], {'page_size': 100, 'search': 'And', 'next_page_token': 't1'})
+
+    def test_the_voices_command_prints_id_name_and_category(self):
+        with mock.patch.object(run, 'elevenlabs_voices', return_value=[{'voice_id': 'a', 'name': 'Andrew - Pro', 'category': 'professional'}]):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                run.cmd_elevenlabs('Andrew')
+        self.assertEqual(out.getvalue(), 'a\tAndrew - Pro\tprofessional\n')
+
+    def test_words_skip_audio_tags_and_keep_their_times(self):
+        text = '[laughs] Hello, there.'
+        self.assertEqual([word for word, _, _ in run.words_from_alignment(fake_alignment(text))], ['Hello,', 'there.'])
+        self.assertEqual(run.subtitle_words(fake_alignment(text), text)[0][0], 'Hello,')
+
+    def test_subtitle_timings_must_match_the_script_words(self):
+        with self.assertRaisesRegex(run.ElevenLabsError, 'do not match the script at word 2'):
+            run.subtitle_words(fake_alignment('Hello there.'), 'Hello world.')
+
+    def test_subtitles_break_at_punctuation_and_tag_each_word(self):
+        words = [('Hello,', 0.0, 0.4), ('there.', 0.5, 1.0), ('Bye', 1.1, 1.4)]
+        self.assertEqual(run.vtt_from_words(words), 'WEBVTT\n\n00:00:00.000 --> 00:00:00.400\n<00:00:00.000>Hello,\n\n'
+                                                    '00:00:00.500 --> 00:00:01.000\n<00:00:00.500>there.\n\n'
+                                                    '00:00:01.100 --> 00:00:01.400\n<00:00:01.100>Bye\n\n')
+
+    def test_audio_tags_are_the_only_brackets_and_come_from_the_list(self):
+        self.assertEqual(run.audio_tag_errors('[sarcastic] Oh, great. Another comment from a bot.'), [])
+        self.assertTrue(any('audio tag [shouts] is not on the list' in e for e in run.audio_tag_errors('[shouts] Hello there.')))
+        self.assertTrue(any('the script has 5 audio tags; the limit is 4' in e for e in run.audio_tag_errors(' '.join(['[smug] Hi.'] * 5))))
+        self.assertTrue(any('brackets are only for audio tags' in e for e in run.audio_tag_errors('Hello [there.')))
+
+
+class ReelVoiceTest(unittest.TestCase):
+    def test_the_voiceover_is_spoken_once_per_script_and_voice(self):
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        owner_clip(campaign, step_dir, fake)
+        with speaking(fake):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        self.assertEqual(len(fake.spoken), 1)
+        self.assertEqual(fake.spoken[0][1], 'voice-1')
+
+    def test_a_new_voiceover_needs_the_key(self):
+        campaign, step_dir = make_reel_campaign()
+        with mock.patch.dict(os.environ), mock.patch.object(run, 'media_info', FakeEleven().media_info):
+            os.environ.pop('ELEVENLABS_API_KEY', None)
+            with self.assertRaisesRegex(run.WorkflowError, 'ELEVENLABS_API_KEY is not set'):
+                run.prepare_presenter(campaign, step_dir, CHARACTER)
+
+    def test_a_cached_voiceover_needs_no_key(self):
+        campaign, step_dir = make_reel_campaign()
+        owner_clip(campaign, step_dir, FakeEleven())
+        with mock.patch.dict(os.environ), mock.patch.object(run, 'elevenlabs_request', side_effect=AssertionError('no call')), \
+                mock.patch.object(run, 'media_info', FakeEleven().media_info):
+            os.environ.pop('ELEVENLABS_API_KEY', None)
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        self.assertTrue((step_dir / 'presenter.json').is_file())
+
+    def test_the_missing_clip_stops_and_names_the_file(self):
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        with speaking(fake), self.assertRaises(run.WorkflowError) as caught:
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        message = str(caught.exception)
+        self.assertIn(f'Make the avatar clip from {step_dir / "voiceover.mp3"} (2.0 s)', message)
+        self.assertIn(f'save it as {step_dir / "assets" / "presenter.mp4"}', message)
+        self.assertTrue((step_dir / 'voiceover.mp3').is_file())
+        self.assertEqual(fake.spoken, [(' '.join(SCRIPT_LINES), 'voice-1')])
+
+    def test_the_clip_must_match_the_voiceover_and_have_both_tracks(self):
+        cases = [(FakeEleven(clip_seconds=3.0), 'they must be within 0.3 s'),
+                 (FakeEleven(clip_kinds=('video',)), 'has no sound track'),
+                 (FakeEleven(clip_kinds=('audio',)), 'has no video track')]
+        for fake, expected in cases:
+            with self.subTest(expected=expected):
+                campaign, step_dir = make_reel_campaign()
+                owner_clip(campaign, step_dir, fake)
+                with speaking(fake), self.assertRaisesRegex(run.WorkflowError, expected):
+                    run.prepare_presenter(campaign, step_dir, CHARACTER)
+
+    def test_the_clip_stays_within_the_reel_limit(self):
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven(seconds=30.0, clip_seconds=30.2)
+        owner_clip(campaign, step_dir, fake)
+        with speaking(fake), self.assertRaisesRegex(run.WorkflowError, 'is 30.2 s; the reel limit is 30 s'):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+
+    def test_a_voiceover_over_the_reel_limit_stops_before_the_clip(self):
+        campaign, step_dir = make_reel_campaign()
+        with speaking(FakeEleven(seconds=40.0)), self.assertRaises(run.WorkflowError) as caught:
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        self.assertIn('the voiceover is 40.0 s; the reel limit is 30 s', str(caught.exception))
+        self.assertIn(f"rm -r {campaign / '08-reel-script'} {step_dir}", str(caught.exception))
+        self.assertFalse((step_dir / 'presenter.json').exists())
+
+    def test_the_presenter_is_one_clip_at_zero_with_the_clip_length(self):
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven(seconds=7.5)
+        owner_clip(campaign, step_dir, fake)
+        with speaking(fake):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        presenter = json.loads((step_dir / 'presenter.json').read_text())
+        self.assertEqual([(clip['id'], clip['at'], clip['duration']) for clip in presenter], [('presenter', 0.0, 7.5)])
+        self.assertTrue((step_dir / 'assets' / 'presenter.vtt').is_file())
+
+    def test_subtitles_follow_the_voiceover_timing(self):
+        campaign, step_dir = make_reel_campaign(lines=['Meet Moderaty.'])
+        fake = FakeEleven(seconds=1.4)
+        owner_clip(campaign, step_dir, fake)
+        with speaking(fake):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        vtt = (step_dir / 'assets' / 'presenter.vtt').read_text(encoding='utf-8')
+        self.assertEqual(vtt, 'WEBVTT\n\n00:00:00.000 --> 00:00:01.400\n<00:00:00.000>Meet <00:00:00.500>Moderaty.\n\n')
+
+    def test_a_failed_voiceover_is_named_and_leaves_no_file(self):
+        campaign, step_dir = make_reel_campaign()
+        with speaking(FakeEleven(failing=' '.join(SCRIPT_LINES))), self.assertRaisesRegex(run.ElevenLabsError, 'the voice is unavailable'):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        self.assertFalse((step_dir / 'voiceover.mp3').exists())
+
+    def test_deleting_the_reel_step_reuses_the_cached_voiceover_and_clip(self):
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        owner_clip(campaign, step_dir, fake)
+        with speaking(fake):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+            shutil.rmtree(step_dir)
+            step_dir.mkdir()
+            run.prepare_presenter(campaign, step_dir, CHARACTER)  # the clip comes back from the cache
+        self.assertEqual(len(fake.spoken), 1)
+        self.assertEqual((step_dir / 'assets' / 'presenter.mp4').read_bytes(), b'owner clip')
+
+    def test_a_changed_script_needs_a_new_clip(self):
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        owner_clip(campaign, step_dir, fake)
+        with speaking(fake):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        script = campaign / '08-reel-script' / 'script.json'
+        data = json.loads(script.read_text())
+        data['script'] = 'A new script. Thanks.'
+        script.write_text(json.dumps(data))
+        with speaking(fake), self.assertRaisesRegex(run.WorkflowError, 'was made for an older script'):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        self.assertEqual(len(fake.spoken), 1)  # the old clip stopped the new voiceover before any call
+        (step_dir / 'assets' / 'presenter.mp4').unlink()
+        with speaking(fake), self.assertRaisesRegex(run.WorkflowError, 'Make the avatar clip from'):
+            run.prepare_presenter(campaign, step_dir, CHARACTER)
+        self.assertEqual(len(fake.spoken), 2)  # one new voiceover, for the changed script
+
+    def test_the_presenter_needs_a_voice_id_and_no_avatar_id(self):
+        write_brand('voiceonly', **{'character.md': CHARACTER_TEXT.replace('## Avatar id\navatar-1\n\n', '')})
+        self.assertEqual(run.check_character('voiceonly'), [])
+        write_brand('novoice', **{'character.md': CHARACTER_TEXT.replace('## Voice id\nvoice-1\n', '## Voice id\n\n')})
+        self.assertIn('character.md: section "## Voice id" is missing or empty', run.check_character('novoice'))
+
+    def test_audio_tags_are_not_counted_as_words(self):
         def script(text):
             return f'# Reel script\n\nPresenter: Ada\n\n## Script\n\n{text}\n\n## Notes\n\nNone.\n'
         twenty = ' '.join(['word'] * 20)
-        self.assertIn('the script has 80 words; the limit for a 30 s reel is 75', run.check_reel_script(script(' '.join([twenty] * 4)), '', None))
-        self.assertEqual(run.check_reel_script(script(' '.join([twenty] * 3)), '', None), [])
-        self.assertTrue(any('never have the script say "Link in bio"' in e for e in run.check_reel_script(script(twenty + ' Link in bio.'), '', None)))
+        tags = ' '.join(['[laughs]'] * 4)
+        self.assertEqual(run.check_reel_script(script(' '.join([twenty] * 3) + ' ' + tags), '', None), [])
 
-    def test_no_render_before_script_approval(self):
-        campaign, _ = self.make_campaign()
-        script_text = json.dumps({'presenter': 'Ada', 'script': 'First line. Thanks.', 'notes': ''})
-        script = dict(next(step for step in run.STEPS if step['id'] == '08-reel-script'), inputs=[], review_inputs=[])
-        reel = dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
-        fake = FakeHeyGen()
-        with mock.patch.dict(os.environ, {'HEYGEN_API_KEY': 'test-key'}), mock.patch.object(run, 'render_presenter') as render, self.heygen(fake):
-            with self.assertRaises(SystemExit):
-                run.run_campaign(campaign, FakeClient(['pass'], writer_outputs=[script_text]), ask=answers('q'),
-                                 steps=[script, reel], skills_dir=run.SKILLS_DIR, roles=ROLES)
-        self.assertEqual(render.call_count, 0)
-        self.assertEqual(fake.created, [])
 
-    def test_render_cache_reuses_the_presenter_video(self):
-        campaign, step_dir = self.make_campaign()
-        fake = FakeHeyGen()
-        with self.heygen(fake):
-            run.render_presenter(campaign, step_dir, CHARACTER)
-            self.assertEqual(len(fake.created), 1)
-            run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(len(fake.created), 1)  # the second pass reuses the render
-
-    def test_subtitles_show_the_written_brand_name(self):
-        campaign, step_dir = self.make_campaign(lines=['Meet Moderahtee.'])
-        fake = FakeHeyGen(durations=(2.0,))
-        fake.SRT = '1\n00:00:01,000 --> 00:00:03,000\nMeet Moderahtee.\n'
-        with self.heygen(fake):
-            run.render_presenter(campaign, step_dir, CHARACTER)
-        vtt = (step_dir / 'assets' / 'presenter.vtt').read_text(encoding='utf-8')
-        self.assertIn('Meet Moderaty.', vtt)
-        self.assertNotIn('Moderahtee', vtt)
-
-    def test_presenter_is_one_video_at_zero(self):
-        campaign, step_dir = self.make_campaign()
-        with self.heygen(FakeHeyGen(durations=(7.5,))):
-            run.render_presenter(campaign, step_dir, CHARACTER)
-        presenter = json.loads((step_dir / 'presenter.json').read_text())
-        self.assertEqual([clip['at'] for clip in presenter], [0.0])
-        self.assertEqual([clip['id'] for clip in presenter], ['presenter'])
-        self.assertTrue((step_dir / 'assets' / 'presenter.mp4').is_file())
-        self.assertTrue((step_dir / 'assets' / 'presenter.vtt').is_file())
-
-    def test_presenter_video_over_the_reel_length_stops_with_the_commands(self):
-        campaign, step_dir = self.make_campaign()
-        with self.heygen(FakeHeyGen(durations=(40.0,))):
-            with self.assertRaises(run.WorkflowError) as caught:
-                run.render_presenter(campaign, step_dir, CHARACTER)
-        message = str(caught.exception)
-        self.assertIn('the presenter video is 40.0 s; the reel limit is 30 s', message)
-        self.assertIn(f"rm -r {campaign / '08-reel-script'} {step_dir}", message)
-        self.assertFalse((step_dir / 'presenter.json').exists())
-
-    def test_rerun_polls_the_video_it_started(self):
-        campaign, step_dir = self.make_campaign(lines=['First line.'])
-        fake = FakeHeyGen(durations=(2.0,), processing_polls=1)
-        with self.heygen(fake), mock.patch.object(run, 'HEYGEN_MAX_POLLS', 1):
-            with self.assertRaisesRegex(run.HeyGenError, 'did not finish'):
-                run.render_presenter(campaign, step_dir, CHARACTER)
-            run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(len(fake.created), 1)  # the rerun polled the same video; it did not start a second one
-        self.assertEqual(list((campaign.parent / '.heygen-cache').glob('*.pending.json')), [])
-        self.assertTrue((step_dir / 'presenter.json').is_file())
-
-    def test_failed_render_removes_the_pending_record(self):
-        campaign, step_dir = self.make_campaign(lines=['First line.'])
-        with self.heygen(FakeHeyGen(durations=(2.0,), failing='First line.')):
-            with self.assertRaisesRegex(run.HeyGenError, 'render of the presenter video failed'):
-                run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(list((campaign.parent / '.heygen-cache').glob('*.pending.json')), [])
-
-    def test_approved_reel_needs_no_heygen_key(self):
-        campaign, _ = self.make_campaign()
-        reel = dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
-        (campaign / '08-reel' / 'output.md').write_text('# Reel\n\n## Notes\n\nNone.\n')
-        (campaign / '08-reel' / 'APPROVED').write_text(
-            f"2026-11-04 10:00\nfingerprint: {run.fingerprint(reel, run.SKILLS_DIR, campaign)}\n")
-        with mock.patch.dict(os.environ):
-            os.environ.pop('HEYGEN_API_KEY', None)
-            run.run_campaign(campaign, FakeClient([]), ask=answers(), steps=[reel], skills_dir=run.SKILLS_DIR, roles=ROLES)
-
-    def test_deleting_the_reel_step_reuses_the_video(self):
-        campaign, step_dir = self.make_campaign()
-        fake = FakeHeyGen()
-        with self.heygen(fake):
-            run.render_presenter(campaign, step_dir, CHARACTER)
-            self.assertEqual(len(fake.created), 1)
-            shutil.rmtree(step_dir)
-            step_dir.mkdir()
-            run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(len(fake.created), 1)  # the script was cached, so the rerun made no HeyGen call
-        self.assertTrue((step_dir / 'presenter.json').is_file())
-
-    def test_a_changed_script_is_rendered_again(self):
-        campaign, step_dir = self.make_campaign()
-        fake = FakeHeyGen()
-        with self.heygen(fake):
-            run.render_presenter(campaign, step_dir, CHARACTER)
-            script = campaign / '08-reel-script' / 'script.json'
-            data = json.loads(script.read_text())
-            data['script'] = 'A new script. Thanks.'
-            script.write_text(json.dumps(data))
-            run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertEqual(len(fake.created), 2)  # one new video, for the changed script
-
-    def test_failed_render_stops_with_response(self):
-        campaign, step_dir = self.make_campaign()
-        with self.heygen(FakeHeyGen(failing=' '.join(SCRIPT_LINES))):
-            with self.assertRaisesRegex(run.HeyGenError, 'render of the presenter video failed') as caught:
-                run.render_presenter(campaign, step_dir, CHARACTER)
-        self.assertIn('avatar unavailable', str(caught.exception))
-
-    def test_missing_subtitle_names_the_presenter_video(self):
-        campaign, step_dir = self.make_campaign()
-        with self.heygen(FakeHeyGen(missing_subtitle=' '.join(SCRIPT_LINES))):
-            with self.assertRaisesRegex(run.WorkflowError, 'without a subtitle_url'):
-                run.render_presenter(campaign, step_dir, CHARACTER)
-
-    def test_srt_converts_to_vtt(self):
-        vtt = run.srt_to_vtt(FakeHeyGen.SRT)
-        self.assertTrue(vtt.startswith('WEBVTT\n\n'))
-        self.assertIn('00:00:01.200 --> 00:00:03.400\nHello, there.', vtt)
-        self.assertNotIn(',', vtt.split('\n')[2])
-        self.assertNotIn('\n1\n', vtt)
-
-    def test_presenter_on_screen_in_first_two_seconds(self):
-        presenter = [{'id': 'presenter', 'at': 0.0}]
-        late = [{'path': 'film.html', 'content': '<video src="assets/presenter.mp4" at="3">'}]
-        self.assertTrue(any('must be on screen in the first 2 seconds' in e for e in run.presenter_film_errors(late, presenter)))
-        early = [{'path': 'film.html', 'content': '<video src="assets/presenter.mp4" at="0">'}]
-        self.assertEqual(run.presenter_film_errors(early, presenter), [])
-
+class ReelFilmTest(unittest.TestCase):
     def film_tool(self, calls=None, look_failures=0):
         calls = calls if calls is not None else []
         state = {'looks': 0}
@@ -1343,45 +1594,57 @@ class HeyGenReelTest(unittest.TestCase):
     def reel_step(self):
         return dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
 
+    def test_presenter_on_screen_in_first_two_seconds(self):
+        presenter = [{'id': 'presenter', 'at': 0.0}]
+        late = [{'path': 'film.html', 'content': '<video src="assets/presenter.mp4" at="3">'}]
+        self.assertTrue(any('must be on screen in the first 2 seconds' in e for e in run.presenter_film_errors(late, presenter)))
+        early = [{'path': 'film.html', 'content': '<video src="assets/presenter.mp4" at="0">'}]
+        self.assertEqual(run.presenter_film_errors(early, presenter), [])
+
     def test_reel_film_flow_reaches_the_owner(self):
-        campaign, step_dir = self.make_campaign()
-        fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        owner_clip(campaign, step_dir, fake)
         client = FakeClient(['pass'], writer_outputs=[self.film(0.0)])
-        with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
+        with speaking(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
             run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
         self.assertTrue((step_dir / 'APPROVED').is_file())
         self.assertTrue((step_dir / 'reel.mp4').is_file())
         self.assertNotIn('AI avatar', (step_dir / 'output.md').read_text())  # no disclosure is ever added
 
-    def test_the_reel_writer_is_prompted_after_the_presenter_clips_exist(self):
-        campaign, step_dir = self.make_campaign()
+    def test_the_reel_writer_is_prompted_after_the_presenter_files_exist(self):
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        owner_clip(campaign, step_dir, fake)
         seen = []
 
         def stop_at_the_prompt(*args):
             seen.append((campaign / '08-reel' / 'presenter.json').is_file())
             raise RuntimeError('stop at the prompt')
         step = dict(next(step for step in run.STEPS if step['id'] == '08-reel'))  # the real inputs, including presenter.json
-        with self.heygen(FakeHeyGen(durations=(2.0, 2.0, 2.0))), mock.patch.object(run, 'writer_prompt', side_effect=stop_at_the_prompt):
+        with speaking(fake), mock.patch.object(run, 'writer_prompt', side_effect=stop_at_the_prompt):
             with self.assertRaises(RuntimeError):
                 run.write(FakeClient([]), ROLES, run.SKILLS_DIR, campaign, step, step_dir, None)
         self.assertEqual(seen, [True])
 
     def test_film_with_the_wrong_presenter_time_goes_back_once(self):
-        campaign, step_dir = self.make_campaign()
-        fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        owner_clip(campaign, step_dir, fake)
         client = FakeClient(['pass'], writer_outputs=[self.film(3.0), self.film(0.0)])
-        with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
+        with speaking(fake), mock.patch.object(run, 'run_tool', self.film_tool()):
             run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
         self.assertEqual(len(client.prompts), 6)  # writer, three skill passes, one rewrite with the timing problem, reviewer
         self.assertIn('[blocking] assets/presenter.mp4 must start at 0.0 s', client.prompts[4])
-        self.assertEqual(len(fake.created), 1)  # the rewrite reused the render
+        self.assertEqual(len(fake.spoken), 1)  # the rewrite reused the voiceover
 
     def test_reel_looks_before_render(self):
-        campaign, step_dir = self.make_campaign()
-        fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        owner_clip(campaign, step_dir, fake)
         calls = []
         client = FakeClient(['pass'], writer_outputs=[self.film(0.0), self.film(0.0)])
-        with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=1)):
+        with speaking(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=1)):
             run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
         self.assertEqual(calls, ['look', 'look', 'render --subtitles'])  # the failed look stops before the render
         self.assertEqual(len(client.prompts), 6)  # writer, three skill passes, one rewrite with the look problem, reviewer
@@ -1389,11 +1652,12 @@ class HeyGenReelTest(unittest.TestCase):
         self.assertTrue((step_dir / 'APPROVED').is_file())
 
     def test_reel_look_still_failing_stops(self):
-        campaign, step_dir = self.make_campaign()
-        fake = FakeHeyGen(durations=(2.0, 2.0, 2.0))
+        campaign, step_dir = make_reel_campaign()
+        fake = FakeEleven()
+        owner_clip(campaign, step_dir, fake)
         calls = []
         client = FakeClient([], writer_outputs=[self.film(0.0), self.film(0.0)])
-        with self.heygen(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=2)):
+        with speaking(fake), mock.patch.object(run, 'run_tool', self.film_tool(calls, look_failures=2)):
             with self.assertRaisesRegex(run.WorkflowError, 'film.html:10') as caught:
                 run.run_step(client, ROLES, run.SKILLS_DIR, campaign, self.reel_step(), answers('a'))
         self.assertEqual(calls, ['look', 'look'])  # no render
@@ -1407,13 +1671,6 @@ class HeyGenReelTest(unittest.TestCase):
         (campaign / '08-reel' / 'output.md').write_text('# Reel\n')
         final = run.build_final(campaign, [{'id': '08-reel'}])
         self.assertNotIn('Label as made with AI', (final / 'index.md').read_text())  # the label is set on the platform, never in the package
-
-    def test_heygen_lists_page_through_items(self):
-        pages = [{'data': [{'id': 'a'}], 'has_more': True, 'next_token': 't1'}, {'data': [{'id': 'b'}], 'has_more': False}]
-        with mock.patch.object(run, 'heygen_request', side_effect=pages) as request:
-            items = run.heygen_list('/v3/avatars/looks', {'limit': 50})
-        self.assertEqual([item['id'] for item in items], ['a', 'b'])
-        self.assertEqual(request.call_args_list[1].kwargs['query'], {'limit': 50, 'token': 't1'})
 
 
 class SearchLogTest(unittest.TestCase):
@@ -1728,27 +1985,23 @@ class NewRulesTest(unittest.TestCase):
     def test_script_is_one_text_with_no_clip_ids(self):
         self.assertEqual(run.check_reel_script(self.script(('p1', 'One.'), ('p2', 'Two. Thanks.')), '', None), [])
 
-    def test_the_brand_is_spoken_as_mod_der_ah_tee(self):
-        self.assertTrue(any('"Moderahtee", not "Moderaty"' in e for e in run.check_reel_script(self.script(('p1', 'Meet Moderaty. Thanks.')), '', None)))
-        self.assertTrue(any('one word with no dashes' in e for e in run.check_reel_script(self.script(('p1', 'Meet Mod-der-ah-tee. Thanks.')), '', None)))
-        self.assertTrue(any('one word with no dashes' in e for e in run.check_reel_script(self.script(('p1', 'Meet Mod der ah tee. Thanks.')), '', None)))
-        self.assertEqual(run.check_reel_script(self.script(('p1', 'Meet Moderahtee. Thanks.')), '', None), [])
+    def test_the_brand_is_always_written_moderaty(self):
+        self.assertEqual(run.check_reel_script(self.script(('p1', 'Meet Moderaty. Thanks.')), '', None), [])
 
     def test_rhythm_is_checked_across_the_script(self):
         lines = [('p1', 'The reader sees it first.'), ('p2', 'The reader saves it later.'),
                  ('p3', 'The reader shares it now.'), ('p4', 'The reader acts today.')]
         self.assertTrue(any('4 sentences start with "The reader"' in e for e in run.check_reel_script(self.script(*lines), '', None)))
 
-    def test_network_failures_become_heygen_errors_with_the_url(self):
-        with mock.patch.dict(os.environ, {'HEYGEN_API_KEY': 'test-key'}), \
+    def test_network_failures_become_elevenlabs_errors_with_the_url(self):
+        with mock.patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'test-key'}), \
                 mock.patch.object(run.urllib.request, 'urlopen', side_effect=run.urllib.error.URLError('dns failure')):
-            with self.assertRaisesRegex(run.HeyGenError, r'POST https://api\.heygen\.com/v3/videos could not be reached'):
-                run.heygen_request('POST', '/v3/videos', body={})
-            with self.assertRaisesRegex(run.HeyGenError, r'download from https://cdn\.example/v1\.mp4 failed'):
-                run.heygen_download('https://cdn.example/v1.mp4')
-        with mock.patch.object(run.urllib.request, 'urlopen', side_effect=TimeoutError('timed out')):
-            with self.assertRaises(run.HeyGenError):
-                run.heygen_download('https://cdn.example/v1.mp4')
+            with self.assertRaisesRegex(run.ElevenLabsError, r'POST https://api\.elevenlabs\.io/v1/text-to-speech/x/with-timestamps could not be reached'):
+                run.elevenlabs_request('POST', '/v1/text-to-speech/x/with-timestamps', body={})
+        with mock.patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'test-key'}), \
+                mock.patch.object(run.urllib.request, 'urlopen', side_effect=TimeoutError('timed out')):
+            with self.assertRaises(run.ElevenLabsError):
+                run.elevenlabs_request('GET', '/v2/voices')
 
     def test_instagram_post_must_end_with_the_exact_link_line(self):
         def instagram(last_line):
@@ -2250,6 +2503,151 @@ class SampleLinesTest(unittest.TestCase):
     def test_templates_have_no_sample_lines_section(self):
         self.assertNotIn('## Sample lines', (REPO_TEMPLATE / 'character.md').read_text())
         self.assertNotIn('## Sample lines', (REPO_TEMPLATE.parent / 'moderaty' / 'character.md').read_text())
+
+
+class RegisterTest(unittest.TestCase):
+    """Copy is conversational unless the task's ## Register says otherwise: the register check, the owner's override and the prompts."""
+
+    LINKEDIN = ('Nobody started a channel to hand-delete bots. The Crypto Bot posts "I made passive income." No you didn\'t.\n\n'
+                'I\'d start with your moderation level in YouTube Studio. If bots still eat your evenings, add Moderaty\'s rules. '
+                'They swing first. The Crypto Bot gets bonked on sight.\n\n'
+                'AI mops up the rest. Anything uncertain lands in your review queue. You get the final say. Then go touch grass.')
+    VOICE = ('Some comments come as a combo meal. A viewer spots a wrong price and adds an insult on the side. That is the Ackchyually Guy '
+             'with extra salt, and he is sometimes right. I verify the price, fix it if needed, then apply my rule to the insult.')
+    STIFF = ('Furthermore, the organization must utilize comprehensive tools in order to ensure that stakeholders can navigate the landscape '
+             'effectively.')
+
+    def step(self, step_id, **extra):
+        return dict(next(step for step in run.STEPS if step['id'] == step_id), **extra)
+
+    def make_post(self, campaign, body, approved=False):
+        (campaign / '02-brief').mkdir(exist_ok=True)
+        (campaign / '02-brief' / 'output.md').write_text('## Angle\nOne.\n')
+        step_dir = campaign / '04-linkedin'
+        step_dir.mkdir(exist_ok=True)
+        (step_dir / 'output.md').write_text('## Post\n' + body + '\n')
+        if approved:
+            (step_dir / 'APPROVED').write_text('2026-11-06T10:00:00Z\nfingerprint: old\n')
+        return step_dir
+
+    def test_the_brand_examples_pass_the_register_check(self):
+        self.assertEqual(run.register_errors(self.LINKEDIN, 'post'), [])
+        self.assertEqual(run.register_errors(self.VOICE, 'article'), [])
+
+    def test_stiff_copy_is_flagged_with_the_sentence_it_is_about(self):
+        errors = run.register_errors(self.STIFF, 'article')
+        self.assertTrue(any('stiff phrase "Furthermore"' in error for error in errors), errors)
+        self.assertTrue(any('averages' in error for error in errors), errors)
+        self.assertTrue(any('hardly speaks' in error for error in errors), errors)
+
+    def test_long_sentences_and_silent_posts_are_flagged(self):
+        long_sentence = ' '.join(['word'] * 31) + '.'
+        errors = run.register_errors('You will see this. ' + long_sentence, 'article')
+        self.assertTrue(any('this sentence is 31 words' in error for error in errors), errors)
+        self.assertTrue(any('never speaks' in error for error in run.register_errors('Nothing here talks to anyone.', 'post')))
+
+    def test_register_text_drops_headings_links_hashtags_and_the_link_placeholder(self):
+        output = '## Post\nYou will like this. See [the guide](https://example.com/guide) #Moderaty\n\n## First comment\nRead it: [ARTICLE LINK]\n'
+        text = run.register_text(self.step('04-linkedin'), output)
+        self.assertIn('You will like this.', text)
+        self.assertIn('the guide', text)
+        for dropped in ('example.com', '#Moderaty', 'ARTICLE LINK', '##'):
+            self.assertNotIn(dropped, text)
+
+    def test_register_text_reads_only_the_script_section_for_the_reel(self):
+        output = '# Reel script\n\nPresenter: Alex\n\n## Script\n\nYou know this one. Thanks.\n\n## Notes\n\nNone.\n'
+        self.assertEqual(run.register_text(self.step('08-reel-script'), output).strip(), 'You know this one. Thanks.')
+
+    def test_an_owner_register_for_a_deliverable_applies_only_to_its_copy(self):
+        task = task_text('article, social') + '## Register\n- article: formal\n\n'
+        self.assertEqual(run.check_task(task), [])
+        self.assertEqual(run.register_of(task, self.step('03-article')), 'formal')
+        self.assertIsNone(run.register_of(task, self.step('04-linkedin')))
+        self.assertIsNone(run.register_of(task, self.step('01-sources')))  # not copy
+
+    def test_all_covers_every_copy_step_and_conversational_is_the_default(self):
+        self.assertEqual(run.register_of(task_text('article, social') + '## Register\n- all: measured\n\n', self.step('04-linkedin')), 'measured')
+        self.assertIsNone(run.register_of(task_text('article, social') + '## Register\n- all: conversational\n\n', self.step('03-article')))
+
+    def test_select_steps_carries_the_register_into_each_copy_step(self):
+        task = task_text('article, social') + '## Register\n- social: formal\n\n'
+        chosen = {step['id']: step['register_text'] for step in run.select_steps(task, run.STEPS)}
+        self.assertEqual(chosen['04-linkedin'], 'formal')
+        self.assertIsNone(chosen['03-article'])
+
+    def test_bad_register_sections_are_task_errors(self):
+        for body, message in (('- blog: formal', 'is not valid'), ('- article: formal\n- article: measured', 'more than once'),
+                              ('- article:', 'is not valid'), ('', 'is empty')):
+            with self.subTest(body=body):
+                errors = run.check_task(task_text() + '## Register\n' + body + '\n\n')
+                self.assertTrue(any(message in error for error in errors), errors)
+
+    def test_copy_steps_get_the_limits_and_the_talk_rule(self):
+        article = self.step('03-article')
+        self.assertIn(run.COPY_RULE, run.copy_rule(article))
+        self.assertIn('Aim for about 14 words a sentence', run.copy_rule(article))
+        self.assertIn('dry, stiff, formal or corporate', run.copy_review_rule(article))
+        self.assertEqual(run.copy_rule(self.step('07-images')), run.COPY_RULE)  # images have no register check, so no limits
+
+    def test_an_owner_register_replaces_the_talk_rule_for_writer_and_reviewer(self):
+        article = self.step('03-article', register_text='formal')
+        self.assertIn('The owner set the register for this copy: formal', run.copy_rule(article))
+        self.assertNotIn('MUST be conversational', run.copy_rule(article))
+        self.assertNotIn('MUST be conversational', run.copy_review_rule(article))
+        self.assertIn('Judge the copy against that register', run.copy_review_rule(article))
+
+    def test_the_re_review_and_the_second_review_carry_the_copy_rule(self):
+        article = self.step('03-article')
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(run, 'private_skill_block', return_value='PRIVATE SKILL'):
+            step_dir = Path(folder)
+            (step_dir / 'output.md').write_text('# Title\n\nYou will see this.\n')
+            self.assertIn('dry, stiff, formal or corporate', run.rereview_prompt(article, step_dir))
+            second = run.second_review_prompt(article, step_dir, 'plan-seo-geo-growth')
+            self.assertIn('dry, stiff, formal or corporate', second)
+            self.assertIn('do not ask for a more formal register', second)
+
+    def test_an_owner_register_changes_the_approval_of_copy_only(self):
+        base = task_text().rstrip('\n') + '\n'  # a task file as the owner has it: one newline at the end
+        for appended in ('\n## Register\n- article: formal\n', '## Register\n- article: formal\n'):
+            with self.subTest(appended=appended), tempfile.TemporaryDirectory() as folder:
+                campaign = Path(folder)
+                (campaign / '00-task.md').write_text(base)
+                sources, article = self.step('01-sources'), self.step('03-article')
+                before_sources = run.fingerprint(sources, run.SKILLS_DIR, campaign)
+                before_article = run.fingerprint(article, run.SKILLS_DIR, campaign)
+                (campaign / '00-task.md').write_text(base + appended)
+                self.assertEqual(run.fingerprint(sources, run.SKILLS_DIR, campaign), before_sources)
+                self.assertNotEqual(run.fingerprint(article, run.SKILLS_DIR, campaign), before_article)
+
+    def test_a_stiff_post_fails_the_automatic_checks_unless_the_owner_sets_a_register(self):
+        with tempfile.TemporaryDirectory() as folder:
+            campaign = Path(folder)
+            (campaign / '00-task.md').write_text(task_text('article, social'))
+            step_dir = self.make_post(campaign, self.STIFF)
+            with mock.patch.dict(run.CHECKS, {'linkedin': lambda output, task, brief: []}):
+                errors = run.run_checks(self.step('04-linkedin'), step_dir, campaign)
+                self.assertTrue(any('stiff phrase' in error for error in errors), errors)
+                (campaign / '00-task.md').write_text(task_text('article, social') + '## Register\n- social: formal\n\n')
+                self.assertEqual(run.run_checks(self.step('04-linkedin'), step_dir, campaign), [])
+
+    def test_the_approved_copy_recheck_ignores_the_register(self):
+        with tempfile.TemporaryDirectory() as folder:
+            campaign = Path(folder)
+            (campaign / '00-task.md').write_text(task_text('article, social'))
+            self.make_post(campaign, self.STIFF, approved=True)
+            with mock.patch.dict(run.CHECKS, {'linkedin': lambda output, task, brief: []}):
+                run.recheck_approved(campaign, [self.step('04-linkedin')])  # does not raise: the approval stands
+
+    def test_approved_copy_that_fails_the_register_check_is_listed_not_blocked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            campaign = Path(folder)
+            (campaign / '00-task.md').write_text(task_text('article, social'))
+            self.make_post(campaign, self.STIFF, approved=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                listed = run.register_warnings(campaign, [self.step('04-linkedin')])
+                self.assertEqual([step_id for step_id, _ in listed], ['04-linkedin'])
+                (campaign / '00-task.md').write_text(task_text('article, social') + '## Register\n- social: formal\n\n')
+                self.assertEqual(run.register_warnings(campaign, [self.step('04-linkedin')]), [])
 
 
 if __name__ == '__main__':

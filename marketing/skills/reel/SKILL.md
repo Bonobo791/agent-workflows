@@ -48,11 +48,12 @@ How to build it:
 - Each scene sets `window.film = { frame(t) {...}, duration, width: 1080, height: 1920 }`.
 - Every scene must move: text slides or fades in. A video that never changes is not allowed.
 - On-screen text must be large and readable without sound. Keep it at least 120 px from the top edge and 60 px from the sides, and inside the top 900 px.
-- The presenter's voice is the only audio. Add no other audio.
+- The presenter's voice is the only audio: it is the sound of the owner's avatar clip, assets/presenter.mp4. Add no other audio.
 - The presenter must be on screen in the first 2 seconds, so the presenter video starts at 0.
 - Inline CSS only. Do not load anything from the internet.
 - Use only facts from the brief's Facts section.
 - Change what is on screen every 2 to 4 seconds.
+- The first scene shows the On-screen text from 08-reel-package, word for word, inside the top 900 px.
 - Follow the constraints the brief gives.
 - No em dashes.
 

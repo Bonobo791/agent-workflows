@@ -50,6 +50,7 @@ Rules:
 - If the issue asks for social, images or reel without an article, include article and add this line under Constraints: - Article added because the social posts link to it; owner to confirm.
 - Leave out internal process lines: who does a step, approval routes, internal checklists, and notes to the team about how the work runs. Keep only what the campaign's content needs.
 - Leave out any "recheck after" date or line. Keep other dates.
+- Only if the issue asks for a register other than conversational (for example formal): add a `## Register` section after `## Brand`, with one line per deliverable it covers, such as `- article: formal`. Otherwise leave that section out.
 - Brand is always `None.`. The owner names the brand folder in marketing/brands/.
 - The example is a shape only. Never copy its values unless the issue states them.
 - Use no em dashes. Never invent a fact.

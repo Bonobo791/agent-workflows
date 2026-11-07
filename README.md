@@ -19,8 +19,10 @@ Nothing is published unless the task has `## Publish to` and you approve step 09
 3. `03-article`: the SEO article. Each H2 delivers only its Adds line from the brief. It links only to the pages listed in `pages.md`. After the normal review, the same reviewer session reviews the article a second time, separately, against the `plan-seo-geo-growth` skill. That skill is read from `~/.config/agent-workflows/private/skills/plan-seo-geo-growth/SKILL.md`, not from the repo. Its reference files are not sent, so the review uses the skill's `SKILL.md` only.
 4. `04-linkedin`, `05-x`, `06-instagram`: the social posts (if Deliverables has `social`). Each draft has a `## Hooks` section with three hooks from three different reader problems. The checks and the final package leave `## Hooks` out
 5. `07-images`: three still images (if Deliverables has `images`)
-6. `08-reel-script` and `08-reel`: a 30-second vertical video with a HeyGen presenter (if Deliverables has `reel`). You approve the script first; only then are the presenter video rendered and the film made
-7. `09-publish`: shows every post exactly as it will go out, and queues them when you approve (only if the task has `## Publish to`)
+6. `08-reel-script`: the reel's spoken script, one continuous take (if Deliverables has `reel`). You approve it first.
+7. `08-reel-package`: the reel's titles, first-frame text, YouTube Short description, TikTok caption, hashtags and pinned comment. You approve it next.
+8. `08-reel`: a 30-second vertical video with a presenter (if Deliverables has `reel`). The run first makes the voiceover and stops for your avatar clip (`08-reel/assets/presenter.mp4`); then it makes the film.
+9. `09-publish`: shows every post exactly as it will go out, and queues them when you approve (only if the task has `## Publish to`)
 
 `article` is always made. `images` and `reel` need `social` in Deliverables.
 
@@ -90,6 +92,15 @@ article, social, images, reel
 
 Deliverables is a comma-separated list of `article`, `social`, `images` and `reel`. See `marketing/examples/sample-task.md`.
 
+Copy is conversational unless the task says otherwise. To set another register, add an optional `## Register` section after `## Brand`, with one line per deliverable it covers: `article`, `social`, `images`, `reel`, or `all`:
+
+```
+## Register
+- article: formal
+```
+
+Text after the colon is the register the owner wants, and the copy then follows it instead of the conversational default. `conversational` is the default and needs no line. Without a `## Register` section, every copy step is held to the conversational check.
+
 `--issue` writes this file from the It's a Plan issue, including the required headings from the SOP that the issue links to. Check the file before you run the campaign.
 
 ## Brand kit
@@ -100,7 +111,7 @@ Each brand has a folder, `marketing/brands/<brand>/`, with five files. Every cam
 - `voice.md`: how the brand sounds.
 - `positioning.md`: what the product sells, to whom, the reader problems, the proof and the alternatives.
 - `pages.md`: the pages the article may link to.
-- `character.md`: the reel presenter's name, personality, HeyGen avatar and voice ids, and what they do and don't do on camera. Fill the ids in with `python3 marketing/run.py heygen avatars` and `python3 marketing/run.py heygen voices`, which need `HEYGEN_API_KEY`.
+- `character.md`: the reel presenter's name, personality, ElevenLabs voice id, and what they do and don't do on camera. Fill the voice id in with `python3 marketing/run.py elevenlabs voices <name>`, which needs `ELEVENLABS_API_KEY`.
 
 Make a brand by copying `marketing/brands/TEMPLATE/` to `marketing/brands/<brand>/` and filling in every file. `character.md` is needed only for reels. Replace each `Template note:` line with your text. A run stops before any model call if a file is missing or still has a template note.
 
@@ -115,12 +126,12 @@ The draft goes to the a/r/q prompt. On approval, `positioning.md` is saved with 
 
 ## Models
 
-Each step and the import uses one of six roles. The roles are set in `ROLES` at the top of `marketing/run.py`. The writer always uses Haiku 5.5; only the reel script (08-reel-script) uses the script role.
+Each step and the import uses one of six roles. The roles are set in `ROLES` at the top of `marketing/run.py`. The writer always uses Haiku 5.5; the reel script (08-reel-script) and the reel package (08-reel-package) use the script role.
 
 | Role | Used for | Model | Effort | Budget per call |
 | --- | --- | --- | --- | --- |
 | writer | the brand command, and steps 01, 03 to 06 | `claude-haiku-5-5` | `xhigh` | $1.00 |
-| script | the reel script (08-reel-script) | `claude-sonnet-5-5` | `high` | $4.00 |
+| script | the reel script and the reel package (08-reel-script, 08-reel-package) | `claude-sonnet-5-5` | `high` | $4.00 |
 | importer | the import (`new --issue`) | `claude-sonnet-5-5` | `medium` | $5.00 |
 | strategist | the brief (step 02) | `claude-sonnet-5-5` | `high` | $3.00 |
 | reviewer | the review of every step | `claude-sonnet-5-5` | `medium` | $4.00 |
@@ -200,8 +211,8 @@ https://moderaty.com/blog/demo-article
 | --- | --- | --- | --- |
 | `linkedin` | `social` | the Post, then a first comment with the article link | `linkedin.png` if `images` |
 | `instagram` | `social` and `images` | the caption, a blank line, then the hashtags | `instagram.png`, converted to JPEG |
-| `youtube` | `reel` | the article title; the meta description, a blank line, the article link | `reel.mp4`, uploaded as a Short |
-| `tiktok` | `social` and `reel` | the Instagram caption, a blank line, then the hashtags | `reel.mp4` |
+| `youtube` | `reel` | the lead title and the description from `08-reel-package`, with the article link at the end | `reel.mp4`, uploaded as a Short |
+| `tiktok` | `reel` | the caption from `08-reel-package`, a blank line, then its hashtags | `reel.mp4` |
 
 X is not posted automatically, because its API charges per post. Post the thread by hand from `final/05-x.md`.
 
