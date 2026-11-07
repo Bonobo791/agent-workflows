@@ -33,6 +33,13 @@ def tearDownModule():
 
 ARTICLE_URL = '## Article URL\nhttps://moderaty.com/blog/demo\n\n'
 LINKEDIN = '## Publish to\nlinkedin\n\n' + ARTICLE_URL
+PACKAGE = ('## Titles\nWhy your comments need a bouncer\nHow I stopped reading the mean ones\nThree minutes a day on comments\n\n'
+           '## On-screen text\nStop reading the mean ones\n\n'
+           '## Description\nA moderation tool for YouTube comments.\nIt holds back the spam and the trolls so you read the ones that matter.\n'
+           '[ARTICLE LINK]\n\n'
+           '## Caption\nYour comment section is a mess. Here is what a bouncer looks like.\n\n'
+           '## Hashtags\n#moderation #youtube #creators\n\n'
+           '## Pinned comment\nThe setup steps are in the write-up: [ARTICLE LINK]\n')
 
 
 def publish_task(deliverables='article, social, images, reel', extra=''):
@@ -77,11 +84,11 @@ class PublishTaskTest(unittest.TestCase):
         errors = run.check_task(publish_task(deliverables='article, social, images', extra='## Publish to\nyoutube\n\n' + ARTICLE_URL))
         self.assertIn('youtube needs reel in Deliverables', errors)
 
-    def test_tiktok_is_a_target_that_needs_social_and_reel(self):
+    def test_tiktok_is_a_target_that_needs_reel(self):
         task = publish_task(deliverables='article, social, reel', extra='## Publish to\ntiktok\n\n' + ARTICLE_URL + '## Schedule\n- tiktok: 2026-11-10T14:00Z\n\n')
         self.assertEqual(run.check_task(task), [])
         self.assertEqual(run.publish_targets(task), ['tiktok'])
-        self.assertEqual(run.PLATFORM_NEEDS['tiktok'], {'social', 'reel'})
+        self.assertEqual(run.PLATFORM_NEEDS['tiktok'], {'reel'})
         self.assertEqual(run.schedule_times(task), {'tiktok': '2026-11-10T14:00:00Z'})
 
     def test_tiktok_needs_reel(self):
@@ -121,11 +128,12 @@ class PlanMixin:
         self.write_task(PUBLISH_ALL)
         self.write('03-article/output.md', 'Meta description: ' + 'm' * 155 + '\n# Demo title\nBody.')
         self.write('04-linkedin/output.md', '## Post\nTry it (free) #Moderaty\nLink in the first comment.\n\n## First comment\nRead it: [ARTICLE LINK]\n')
-        self.write('06-instagram/output.md', '## Caption\nA caption. Link in bio\n\n## Hashtags\n#a #b #c\n\n## Image text\nShort text\n')
+        self.write('06-instagram/output.md', '## Post\nA caption. Link in bio\n\n## Hashtags\n#a #b #c\n\n## Image text\nShort text\n')
         for name in ('linkedin.png', 'instagram.png'):
             self.write(f'07-images/{name}', b'png')
         self.write('08-reel/reel.mp4', b'mp4')
-        for step in ('03-article', '04-linkedin', '06-instagram', '07-images', '08-reel'):
+        self.write('08-reel-package/output.md', PACKAGE)
+        for step in ('03-article', '04-linkedin', '06-instagram', '07-images', '08-reel-package', '08-reel'):
             self.write(f'{step}/APPROVED', '2026-11-04T10:00:00Z\n')
         self.tool = mock.Mock(side_effect=fake_tool)
         patcher = mock.patch('run.run_tool', self.tool)
@@ -195,9 +203,9 @@ class PlanTest(PlanMixin, unittest.TestCase):
         self.assertEqual(self.item(plan, 'instagram-post')['not_before'], '2026-11-10T14:00:00Z')
         self.assertIsNone(self.item(plan, 'linkedin-post')['not_before'])
 
-    def test_long_youtube_title_is_an_error(self):
-        self.write('03-article/output.md', 'Meta description: ' + 'm' * 155 + '\n# ' + 'T' * 101 + '\nBody.')
-        with self.assertRaisesRegex(run.WorkflowError, 'the article title is 101 characters; a YouTube title allows 100'):
+    def test_long_lead_title_is_an_error(self):
+        self.write('08-reel-package/output.md', PACKAGE.replace('Why your comments need a bouncer', 'T' * 101))
+        with self.assertRaisesRegex(run.WorkflowError, 'the lead title is 101 characters; a YouTube title allows 100'):
             self.plan()
 
     def test_unapproved_step_is_an_error(self):
@@ -205,14 +213,19 @@ class PlanTest(PlanMixin, unittest.TestCase):
         with self.assertRaisesRegex(run.WorkflowError, '04-linkedin is not approved yet'):
             self.plan()
 
-    def test_tiktok_posts_the_instagram_text_and_the_reel(self):
+    def test_tiktok_posts_the_package_caption_and_hashtags_and_the_reel(self):
         self.write_task('## Publish to\ninstagram, tiktok\n\n' + ARTICLE_URL)
         plan = self.plan()
         self.assertEqual([item['id'] for item in plan['items']], ['article', 'instagram-post', 'tiktok-video'])
         tiktok = self.item(plan, 'tiktok-video')
         self.assertEqual((tiktok['platform'], tiktok['action'], tiktok['depends_on']), ('tiktok', 'upload', ['article']))
-        self.assertEqual(tiktok['text'], self.item(plan, 'instagram-post')['text'])
+        self.assertEqual(tiktok['text'], 'Your comment section is a mess. Here is what a bouncer looks like.\n\n#moderation #youtube #creators')
         self.assertEqual([media['path'] for media in tiktok['media']], ['media/reel.mp4'])
+
+    def test_tiktok_does_not_need_the_instagram_step(self):
+        self.write_task('## Publish to\ntiktok\n\n' + ARTICLE_URL)
+        (self.campaign / '06-instagram' / 'APPROVED').unlink()
+        self.assertEqual([item['id'] for item in self.plan()['items']], ['article', 'tiktok-video'])
 
     def test_tiktok_waits_for_the_reel_approval(self):
         self.write_task('## Publish to\ntiktok\n\n' + ARTICLE_URL)
@@ -226,6 +239,26 @@ class PlanTest(PlanMixin, unittest.TestCase):
 
     def test_no_plan_item_is_for_x(self):
         self.assertNotIn('x', [item['platform'] for item in self.plan()['items']])
+
+    def test_youtube_short_takes_the_lead_title_and_the_description(self):
+        short = self.item(self.plan(), 'youtube-short')
+        self.assertEqual(short['title'], 'Why your comments need a bouncer')
+        self.assertEqual(short['text'], 'A moderation tool for YouTube comments.\nIt holds back the spam and the trolls so you read the ones that matter.\n'
+                                        'https://moderaty.com/blog/demo')
+
+    def test_a_short_without_the_article_link_is_refused(self):
+        self.write('08-reel-package/output.md', PACKAGE.replace('[ARTICLE LINK]\n\n## Caption', '\n## Caption'))
+        with self.assertRaisesRegex(run.WorkflowError, 'has no \\[ARTICLE LINK\\]'):
+            self.plan()
+
+    def test_approval_waits_while_a_post_needs_the_article_url(self):
+        self.write_task('## Publish to\nlinkedin\n\n')
+        with self.assertRaisesRegex(run.WorkflowError, 'wait for ## Article URL: linkedin-comment'):
+            run.publish_gate(self.campaign, answers('a'), FakeHttp([]))
+
+    def test_short_waits_for_the_article_url(self):
+        self.write_task('## Publish to\nyoutube\n\n')
+        self.assertEqual(self.plan()['items'], [])
 
 def make_skills(root):
     skills = root / 'skills'

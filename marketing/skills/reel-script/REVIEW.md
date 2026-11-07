@@ -8,12 +8,13 @@ Checked:
 - No hedge word: may, might, describes, positions, offers, various.
 - No banned phrase, no contrast ("X, not Y", "not X, it's Y", "rather than"), and no more than three sentences start with the same two words.
 - The script never says "Link in bio".
-- The brand is written "Moderahtee", one word with no dashes, and never "Moderaty".
 
 Judge the script as the character speaking to a viewer scrolling a busy feed, in one continuous take.
 
 Blocking findings:
 - The first sentence does not name a moment, a number or a mistake the reader recognises.
+- The first sentence promises something the rest of the script does not pay off.
+- A viewer scrolling past would not need the next line after the first sentence.
 - A fact the brief's Facts section does not state, or a claim that Claims we never make in positioning.md excludes.
 - No single idea, or no clear action for the reader.
 - A line the character would not say aloud.

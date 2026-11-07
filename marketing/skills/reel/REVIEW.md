@@ -13,6 +13,7 @@ Blocking findings:
 - Text that overlaps, is cut off, is too small to read on a phone, or has weak contrast in any frame.
 - Two frames more than 4 seconds apart that show the same screen.
 - No hook in the first frame, or an intro or logo before the hook.
+- The first scene's text is not the On-screen text from 08-reel-package, word for word.
 - A hook that the scenes after it do not deliver.
 - The presenter is hidden, covered or too small in a frame.
 - The message does not come through with the sound off.

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import re
@@ -1001,12 +1003,154 @@ class FilmLookTest(unittest.TestCase):
 
     def test_reel_script_skill_list(self):
         script = next(step for step in run.STEPS if step['id'] == '08-reel-script')
-        expected = ['hook-writer', 'short-form-video-script', 'reels-script', 'heygen-video']
+        expected = ['video-hooks', 'short-form-video-script', 'reels-script', 'heygen-video']
         self.assertEqual(script['writer_skills'], expected + ['moderaty-voice'])  # the voice pass is last
         self.assertEqual(script['review_skills'], expected + ['moderaty-voice'])
         library = run.library_block(script['writer_skills'])
         self.assertIn('--- BEGIN skill: heygen-video ---', library)
         self.assertIn('Write for the ear.', library)
+
+
+GOOD_PACKAGE = """## Titles
+Why your comments need a bouncer
+How I stopped reading the mean ones
+Three minutes a day on comments
+
+## On-screen text
+Stop reading the mean ones
+
+## Description
+A moderation tool for YouTube comments.
+It holds back the spam and the trolls, so you read the ones that matter.
+[ARTICLE LINK]
+
+## Caption
+Your comment section is a mess. Here is what a bouncer looks like.
+
+## Hashtags
+#moderation #youtube #creators
+
+## Pinned comment
+The setup steps are in the write-up: [ARTICLE LINK]
+"""
+
+
+def package_with(old, new):
+    assert GOOD_PACKAGE.count(old) == 1, old
+    return GOOD_PACKAGE.replace(old, new)
+
+
+class ReelPackageTest(unittest.TestCase):
+    def test_reel_runs_script_then_package_then_video(self):
+        self.assertEqual([step['id'] for step in run.STEPS if step['deliverable'] == 'reel'],
+                         ['08-reel-script', '08-reel-package', '08-reel'])
+
+    def test_package_is_written_by_the_script_role_with_the_voice_last(self):
+        package = next(step for step in run.STEPS if step['id'] == '08-reel-package')
+        self.assertEqual(package['role'], 'script')
+        self.assertEqual(package['writer_skills'], ['video-titles', 'video-captions', 'video-metadata', 'moderaty-voice'])
+        self.assertEqual(package['review_skills'], ['moderaty-voice'])
+        self.assertTrue(run.is_copy_step(package))
+        self.assertEqual(run.step_skill_names(package), ['video-titles', 'video-captions', 'video-metadata', 'moderaty-voice'])
+        self.assertNotIn(run.CLAIMS_INPUT, package['inputs'])  # the writer never sees the claims list
+        self.assertIn(run.CLAIMS_INPUT, package['review_inputs'])
+
+    def test_video_reads_the_on_screen_text_of_the_package(self):
+        self.assertIn('08-reel-package#On-screen text', run.REEL_INPUTS)
+
+    def test_package_skills_and_check_are_wired(self):
+        run.check_skills(run.SKILLS_DIR, [step for step in run.STEPS if step['id'] == '08-reel-package'])
+        self.assertIs(run.CHECKS['reel-package'], run.check_reel_package)
+
+    def test_good_package_passes(self):
+        self.assertEqual(run.check_reel_package(GOOD_PACKAGE, '', None), [])
+
+    def test_product_copy_about_ai_generated_spam_is_not_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'It catches AI-generated spam and the trolls,')
+        self.assertFalse(any('AI or sponsorship disclosure' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_privacy_wording_is_not_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'It never discloses your comments, and it holds back the spam and the trolls,')
+        self.assertFalse(any('AI or sponsorship disclosure' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_a_label_about_this_reel_is_a_disclosure(self):
+        text = package_with('It holds back the spam and the trolls,', 'This reel is AI-generated, and it holds back the spam and the trolls,')
+        self.assertTrue(any('AI-generated' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_bait_phrases_match_whole_words_only(self):
+        text = package_with('Your comment section is a mess. Here is what a bouncer looks like.', 'Read the comment yesterday, then decide.')
+        self.assertFalse(any('bait phrase' in error for error in run.check_reel_package(text, '', None)))
+
+    def test_each_package_rule_has_its_own_message(self):
+        cases = {
+            'two titles': (package_with('Three minutes a day on comments\n', ''), 'the Titles section has 2 titles'),
+            'title too long': (package_with('Three minutes a day on comments', 'T' * 61), 'title 3 is 61 characters'),
+            'on-screen text too long': (package_with('Stop reading the mean ones\n\n## Description',
+                                                     'Stop reading the mean ones right now and never look back\n\n## Description'),
+                                        'the On-screen text has 11 words'),
+            'on-screen text shares a word with the lead title': (package_with('Stop reading the mean ones\n\n## Description',
+                                                                              'Comments are the problem\n\n## Description'),
+                                                                 'share comments'),
+            'description first line too long': (package_with('A moderation tool for YouTube comments.', 'A' * 126),
+                                                'the first line of the Description is 126 characters'),
+            'description without the link at the end': (package_with('matter.\n[ARTICLE LINK]\n\n## Caption', 'matter.\n\n## Caption'),
+                                                        'the Description must end with the line [ARTICLE LINK]'),
+            'caption first line too long': (package_with('Your comment section is a mess. Here is what a bouncer looks like.', 'C' * 101),
+                                            'the first line of the Caption is 101 characters'),
+            'caption repeats the on-screen text': (package_with('Your comment section is a mess. Here is what a bouncer looks like.',
+                                                                'Stop reading the mean ones'),
+                                                   'the Caption repeats the On-screen text'),
+            'two hashtags': (package_with('#moderation #youtube #creators', '#moderation #youtube'), 'the Hashtags section has 2 hashtags'),
+            'pinned comment without the link': (package_with('write-up: [ARTICLE LINK]', 'write-up.'),
+                                                'the Pinned comment must contain [ARTICLE LINK] once'),
+            'link in bio': (package_with('Here is what a bouncer looks like.', 'Link in bio.'), 'never write "Link in bio"'),
+            'bait phrase': (package_with('Here is what a bouncer looks like.', 'Comment YES for the video.'), 'remove the bait phrase "Comment YES"'),
+            'numbered people': (package_with('Here is what a bouncer looks like.', 'Share with 5 people today.'), 'remove the bait phrase'),
+            'AI disclosure': (package_with('A moderation tool for YouTube comments.', 'This reel is AI-generated.'),
+                              'is AI-generated'),
+            'em dash': (package_with('Here is what a bouncer looks like.', 'Here is what a bouncer looks like — read on.'), 'remove the em dash'),
+            'hedge in the first caption line': (package_with('Your comment section is a mess.', 'Your comment section may be a mess.'),
+                                                'the first line uses "may"'),
+            'on-screen text too short': (package_with('Stop reading the mean ones\n\n## Description', 'Stop now\n\n## Description'),
+                                         'the On-screen text has 2 words'),
+            'four titles': (package_with('Three minutes a day on comments\n', 'Three minutes a day on comments\nOne more title here\n'),
+                            'the Titles section has 4 titles'),
+            'link in a title': (package_with('Why your comments need a bouncer', 'Why [ARTICLE LINK] needs a bouncer'),
+                                'the Titles must not contain [ARTICLE LINK]'),
+            'six hashtags': (package_with('#moderation #youtube #creators', '#moderation #youtube #creators #a #b #c'),
+                             'the Hashtags section has 6 hashtags'),
+            'banned phrase': (package_with('Here is what a bouncer looks like.', 'This article shows what a bouncer looks like.'),
+                              'remove "this article"'),
+            'pinned comment on two lines': (package_with('write-up: [ARTICLE LINK]', 'write-up:\n[ARTICLE LINK]'),
+                                            'the Pinned comment must be one line'),
+        }
+        for name, (text, message) in cases.items():
+            with self.subTest(name):
+                errors = run.check_reel_package(text, '', None)
+                self.assertTrue(any(message in error for error in errors), errors)
+
+
+class VendoredSkillTest(unittest.TestCase):
+    NAMES = ['video-hooks', 'video-titles', 'video-captions', 'video-metadata']
+
+    def test_each_vendored_skill_starts_with_a_provenance_line(self):
+        for name in self.NAMES:
+            with self.subTest(name=name):
+                first = (run.LIBRARY_DIR / name / 'SKILL.md').read_text().splitlines()[0]
+                self.assertTrue(first.startswith('> Copied from the clickbait-video skill'), first)
+
+    def test_only_the_listed_library_skills_have_references(self):
+        with_references = sorted(path.parent.name for path in run.LIBRARY_DIR.glob('*/references'))
+        self.assertEqual(with_references, sorted(['moderaty-voice', *self.NAMES]))
+
+    def test_the_clickbait_attribution_is_kept_in_the_library(self):
+        self.assertTrue((run.LIBRARY_DIR / 'ATTRIBUTION-clickbait-video.md').is_file())
+
+    def test_vendored_references_carry_no_disclosure_or_sponsorship_advice(self):
+        for name in self.NAMES:
+            for path in (run.LIBRARY_DIR / name / 'references').glob('*.md'):
+                with self.subTest(path=path.name):
+                    self.assertNotRegex(path.read_text(), r'(?i)disclos|sponsored|before you say')
 
 
 class RecheckTest(unittest.TestCase):
@@ -1178,7 +1322,7 @@ class HeyGenReelTest(unittest.TestCase):
 
     def test_no_render_before_script_approval(self):
         campaign, _ = self.make_campaign()
-        script_text = json.dumps({'presenter': 'Ada', 'script': 'First line. Thanks.', 'notes': ''})
+        script_text = json.dumps({'presenter': 'Ada', 'script': 'You know this one. Thanks.', 'notes': ''})
         script = dict(next(step for step in run.STEPS if step['id'] == '08-reel-script'), inputs=[], review_inputs=[])
         reel = dict(next(step for step in run.STEPS if step['id'] == '08-reel'), inputs=[], review_inputs=[])
         fake = FakeHeyGen()
@@ -1198,15 +1342,14 @@ class HeyGenReelTest(unittest.TestCase):
             run.render_presenter(campaign, step_dir, CHARACTER)
         self.assertEqual(len(fake.created), 1)  # the second pass reuses the render
 
-    def test_subtitles_show_the_written_brand_name(self):
-        campaign, step_dir = self.make_campaign(lines=['Meet Moderahtee.'])
+    def test_subtitles_are_copied_as_the_presenter_video_returned_them(self):
+        campaign, step_dir = self.make_campaign(lines=['Meet Moderaty.'])
         fake = FakeHeyGen(durations=(2.0,))
-        fake.SRT = '1\n00:00:01,000 --> 00:00:03,000\nMeet Moderahtee.\n'
+        fake.SRT = '1\n00:00:01,000 --> 00:00:03,000\nMeet Moderaty.\n'
         with self.heygen(fake):
             run.render_presenter(campaign, step_dir, CHARACTER)
         vtt = (step_dir / 'assets' / 'presenter.vtt').read_text(encoding='utf-8')
-        self.assertIn('Meet Moderaty.', vtt)
-        self.assertNotIn('Moderahtee', vtt)
+        self.assertEqual(vtt, 'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nMeet Moderaty.\n')
 
     def test_presenter_is_one_video_at_zero(self):
         campaign, step_dir = self.make_campaign()
@@ -1728,11 +1871,8 @@ class NewRulesTest(unittest.TestCase):
     def test_script_is_one_text_with_no_clip_ids(self):
         self.assertEqual(run.check_reel_script(self.script(('p1', 'One.'), ('p2', 'Two. Thanks.')), '', None), [])
 
-    def test_the_brand_is_spoken_as_mod_der_ah_tee(self):
-        self.assertTrue(any('"Moderahtee", not "Moderaty"' in e for e in run.check_reel_script(self.script(('p1', 'Meet Moderaty. Thanks.')), '', None)))
-        self.assertTrue(any('one word with no dashes' in e for e in run.check_reel_script(self.script(('p1', 'Meet Mod-der-ah-tee. Thanks.')), '', None)))
-        self.assertTrue(any('one word with no dashes' in e for e in run.check_reel_script(self.script(('p1', 'Meet Mod der ah tee. Thanks.')), '', None)))
-        self.assertEqual(run.check_reel_script(self.script(('p1', 'Meet Moderahtee. Thanks.')), '', None), [])
+    def test_the_brand_is_always_written_moderaty(self):
+        self.assertEqual(run.check_reel_script(self.script(('p1', 'Meet Moderaty. Thanks.')), '', None), [])
 
     def test_rhythm_is_checked_across_the_script(self):
         lines = [('p1', 'The reader sees it first.'), ('p2', 'The reader saves it later.'),
@@ -2250,6 +2390,151 @@ class SampleLinesTest(unittest.TestCase):
     def test_templates_have_no_sample_lines_section(self):
         self.assertNotIn('## Sample lines', (REPO_TEMPLATE / 'character.md').read_text())
         self.assertNotIn('## Sample lines', (REPO_TEMPLATE.parent / 'moderaty' / 'character.md').read_text())
+
+
+class RegisterTest(unittest.TestCase):
+    """Copy is conversational unless the task's ## Register says otherwise: the register check, the owner's override and the prompts."""
+
+    LINKEDIN = ('Nobody started a channel to hand-delete bots. The Crypto Bot posts "I made passive income." No you didn\'t.\n\n'
+                'I\'d start with your moderation level in YouTube Studio. If bots still eat your evenings, add Moderaty\'s rules. '
+                'They swing first. The Crypto Bot gets bonked on sight.\n\n'
+                'AI mops up the rest. Anything uncertain lands in your review queue. You get the final say. Then go touch grass.')
+    VOICE = ('Some comments come as a combo meal. A viewer spots a wrong price and adds an insult on the side. That is the Ackchyually Guy '
+             'with extra salt, and he is sometimes right. I verify the price, fix it if needed, then apply my rule to the insult.')
+    STIFF = ('Furthermore, the organization must utilize comprehensive tools in order to ensure that stakeholders can navigate the landscape '
+             'effectively.')
+
+    def step(self, step_id, **extra):
+        return dict(next(step for step in run.STEPS if step['id'] == step_id), **extra)
+
+    def make_post(self, campaign, body, approved=False):
+        (campaign / '02-brief').mkdir(exist_ok=True)
+        (campaign / '02-brief' / 'output.md').write_text('## Angle\nOne.\n')
+        step_dir = campaign / '04-linkedin'
+        step_dir.mkdir(exist_ok=True)
+        (step_dir / 'output.md').write_text('## Post\n' + body + '\n')
+        if approved:
+            (step_dir / 'APPROVED').write_text('2026-11-06T10:00:00Z\nfingerprint: old\n')
+        return step_dir
+
+    def test_the_brand_examples_pass_the_register_check(self):
+        self.assertEqual(run.register_errors(self.LINKEDIN, 'post'), [])
+        self.assertEqual(run.register_errors(self.VOICE, 'article'), [])
+
+    def test_stiff_copy_is_flagged_with_the_sentence_it_is_about(self):
+        errors = run.register_errors(self.STIFF, 'article')
+        self.assertTrue(any('stiff phrase "Furthermore"' in error for error in errors), errors)
+        self.assertTrue(any('averages' in error for error in errors), errors)
+        self.assertTrue(any('hardly speaks' in error for error in errors), errors)
+
+    def test_long_sentences_and_silent_posts_are_flagged(self):
+        long_sentence = ' '.join(['word'] * 31) + '.'
+        errors = run.register_errors('You will see this. ' + long_sentence, 'article')
+        self.assertTrue(any('this sentence is 31 words' in error for error in errors), errors)
+        self.assertTrue(any('never speaks' in error for error in run.register_errors('Nothing here talks to anyone.', 'post')))
+
+    def test_register_text_drops_headings_links_hashtags_and_the_link_placeholder(self):
+        output = '## Post\nYou will like this. See [the guide](https://example.com/guide) #Moderaty\n\n## First comment\nRead it: [ARTICLE LINK]\n'
+        text = run.register_text(self.step('04-linkedin'), output)
+        self.assertIn('You will like this.', text)
+        self.assertIn('the guide', text)
+        for dropped in ('example.com', '#Moderaty', 'ARTICLE LINK', '##'):
+            self.assertNotIn(dropped, text)
+
+    def test_register_text_reads_only_the_script_section_for_the_reel(self):
+        output = '# Reel script\n\nPresenter: Alex\n\n## Script\n\nYou know this one. Thanks.\n\n## Notes\n\nNone.\n'
+        self.assertEqual(run.register_text(self.step('08-reel-script'), output).strip(), 'You know this one. Thanks.')
+
+    def test_an_owner_register_for_a_deliverable_applies_only_to_its_copy(self):
+        task = task_text('article, social') + '## Register\n- article: formal\n\n'
+        self.assertEqual(run.check_task(task), [])
+        self.assertEqual(run.register_of(task, self.step('03-article')), 'formal')
+        self.assertIsNone(run.register_of(task, self.step('04-linkedin')))
+        self.assertIsNone(run.register_of(task, self.step('01-sources')))  # not copy
+
+    def test_all_covers_every_copy_step_and_conversational_is_the_default(self):
+        self.assertEqual(run.register_of(task_text('article, social') + '## Register\n- all: measured\n\n', self.step('04-linkedin')), 'measured')
+        self.assertIsNone(run.register_of(task_text('article, social') + '## Register\n- all: conversational\n\n', self.step('03-article')))
+
+    def test_select_steps_carries_the_register_into_each_copy_step(self):
+        task = task_text('article, social') + '## Register\n- social: formal\n\n'
+        chosen = {step['id']: step['register_text'] for step in run.select_steps(task, run.STEPS)}
+        self.assertEqual(chosen['04-linkedin'], 'formal')
+        self.assertIsNone(chosen['03-article'])
+
+    def test_bad_register_sections_are_task_errors(self):
+        for body, message in (('- blog: formal', 'is not valid'), ('- article: formal\n- article: measured', 'more than once'),
+                              ('- article:', 'is not valid'), ('', 'is empty')):
+            with self.subTest(body=body):
+                errors = run.check_task(task_text() + '## Register\n' + body + '\n\n')
+                self.assertTrue(any(message in error for error in errors), errors)
+
+    def test_copy_steps_get_the_limits_and_the_talk_rule(self):
+        article = self.step('03-article')
+        self.assertIn(run.COPY_RULE, run.copy_rule(article))
+        self.assertIn('Aim for about 14 words a sentence', run.copy_rule(article))
+        self.assertIn('dry, stiff, formal or corporate', run.copy_review_rule(article))
+        self.assertEqual(run.copy_rule(self.step('07-images')), run.COPY_RULE)  # images have no register check, so no limits
+
+    def test_an_owner_register_replaces_the_talk_rule_for_writer_and_reviewer(self):
+        article = self.step('03-article', register_text='formal')
+        self.assertIn('The owner set the register for this copy: formal', run.copy_rule(article))
+        self.assertNotIn('MUST be conversational', run.copy_rule(article))
+        self.assertNotIn('MUST be conversational', run.copy_review_rule(article))
+        self.assertIn('Judge the copy against that register', run.copy_review_rule(article))
+
+    def test_the_re_review_and_the_second_review_carry_the_copy_rule(self):
+        article = self.step('03-article')
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(run, 'private_skill_block', return_value='PRIVATE SKILL'):
+            step_dir = Path(folder)
+            (step_dir / 'output.md').write_text('# Title\n\nYou will see this.\n')
+            self.assertIn('dry, stiff, formal or corporate', run.rereview_prompt(article, step_dir))
+            second = run.second_review_prompt(article, step_dir, 'plan-seo-geo-growth')
+            self.assertIn('dry, stiff, formal or corporate', second)
+            self.assertIn('do not ask for a more formal register', second)
+
+    def test_an_owner_register_changes_the_approval_of_copy_only(self):
+        base = task_text().rstrip('\n') + '\n'  # a task file as the owner has it: one newline at the end
+        for appended in ('\n## Register\n- article: formal\n', '## Register\n- article: formal\n'):
+            with self.subTest(appended=appended), tempfile.TemporaryDirectory() as folder:
+                campaign = Path(folder)
+                (campaign / '00-task.md').write_text(base)
+                sources, article = self.step('01-sources'), self.step('03-article')
+                before_sources = run.fingerprint(sources, run.SKILLS_DIR, campaign)
+                before_article = run.fingerprint(article, run.SKILLS_DIR, campaign)
+                (campaign / '00-task.md').write_text(base + appended)
+                self.assertEqual(run.fingerprint(sources, run.SKILLS_DIR, campaign), before_sources)
+                self.assertNotEqual(run.fingerprint(article, run.SKILLS_DIR, campaign), before_article)
+
+    def test_a_stiff_post_fails_the_automatic_checks_unless_the_owner_sets_a_register(self):
+        with tempfile.TemporaryDirectory() as folder:
+            campaign = Path(folder)
+            (campaign / '00-task.md').write_text(task_text('article, social'))
+            step_dir = self.make_post(campaign, self.STIFF)
+            with mock.patch.dict(run.CHECKS, {'linkedin': lambda output, task, brief: []}):
+                errors = run.run_checks(self.step('04-linkedin'), step_dir, campaign)
+                self.assertTrue(any('stiff phrase' in error for error in errors), errors)
+                (campaign / '00-task.md').write_text(task_text('article, social') + '## Register\n- social: formal\n\n')
+                self.assertEqual(run.run_checks(self.step('04-linkedin'), step_dir, campaign), [])
+
+    def test_the_approved_copy_recheck_ignores_the_register(self):
+        with tempfile.TemporaryDirectory() as folder:
+            campaign = Path(folder)
+            (campaign / '00-task.md').write_text(task_text('article, social'))
+            self.make_post(campaign, self.STIFF, approved=True)
+            with mock.patch.dict(run.CHECKS, {'linkedin': lambda output, task, brief: []}):
+                run.recheck_approved(campaign, [self.step('04-linkedin')])  # does not raise: the approval stands
+
+    def test_approved_copy_that_fails_the_register_check_is_listed_not_blocked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            campaign = Path(folder)
+            (campaign / '00-task.md').write_text(task_text('article, social'))
+            self.make_post(campaign, self.STIFF, approved=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                listed = run.register_warnings(campaign, [self.step('04-linkedin')])
+                self.assertEqual([step_id for step_id, _ in listed], ['04-linkedin'])
+                (campaign / '00-task.md').write_text(task_text('article, social') + '## Register\n- social: formal\n\n')
+                self.assertEqual(run.register_warnings(campaign, [self.step('04-linkedin')]), [])
 
 
 if __name__ == '__main__':
