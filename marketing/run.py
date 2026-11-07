@@ -1981,6 +1981,12 @@ def media_info(path):
     return float(duration), {stream.get('codec_type') for stream in data.get('streams', [])}
 
 
+def film_has_subtitles(project_dir):
+    """True when a clip that film.html uses has a WebVTT beside it with the same name: openfilm burns those in."""
+    film = (project_dir / 'film.html').read_text(encoding='utf-8')
+    return any((project_dir / src).with_suffix('.vtt').is_file() for src in re.findall(r'src="(assets/[^"#]+)', film))
+
+
 def check_clip(clip, voice_length, seconds):
     """The owner's avatar clip: a video with its own sound, as long as the voiceover, and within the reel limit."""
     length, kinds = media_info(clip)
@@ -2149,7 +2155,10 @@ def materialize_video(step_dir, written, character, presenter):
     mp4 = step_dir / 'reel.mp4'
     if mp4.exists():
         mp4.unlink()
-    run_tool(['openfilm', 'render', '--subtitles', '--out', str(mp4)], project_dir)
+    subtitles = film_has_subtitles(project_dir)
+    if not subtitles:
+        log.info('[08-reel] the film has no subtitles beside its clips; rendering without them')
+    run_tool(['openfilm', 'render', *(['--subtitles'] if subtitles else []), '--out', str(mp4)], project_dir)
     if not mp4.is_file():
         raise WorkflowError(f'openfilm render did not create {mp4}')
     frames, seconds = sample_frames(mp4, step_dir / 'frames')
