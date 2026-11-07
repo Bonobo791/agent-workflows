@@ -1557,6 +1557,55 @@ class ReelVoiceTest(unittest.TestCase):
         self.assertEqual(run.check_reel_script(script(' '.join([twenty] * 3) + ' ' + tags), '', None), [])
 
 
+class ReelSkipVoiceTest(unittest.TestCase):
+    def owner_clip_in_assets(self, campaign, step_dir):
+        (step_dir / 'assets').mkdir(exist_ok=True)
+        (step_dir / 'assets' / 'presenter.mp4').write_bytes(b'owner clip')
+
+    def test_skip_voice_uses_the_clip_without_any_elevenlabs_call(self):
+        campaign, step_dir = make_reel_campaign()
+        self.owner_clip_in_assets(campaign, step_dir)
+        (step_dir / 'assets' / 'presenter.vtt').write_text('old subtitles')
+        fake = FakeEleven(seconds=26.3)
+        with mock.patch.dict(os.environ), mock.patch.object(run, 'speak', side_effect=AssertionError('no voice')), \
+                mock.patch.object(run, 'media_info', fake.media_info):
+            os.environ.pop('ELEVENLABS_API_KEY', None)
+            run.prepare_presenter(campaign, step_dir, CHARACTER, skip_voice=True)
+        presenter = json.loads((step_dir / 'presenter.json').read_text())
+        self.assertEqual([(clip['id'], clip['at'], clip['duration']) for clip in presenter], [('presenter', 0.0, 26.3)])
+        self.assertFalse((step_dir / 'voiceover.mp3').exists())
+        self.assertEqual((step_dir / 'assets' / 'presenter.vtt').read_text(), 'old subtitles')  # the owner's subtitles are kept
+
+    def test_skip_voice_without_the_clip_names_the_path(self):
+        campaign, step_dir = make_reel_campaign()
+        with self.assertRaisesRegex(run.WorkflowError, r'--skip-voice needs the avatar clip at .*presenter\.mp4'):
+            run.prepare_presenter(campaign, step_dir, CHARACTER, skip_voice=True)
+
+    def test_skip_voice_checks_the_clip_against_the_reel_limit(self):
+        campaign, step_dir = make_reel_campaign()
+        self.owner_clip_in_assets(campaign, step_dir)
+        with mock.patch.object(run, 'media_info', FakeEleven(seconds=40.0).media_info), \
+                self.assertRaisesRegex(run.WorkflowError, 'is 40.0 s; the reel limit is 30 s'):
+            run.prepare_presenter(campaign, step_dir, CHARACTER, skip_voice=True)
+
+    def test_skip_voice_needs_a_sound_track(self):
+        campaign, step_dir = make_reel_campaign()
+        self.owner_clip_in_assets(campaign, step_dir)
+        with mock.patch.object(run, 'media_info', FakeEleven(clip_kinds=('video',)).media_info), \
+                self.assertRaisesRegex(run.WorkflowError, 'has no sound track'):
+            run.prepare_presenter(campaign, step_dir, CHARACTER, skip_voice=True)
+
+    def test_skip_voice_flag_reaches_the_run(self):
+        seen = {}
+
+        def fake_cmd_run(name, start_at=None, end_at=None, skip_voice=False):
+            seen['skip_voice'] = skip_voice
+        with mock.patch.object(run, 'cmd_run', side_effect=fake_cmd_run), \
+                mock.patch.object(sys, 'argv', ['run.py', 'run', 'mc-37', '--skip-voice']):
+            run.main()
+        self.assertEqual(seen, {'skip_voice': True})
+
+
 class ReelFilmTest(unittest.TestCase):
     def film_tool(self, calls=None, look_failures=0):
         calls = calls if calls is not None else []

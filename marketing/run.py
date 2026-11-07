@@ -2004,9 +2004,31 @@ def clip_needed(assets, voiceover, voice_length, presenter):
     return message
 
 
-def prepare_presenter(campaign, step_dir, character):
+def use_owner_clip(campaign, step_dir, seconds):
+    """--skip-voice: the owner's avatar clip already has its voice, so nothing is spoken and no ElevenLabs call is made. The clip is checked
+    on its own. The owner's subtitles beside it, presenter.vtt, are used as they are."""
+    assets = step_dir / 'assets'
+    presenter = assets / 'presenter.mp4'
+    if not presenter.is_file():
+        raise WorkflowError(f'--skip-voice needs the avatar clip at {presenter}; put it there, then run the same command again')
+    length, kinds = media_info(presenter)
+    if 'video' not in kinds:
+        raise WorkflowError(f'{presenter} has no video track; export the avatar clip as a video')
+    if 'audio' not in kinds:
+        raise WorkflowError(f'{presenter} has no sound track; export the avatar clip with its voice in it')
+    if length > seconds:
+        raise WorkflowError(f'{presenter} is {length:.1f} s; the reel limit is {seconds} s')
+    text = json.loads((campaign / '08-reel-script' / 'script.json').read_text())['script'].strip()
+    clips = [{'id': 'presenter', 'text': text, 'duration': length, 'at': 0.0}]
+    (step_dir / 'presenter.json').write_text(json.dumps(clips, indent=2, ensure_ascii=False) + '\n')
+    return clips
+
+
+def prepare_presenter(campaign, step_dir, character, skip_voice=False):
     """The reel's voice and presenter files. The voiceover is spoken once per script, voice and model, and cached. The owner's avatar clip
     is checked against it and cached too. Without a clip the run stops and names the file to put in assets/."""
+    if skip_voice:
+        return use_owner_clip(campaign, step_dir, reel_seconds())
     text = json.loads((campaign / '08-reel-script' / 'script.json').read_text())['script'].strip()
     seconds = reel_seconds()
     cache = campaign.parent / '.elevenlabs-cache'  # campaigns/.elevenlabs-cache: shared by every campaign, kept when a step is deleted
@@ -2151,12 +2173,12 @@ def writer_call(client, roles, step, step_dir, campaign, sessions, prompt, sessi
     return written
 
 
-def write(client, roles, skills_dir, campaign, step, step_dir, revision):
+def write(client, roles, skills_dir, campaign, step, step_dir, revision, skip_voice=False):
     role, sessions, saved = step['role'], Sessions(campaign), None
     for stale in ('review.json', 'review.md'):
         (step_dir / stale).unlink(missing_ok=True)
     if step['id'] == '08-reel':
-        prepare_presenter(campaign, step_dir, read_character(campaign))  # before the prompt: the reel's inputs include presenter.json
+        prepare_presenter(campaign, step_dir, read_character(campaign), skip_voice=skip_voice)  # before the prompt: the reel's inputs include presenter.json
     allowed = WEB_TOOLS if step['web'] else []
     if revision is None:
         draft_prompt = step_header(step['id'], allowed) + writer_prompt(skills_dir, campaign, step)
@@ -2482,7 +2504,7 @@ def stale_message(campaign, steps, stale):
             f"Delete them and every later step to redo them: rm -r {' '.join(redo)}")
 
 
-def run_step(client, roles, skills_dir, campaign, step, ask):
+def run_step(client, roles, skills_dir, campaign, step, ask, skip_voice=False):
     step_dir = campaign / step['id']
     step_dir.mkdir(exist_ok=True)
     review = None
@@ -2495,7 +2517,7 @@ def run_step(client, roles, skills_dir, campaign, step, ask):
     while True:
         if review is None:
             try:
-                _, images = write(client, roles, skills_dir, campaign, step, step_dir, revision)
+                _, images = write(client, roles, skills_dir, campaign, step, step_dir, revision, skip_voice=skip_voice)
             except FilmProblems as error:
                 if auto_left == 0:
                     raise  # the full openfilm output is in the message
@@ -2715,7 +2737,7 @@ def publish_gate(campaign, ask, http=publish.http_request):
         print('Type a or q.')
 
 
-def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES, http=publish.http_request, start_at=None, end_at=None):
+def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR, roles=ROLES, http=publish.http_request, start_at=None, end_at=None, skip_voice=False):
     steps = campaign_steps(campaign, steps)
     log.info('steps for this task: %s', ', '.join(step['id'] for step in steps))
     ids = [step['id'] for step in steps]
@@ -2761,7 +2783,7 @@ def run_campaign(campaign, client, ask=input, steps=STEPS, skills_dir=SKILLS_DIR
         if (campaign / step['id'] / 'APPROVED').is_file():
             log.info('[%s] already approved; skipping', step['id'])
         else:
-            run_step(client, roles, skills_dir, campaign, step, ask)
+            run_step(client, roles, skills_dir, campaign, step, ask, skip_voice=skip_voice)
     if end_at is not None and end_at != ids[-1]:  # --to: the rest waits for a later run
         later = ids[ids.index(end_at) + 1:]
         print(f"\nStopped after {end_at}. Not run: {', '.join(later)}. To run them, use --from {later[0]}; add --to {later[-1]} to stop again after the last one.")
@@ -2898,14 +2920,14 @@ def cmd_status(name):
         print(f"final package: {campaign / 'final' / 'index.md'}")
 
 
-def cmd_run(name, start_at=None, end_at=None):
+def cmd_run(name, start_at=None, end_at=None, skip_voice=False):
     campaign = CAMPAIGNS_DIR / name
     if not campaign.is_dir():
         raise WorkflowError(f'no campaign at {campaign}')
     with campaign_log(campaign):
         log.info('run %s started', name)
         with ClaudeClient(stderr_path=campaign / 'claude-stderr.log') as client:
-            run_campaign(campaign, client, start_at=start_at, end_at=end_at)
+            run_campaign(campaign, client, start_at=start_at, end_at=end_at, skip_voice=skip_voice)
 
 
 def cmd_publish(due, retry):
@@ -2931,6 +2953,7 @@ def main():
     run.add_argument('name')
     run.add_argument('--from', dest='start_at', metavar='STEP', help='start at this step, for example 08-reel-script; earlier steps must be approved')
     run.add_argument('--to', dest='end_at', metavar='STEP', help='stop after this step, for example 08-reel-package, so the audio and video steps do not run')
+    run.add_argument('--skip-voice', dest='skip_voice', action='store_true', help='use the avatar clip at 08-reel/assets/presenter.mp4 as it is; no ElevenLabs voiceover is made')
     status = sub.add_parser('status', help='show where a campaign is')
     status.add_argument('name')
     posting = sub.add_parser('publish', help='post approved campaigns, or clear a failed or unknown item')
@@ -2948,7 +2971,7 @@ def main():
         if args.command == 'new':
             cmd_new(args.name, args.task_file, args.issue, args.issue_file)
         elif args.command == 'run':
-            cmd_run(args.name, args.start_at, args.end_at)
+            cmd_run(args.name, args.start_at, args.end_at, args.skip_voice)
         elif args.command == 'publish':
             cmd_publish(args.due, args.retry)
         elif args.command == 'brand':

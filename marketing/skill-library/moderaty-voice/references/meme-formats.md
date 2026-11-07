@@ -142,7 +142,7 @@ Watch out: swipeable and personal, each slide one line.
 
 ### 3.12 Millennial vs Gen Z marketing
 Two versions of the same message, one earnest and long, one clipped and slangy. Template: two columns.
-- Earnest: "Moderaty checks published top-level comments on your connected YouTube channels with rules, AI scoring, and a review queue." Slangy: "rules swing first. AI mops up. you decide. no auto-replies. bonk."
+- Earnest: "Moderaty checks published comments, top-level and replies, on your connected YouTube channels with rules, AI scoring, and a review queue." Slangy: "rules swing first. AI mops up. you decide. no auto-replies. bonk."
 Watch out: both sides should feel recognizable, not mocked.
 
 ### 3.13 Mock-serious headline, absurd content
@@ -423,7 +423,7 @@ Five lines per archetype. Pick one; do not stack.
 - The ackchyually guy has been notified (in the queue).
 
 ### 7.2 Plain subheads (pair with the joke headline)
-- Moderaty checks published top-level comments on your connected YouTube channels.
+- Moderaty checks published comments, top-level and replies, on your connected YouTube channels.
 - Your rules fire first, AI scores the rest, doubt goes to your review queue.
 - Moderaty never replies, never posts as you.
 - Run a free moderation preview on your own channel first.
@@ -447,7 +447,7 @@ Joke goes around the button: "Ready to go touch grass?" above "Connect your YouT
 - Does Moderaty reply for me? "No. We never post as you. We have standards."
 - Can I undo an action? "Held and rejected comments can be restored. Deletions are permanent. Choose violence responsibly."
 - What if the AI can't decide? "It goes to your review queue. Doubt is yours."
-- Does it moderate live chat? "No. Published top-level comments only. Live chat is a different wilderness."
+- Does it moderate live chat? "No. Published comments only, top-level and replies. Live chat is a different wilderness."
 
 ### 7.6 Email subject lines (under 50 characters)
 - Your comment section called
@@ -511,7 +511,7 @@ Transactional emails (billing, access, deletion, security): plain first, one lig
 
 | Bland | Funny (keeps fact) |
 |---|---|
-| "Moderaty checks published top-level YouTube comments." | "Moderaty reads the comments so you don't. Published, top-level, and only the ones on your channels." |
+| "Moderaty checks published YouTube comments, top-level and replies." | "Moderaty reads the comments so you don't. Published, top-level and replies, and only the ones on your channels." |
 | "AI scores borderline comments for review." | "The AI mops up. Doubt goes to your queue. Nothing gets decided behind your back." |
 | "Rules fire first." | "Your rules swing first. The AI is the cleanup crew." |
 | "We do not reply for you." | "No auto-replies. We've never posted as you. We have standards." |
