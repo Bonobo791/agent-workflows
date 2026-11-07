@@ -40,14 +40,13 @@ The caption, the on-screen text (read by OCR) and the spoken audio (read by ASR)
 - **Safe zones (1080 x 1920)**: TikTok top about 130 px, bottom about 440 to 484 px, left 60, right 120; Reels bottom about 600, right about 150; Shorts bottom about 30% (the Shorts-specific file gives top about 20% and bottom about 25%; use the stricter of the two when cross-posting).
 - **Type**: bold (700+), white with a black outline (or inverse) works on most content; geometric sans (Montserrat Bold, TikTok Sans, Futura Bold, Archivo Black); body about 22 to 28 pt; avoid thin weights, low-contrast pastels, decorative scripts, tight tracking.
 - Pace text like cuts: a new word or phrase every beat; hold a beat on a pause; never dump a whole sentence at once.
-- Same primary keyword in headline, body captions, voiceover and written caption (three-surface SEO check). Editor brief: `assets/on-screen-text-spec.md`.
-
+- Same primary keyword in headline, body captions, voiceover and written caption (three-surface SEO check).
 ## 5. Hashtags
 | Platform | Count | Where | Required | Avoid |
 |---|---|---|---|---|
 | Instagram | 3 to 5 | end of caption | none | #viral, #explore, #fyp, 30-tag walls |
 | TikTok | 3 to 5 (1 to 2 topical + 2 to 3 niche) | caption | none | #fyp, #foryou, #viral, #trending |
-| YouTube Shorts | 3 to 5 | description (the first three show above the title) | #Shorts | long walls (older sources say over 15 are all ignored; one source checked YouTube Help in Oct 2026 and says over 60; stay at 3 to 5) |
+| YouTube Shorts | 3 to 5 | description (the first three show above the title) | none | long walls (older sources say over 15 are all ignored; one source checked YouTube Help in Oct 2026 and says over 60; stay at 3 to 5) |
 Specific beats broad (#retinolroutine not #skincare); do not reuse an identical set every post; branded hashtags are navigation, not reach. Put the effort into caption and on-screen text instead.
 
 ## 6. CTAs

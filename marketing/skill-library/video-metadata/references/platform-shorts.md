@@ -44,8 +44,7 @@ Script skeleton (30 to 45s): 0 to 3s HOOK (payoff or stake, 3 to 5 bold words, n
 - Source-reported economics: a 1M-view Short adds roughly 500 to 5,000 subscribers vs 20,000 to 50,000 for a 1M-view long-form; Shorts RPM about $0.03 to $0.10 per 1,000 views vs long-form about $3 to $15. A Shorts-only subscriber who never clicks through is worth little.
 - Four bridge surfaces; fire at least three on the same Short: (1) **in-video callout** in the last 5s naming the destination ("the 12-minute version is the [exact title] video on my channel"); (2) **pinned comment** with the link plus "one specific extra not in the Short" ("every product I used, with timestamps": "same but longer" gets no clicks); (3) **end card / final label** ("Full video: [title]"), pairing with the loop; (4) **channel trailer and Shorts tab consistency**: batch Shorts by topic, pin 2 to 3 strong Shorts that match the long-form library, avoid off-topic uploads for a day or two after a Short that may pop.
 - No long-form exists? Test: if the topic is worth a long-form, write the Short as a teaser and ship the long-form first; if it is a one-off, skip the funnel CTA and let it earn reach.
-- Measure per Short in Studio (traffic source "From a Short"); one or two Shorts usually send most of the clicks. Template: `assets/short-to-longform-bridge.md`.
-
+- Measure per Short in Studio (traffic source "From a Short"); one or two Shorts usually send most of the clicks.
 ## 7. Search and shelf
 - Surfaces: the vertical feed; the home-feed **Shorts shelf** (source: roughly 80% of home-feed slots after the redesign); the channel **Shorts tab**; **search** with a Shorts filter.
 - Shelf: the first frame is shown as a still, so it must hold frozen (clean contrast, no blur, not text-heavy); titles read like search-intent matches.
@@ -64,4 +63,3 @@ TikTok watermark (demoted); 16:9 with bars (classified as long-form and never en
 ## 10. Diagnosis order
 1. Watermark · 2. Aspect ratio · 3. First 3 seconds (intro, logo, hook delay) · 4. Caption safe zone · 5. CTA (subscribe vs bridge) · 6. Music (licensed track on a small channel) · 7. Views vs Engaged Views.
 Then: VVSA under 60% = opening failed, rewrite from frame one; healthy VVSA but percentage viewed under the length benchmark = body bleeding; percentage viewed over 100% = loops firing, so look at shares, topic ceiling or anti-patterns; zero long-form clicks on a Short that performed = the funnel is missing, not the video. Always read VVSA first.
-Pre-upload checklist: `assets/short-checklist.md`; script skeleton `assets/short-script-template.md`; bridge worksheet `assets/short-to-longform-bridge.md`.

@@ -22,8 +22,6 @@ A hook works by opening a gap the viewer needs closed, then the video closes it.
 - Always deliver a batch of 5 to 10 across at least three different mechanisms, then keep the best two. One hook is a guess.
 
 ## 2. The 21 formulas
-Machine-readable copy with regex patterns: `scripts/hooks.json` (used by `hookscore.py` and `swipe.py`).
-
 | # | Formula | Shape | Example | Fails when |
 |---|---|---|---|---|
 | 1 | **The Statistic** | A number the viewer did not know, stated flat, then the consequence. | [A number from the brief] of the people who start a channel quit before video 30. Here is what the rest do differently. | Dies if the number is vague or unverifiable. Say the source out loud. |
@@ -96,7 +94,7 @@ In the first 1 to 2 seconds, three layers must agree, and the hook must work mut
 Test: cover the text, does the visual still hook? Cover the visual, does the text alone earn a pause? Both must pass. Write the verbal line first, design the visual to land before the voice, write the text last.
 
 ## 6. Opening beats: long-form
-Grab → promise → stakes, in the first 30 to 40 seconds (see `long-form-scripts.md` for the full beat table and the retention structure after it).
+Grab → promise → stakes, in the first 30 to 40 seconds.
 
 ## 7. Anti-patterns (name the pattern, then rewrite)
 Welcome intro / logo sting; vague tease; bait-and-switch; subscribe-before-value; story opener that starts with chronology; "today we're going to talk about…"; imperative commands ("stop scrolling") the payoff cannot earn; hook bolted on after the script; single-layer hook (voice only); brand-first opener; cleverness that needs decoding; slow build (the real hook is sentence three: delete the first two); a three-act hook that takes 10 seconds to resolve; throat-clearing ("so I've been thinking…").

@@ -27,6 +27,15 @@ rediumvex/viral-hooks-skill (2026-05-05), PostPlusAI/hook-skills (2026-05-05), a
 
 ## MIT License (as granted by each source repository; copyright lines listed above)
 
+Copyright lines, from each source repository's LICENSE file:
+- sergebulaev/youtube-skills: Copyright (c) 2026 Sergey Bulaev
+- mohitagw15856/pm-claude-skills: Copyright (c) 2026 Mohit Aggarwal
+- ahmedsakri/youtube-agent-pro: Copyright (c) 2026 Ahmed Sakri; Copyright (c) 2026 Jake Schincariol
+- adityaarsharma/youtube-marketing-skills: Copyright (c) 2025-2026 Aditya Sharma
+- Jakeschincariol/youtube-agent-skill: Copyright (c) 2026 Jake Schincariol
+- vyralcontent/content-skills: Copyright (c) 2026 Vyral
+- iart-ai/tiktok-video-skills: Copyright (c) 2026 iart.ai
+
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.

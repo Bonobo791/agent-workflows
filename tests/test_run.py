@@ -1059,7 +1059,7 @@ class ReelPackageTest(unittest.TestCase):
         self.assertIn('08-reel-package#On-screen text', run.REEL_INPUTS)
 
     def test_package_skills_and_check_are_wired(self):
-        run.check_skills(run.SKILLS_DIR, run.STEPS)
+        run.check_skills(run.SKILLS_DIR, [step for step in run.STEPS if step['id'] == '08-reel-package'])
         self.assertIs(run.CHECKS['reel-package'], run.check_reel_package)
 
     def test_good_package_passes(self):
@@ -1105,6 +1105,7 @@ class ReelPackageTest(unittest.TestCase):
                                                 'the Pinned comment must contain [ARTICLE LINK] once'),
             'link in bio': (package_with('Here is what a bouncer looks like.', 'Link in bio.'), 'never write "Link in bio"'),
             'bait phrase': (package_with('Here is what a bouncer looks like.', 'Comment YES for the video.'), 'remove the bait phrase "Comment YES"'),
+            'numbered people': (package_with('Here is what a bouncer looks like.', 'Share with 5 people today.'), 'remove the bait phrase'),
             'AI disclosure': (package_with('A moderation tool for YouTube comments.', 'This reel is AI-generated.'),
                               'is AI-generated'),
             'em dash': (package_with('Here is what a bouncer looks like.', 'Here is what a bouncer looks like — read on.'), 'remove the em dash'),

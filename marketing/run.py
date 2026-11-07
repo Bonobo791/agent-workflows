@@ -134,14 +134,18 @@ STIFF_RE = re.compile(r"\b(?:furthermore|moreover|additionally|consequently|henc
 WORD_RE = re.compile(r"[A-Za-z0-9'’$%-]+")
 YOU_RE = re.compile(r"\b(?:you|your|yours|yourself|i|me|my|we|our|us)\b", re.IGNORECASE)
 REGISTER_RE = re.compile(r'^- (article|social|images|reel|all): (.+)$')  # one line of the task's ## Register section
-PACKAGE_SECTIONS = ['Titles', 'On-screen text', 'Description', 'Caption', 'Hashtags', 'Pinned comment']
+ON_SCREEN_TEXT = 'On-screen text'
+PINNED_COMMENT = 'Pinned comment'
+CTA_INPUT = 'positioning#Call to action'
+SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+PACKAGE_SECTIONS = ['Titles', ON_SCREEN_TEXT, 'Description', 'Caption', 'Hashtags', PINNED_COMMENT]
 PACKAGE_TITLE_MAX = 60  # title.py's desktop cut
 PACKAGE_ON_SCREEN_WORDS = (3, 8)
 DESCRIPTION_LINE_MAX = 125  # the first line is all a Shorts viewer sees before "Show more"
 CAPTION_LINE_MAX = 100  # about what TikTok shows before its cut
-BAIT_RE = re.compile(r'\b(?:comment yes|tag a friend|like for part|follow for more|double[- ]tap|drop a heart|share with \d+ friends|tag \d+ friends)\b',
+BAIT_RE = re.compile(r'\b(?:comment yes|tag a friend|like for part|follow for more|double[- ]tap|drop a heart|share with \d+ (?:friends|people)|tag \d+ (?:friends|people))\b',
                      re.IGNORECASE)  # the bait phrases in video-captions
-DISCLOSURE_RE = re.compile(r"\bdisclosure\b|\bdisclos(?:e|ed|es|ing)\s+(?:that\s+|this\s+|our\s+|the\s+)?(?:ai|sponsor|paid|partner)|\bmade with ai\b"
+DISCLOSURE_RE = re.compile(r"\bdisclosure\b|\bdisclos(?:e|ed|es|ing) +(?:that |this |our |the )?(?:ai|sponsor|paid|partner)|\bmade with ai\b"
                            r"|\bai avatar\b|\b(?:this|our|the) (?:reel|video|presenter|avatar|voice|character|script|clip) (?:is|was|are|were)\b[^.!?\n]{0,20}\bai[- ]generated\b"
                            r"|\bpaid partnership\b|\bsponsored (?:post|video|content)\b|#ad\b|\bin partnership with\b", re.IGNORECASE)  # disclosure labels, not product copy about AI
 STOP_WORDS = {'a', 'an', 'the', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'for', 'with', 'at', 'by', 'from', 'is', 'are', 'was', 'be',
@@ -161,7 +165,7 @@ REEL_INPUTS = ['design-system', 'voice', 'positioning#Value', 'character', 'pres
 REEL_SCRIPT_INPUTS = ['voice', 'character', 'positioning#Reader problems', 'positioning#Value', 'positioning#Claims we never make',
                       '02-brief#Angle', '02-brief#Facts', '02-brief#Visual ideas']
 REEL_SCRIPT_WRITER_INPUTS = [spec for spec in REEL_SCRIPT_INPUTS if spec != CLAIMS_INPUT]
-REEL_PACKAGE_REVIEW_INPUTS = SOCIAL_REVIEW_INPUTS + ['positioning#Call to action', '08-reel-script']
+REEL_PACKAGE_REVIEW_INPUTS = SOCIAL_REVIEW_INPUTS + [CTA_INPUT, '08-reel-script']
 REEL_PACKAGE_WRITER_INPUTS = [spec for spec in REEL_PACKAGE_REVIEW_INPUTS if spec != CLAIMS_INPUT]
 STEPS = [
     {'id': '01-sources', 'skill': 'sources', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': True, 'check': 'sources',
@@ -173,9 +177,9 @@ STEPS = [
     {'id': '03-article', 'skill': 'seo-article', 'kind': 'text', 'role': 'writer', 'deliverable': 'article', 'web': False, 'check': 'article', 'register': 'article',
      'second_review_skills': ['plan-seo-geo-growth'],
      'inputs': ['voice', '00-task', '02-brief', 'positioning#Proof', 'positioning#Alternatives',
-                'positioning#Call to action', 'pages'],
+                CTA_INPUT, 'pages'],
      'review_inputs': ['voice', '00-task', '02-brief', 'positioning#Proof', 'positioning#Alternatives', 'positioning#Objections',
-                       'positioning#Claims we never make', 'positioning#Call to action', 'pages'],
+                       'positioning#Claims we never make', CTA_INPUT, 'pages'],
      'writer_skills': ['on-page-seo', 'internal-linking', 'moderaty-voice'],  # the voice pass is last: tone has the final say
      'review_skills': ['on-page-seo', 'moderaty-voice']},
     {'id': '04-linkedin', 'skill': 'linkedin', 'kind': 'text', 'role': 'writer', 'deliverable': 'social', 'web': False, 'check': 'linkedin', 'register': 'post',
@@ -633,7 +637,7 @@ def site_of(fact):
 def fact_sentences(fact):
     """The sentences of a fact, ignoring its URL and its checked date."""
     text = re.sub(r'\(checked [^)]*\)', '', URL_RE.sub('', fact))
-    return [part for part in re.split(r'(?<=[.!?])\s+', text.strip()) if part.strip()]
+    return [part for part in SENTENCE_SPLIT_RE.split(text.strip()) if part.strip()]
 
 
 def cites_forum(fact):
@@ -828,7 +832,7 @@ def opening_errors(output):
     if not text:
         return ['the article has no opening paragraph after the title']
     errors = []
-    if len([sentence for sentence in re.split(r'(?<=[.!?])\s+', text) if sentence.strip()]) > OPENING_SENTENCES:
+    if len([sentence for sentence in SENTENCE_SPLIT_RE.split(text) if sentence.strip()]) > OPENING_SENTENCES:
         errors.append(f'the opening paragraph must answer the question in {OPENING_SENTENCES} sentences or fewer')
     if not re.search(r'\b(?:if|when)\b', text, re.IGNORECASE):
         errors.append('the opening paragraph must give the conditional answer, with "if" or "when"')
@@ -874,9 +878,9 @@ def register_text(step, output):
     """The talk the register check reads: no headings, tables, link targets, hashtags, list numbers or the link placeholder."""
     if step['id'] == '08-reel-package':
         found = sections(output)
-        text = '\n'.join(found.get(name, '') for name in ('On-screen text', 'Caption', 'Description', 'Pinned comment'))
+        text = '\n'.join(found.get(name, '') for name in (ON_SCREEN_TEXT, 'Caption', 'Description', PINNED_COMMENT))
     elif step.get('register') == 'script':
-        found = re.search(r'^## Script\n(.*?)(?=^## Notes|\Z)', output, re.MULTILINE | re.DOTALL)
+        found = re.search(r'^## Script\n((?:(?!^## Notes).)*)', output, re.MULTILINE | re.DOTALL)
         text = found.group(1) if found else ''
     else:
         text = output
@@ -896,7 +900,7 @@ def register_errors(text, kind):
     Each message quotes the sentence it is about."""
     limits = REGISTER_LIMITS[kind]
     flat = ' '.join(text.split())
-    sentences = [sentence for sentence in re.split(r'(?<=[.!?])\s+', flat) if re.search(r'[A-Za-z]', sentence)]
+    sentences = [sentence for sentence in SENTENCE_SPLIT_RE.split(flat) if re.search(r'[A-Za-z]', sentence)]
     if not sentences:
         return []
     lengths = [len(WORD_RE.findall(sentence)) for sentence in sentences]
@@ -1716,7 +1720,7 @@ def reel_seconds():
 
 
 def check_reel_script(output, task, brief):
-    found = re.search(r'^## Script\n(.*?)(?=^## Notes|\Z)', output, re.MULTILINE | re.DOTALL)
+    found = re.search(r'^## Script\n((?:(?!^## Notes).)*)', output, re.MULTILINE | re.DOTALL)
     script = found.group(1).strip() if found else ''
     errors = []
     if not script:
@@ -1754,7 +1758,14 @@ def content_words(text):
 def check_reel_package(output, task, brief):
     errors = missing_sections(output, PACKAGE_SECTIONS)
     found = sections(output)
-    titles = package_titles(output)
+    errors += package_layout_errors(found, package_titles(output))
+    errors += package_copy_errors(output, found)
+    return errors
+
+
+def package_layout_errors(found, titles):
+    """The package's shape: the titles, the first-frame text, the Short's description, the caption, the hashtags and the pinned comment."""
+    errors = []
     if len(titles) != 3:
         errors.append(f'the Titles section has {len(titles)} titles; write exactly 3, the lead first')
     for number, title in enumerate(titles, 1):
@@ -1762,7 +1773,7 @@ def check_reel_package(output, task, brief):
             errors.append(f'title {number} is {len(title)} characters; the limit is {PACKAGE_TITLE_MAX}')
     if any(LINK in title for title in titles):
         errors.append(f'the Titles must not contain {LINK}; the article link goes in the Description')
-    on_screen = found.get('On-screen text', '').strip()
+    on_screen = found.get(ON_SCREEN_TEXT, '').strip()
     low, high = PACKAGE_ON_SCREEN_WORDS
     if not low <= len(on_screen.split()) <= high:
         errors.append(f'the On-screen text has {len(on_screen.split())} words; the limit is {low} to {high}')
@@ -1783,10 +1794,16 @@ def check_reel_package(output, task, brief):
     hashtags = len(HASHTAG_RE.findall(found.get('Hashtags', '')))
     if not 3 <= hashtags <= 5:
         errors.append(f'the Hashtags section has {hashtags} hashtags; the limit is 3 to 5')
-    if found.get('Pinned comment', '').count(LINK) != 1:
+    if found.get(PINNED_COMMENT, '').count(LINK) != 1:
         errors.append(f'the Pinned comment must contain {LINK} once')
-    if len([line for line in found.get('Pinned comment', '').splitlines() if line.strip()]) != 1:
+    if len([line for line in found.get(PINNED_COMMENT, '').splitlines() if line.strip()]) != 1:
         errors.append('the Pinned comment must be one line')
+    return errors
+
+
+def package_copy_errors(output, found):
+    """The package's words: no bait, no disclosure label, no 'Link in bio', no em dash, and the usual copy rules."""
+    errors = []
     if re.search(r'link in bio', output, re.IGNORECASE):
         errors.append('never write "Link in bio" in the package')
     bait = BAIT_RE.search(output)
@@ -1797,6 +1814,7 @@ def check_reel_package(output, task, brief):
         errors.append(f'remove "{disclosure.group(0)}"; the package carries no AI or sponsorship disclosure')
     if '—' in output:
         errors.append('remove the em dash; copy has none')
+    caption = [line.strip() for line in found.get('Caption', '').splitlines() if line.strip()]
     if caption:
         errors += hedge_errors(caption[0])
     errors += social_word_errors(output, 'package')
@@ -2158,7 +2176,7 @@ def run_checks(step, step_dir, campaign, register=True):
     """The step's Python check on its saved output, with the brief for the steps that write from it. The register check runs as well,
     unless the owner set a register for the step; register=False leaves it out, as the recheck of approved copy does."""
     output, task = without_hooks((step_dir / 'output.md').read_text()), (campaign / '00-task.md').read_text()
-    brief = (campaign / '02-brief' / 'output.md').read_text() if step['id'] in ('03-article', '04-linkedin', '05-x', '06-instagram') else None
+    brief = (campaign / '02-brief' / 'output.md').read_text() if step['id'] in ('03-article', '04-linkedin', '05-x', '06-instagram') else None  # the reel package check reads no brief
     if step['check'] == 'sources':
         errors = check_sources(output, task, brief, read_searches(step_dir))
     else:
@@ -2318,7 +2336,7 @@ def decide(step, step_dir, review, ask):
 
 
 PUBLISH_SECTIONS = ('Deliverables', 'Publish to', 'Article URL', 'Schedule')
-REGISTER_SECTION_RE = re.compile(r'^## Register\n.*?(?=^## |\Z)', re.MULTILINE | re.DOTALL)
+REGISTER_SECTION_RE = re.compile(r'^## Register\n(?:(?!^## ).)*', re.MULTILINE | re.DOTALL)
 
 
 def without_publish_sections(text):
@@ -2527,6 +2545,8 @@ def build_publish_plan(campaign):
             raise WorkflowError('08-reel-package has no title under "## Titles"')
         if len(titles[0]) > YOUTUBE_TITLE_MAX:
             raise WorkflowError(f'the lead title is {len(titles[0])} characters; a YouTube title allows {YOUTUBE_TITLE_MAX}')
+        if LINK not in section(package, 'Description', '08-reel-package'):
+            raise WorkflowError("the Short's description has no [ARTICLE LINK]; approve 08-reel-package again with the link in its Description")
         items.append({'id': 'youtube-short', 'platform': 'youtube', 'action': 'upload', 'title': titles[0],
                       'text': fill_link(section(package, 'Description', '08-reel-package'), article_url).strip(),
                       'media': [copy_media(media_dir, campaign / '08-reel' / 'reel.mp4', 'reel.mp4')],
@@ -2542,6 +2562,8 @@ def build_publish_plan(campaign):
         log.info('publish waits for ## Article URL: %s', ', '.join(sorted(waiting)))
     items = [item for item in items if item['id'] not in waiting]
     plan = {'campaign': campaign.name, 'article_url': article_url, 'items': items}
+    if waiting:
+        plan['held'] = sorted(waiting)  # publish_gate refuses a plan with held posts until the URL is set
     plan_bytes = (json.dumps(plan, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
     (step_dir / 'plan.json').write_bytes(plan_bytes)
     return plan_bytes  # the exact bytes written; the gate approves these
@@ -2583,6 +2605,9 @@ def publish_gate(campaign, ask, http=publish.http_request):
             raise WorkflowError(f'the article is not live yet: {url} answered HTTP {response.status}. Publish it, then run the same command again.')
     plan_bytes = build_publish_plan(campaign)
     plan = json.loads(plan_bytes)
+    if plan.get('held'):
+        raise WorkflowError(f"these posts link to the article and wait for ## Article URL: {', '.join(plan['held'])}. "
+                            'Nothing is approved until the URL is set; add it to 00-task.md, then run the same command again.')
     plan_sha = hashlib.sha256(plan_bytes).hexdigest()
     print('\n' + '=' * 70)
     print(f'Step {PUBLISH_STEP} is ready for your decision. Folder: {step_dir}')

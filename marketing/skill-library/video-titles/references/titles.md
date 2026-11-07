@@ -26,7 +26,7 @@ Niche note (one 214-video business/creator pull, July 2026, source-reported): T1
 Stems borrowed from creators: "How to [desired result] without [pain point]" (Hormozi); "X mistakes I wish I knew before I [did Y]" (Welsh); "I [did X] for [time] to find out [Y]" (Experimenter).
 
 ## 2. Hard rules
-- 100 characters is YouTube's hard cap. Aim 40 to 60: desktop search cuts near 60, a mobile home feed near 40. Put the click-deciding words before any colon.
+- YouTube's hard cap is 100 characters, but this pipeline allows at most 60. Aim 40 to 60: desktop search cuts near 60, a mobile home feed near 40. Put the click-deciding words before any colon.
 - A concrete noun plus curiosity. Never pure mystery ("This changes everything"), never a dry label.
 - One specific number, name or date beats every adjective.
 - "How I" beats "How to" when there is a lived result.
@@ -63,6 +63,6 @@ Under 100 chars (ideally 40 to 60) · promise, not label · concrete noun + curi
 ## 6. Process
 1. Gather: topic, the real payoff, target viewer, main search phrase, long-form or Short.
 2. Decide browse-first or search-first.
-3. Shortlist 2 to 3 formulas, draft 10 titles, run them: `python3 scripts/title.py titles.txt` (add `--title "..." --thumb "WORDS"` for a pairing).
+3. Shortlist 2 to 3 formulas, draft 10 titles, and check each one by hand against sections 2 and 5.
 4. Show the top 3 with their scores, formula, char count and the one issue on each; flag the one to lead A/B with (YouTube's Test & Compare).
-5. For the winner, hand off to `thumbnails.md` so the pair is designed together.
+5. Lead with the winner in the package.

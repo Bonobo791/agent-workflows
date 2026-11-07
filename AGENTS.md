@@ -6,7 +6,7 @@ Rules for any agent working in this repo. The main code is the marketing pipelin
 
 - `claude --help` is read from a file, not a pipe: a piped help text is cut at 16 KB. Every required flag must appear in it.
 
-- Commands run from the repo root. Tests: `python3 -m unittest discover -s tests` (currently 448, all passing).
+- Commands run from the repo root. Tests: `python3 -m unittest discover -s tests` (currently 450, all passing).
 - Campaigns live in `campaigns/<name>/` and are not tracked by git. Do not add them to commits.
 - Brand folders live in `marketing/brands/<brand>/` (`voice.md`, `positioning.md`, `pages.md`, `design-system.md`, `character.md`). Folder names are lowercase. A task's `## Brand` line must match the folder name exactly.
 - No secrets in the repo. `HEYGEN_API_KEY` comes from the environment only.
@@ -123,7 +123,7 @@ Inputs by writers and reviewers:
 - Do not use the author's voice or likeness in brand content.
 - `seo-geo-planning` does not exist here. Do not add a skill with that name without checking.
 - Do not add a HeyGen avatar disclosure, an AI label, or a legal notice to any copy or script.
-- Do not add the clickbait-video skill's AI and sponsorship disclosure items, its thumbnail and chapter steps, or its "disclosures set" checklist line. The pipeline never posts the package; the owner posts it.
+- Do not add the clickbait-video skill's AI and sponsorship disclosure items, its thumbnail and chapter steps, or its "disclosures set" checklist line. The pipeline publishes the title, description, caption and hashtags only after the owner approves 09-publish; the pinned comment is posted by hand.
 
 ## Skill copies
 

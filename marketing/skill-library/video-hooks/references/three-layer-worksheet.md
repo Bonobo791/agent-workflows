@@ -61,7 +61,7 @@ Before shooting, run all four:
 Watch the first 3 seconds back without context. Ask:
 
 - Did the hook resolve by second 3?
-- Would a stranger swipe in the first half-second?
+- Would a stranger keep watching past the first half-second?
 - If two viewers watched (one with sound, one muted), would both get
   the hook?
 

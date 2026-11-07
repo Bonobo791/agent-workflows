@@ -16,9 +16,11 @@ Blocking findings:
 - A title, the caption or the description promises what the script and the Facts do not pay off.
 - The lead title does not make a stranger need to watch the reel.
 - The on-screen text repeats the first sentence of the script.
-- The caption or the pinned comment asks for an act, stacks asks, or offers a reward the link does not give.
+- The pinned comment asks for anything. Only the caption may carry one ask, matched to the content.
 - A number or a claim the brief's Facts do not state, or one that Claims we never make excludes.
 - A sentence that reads dry, stiff or corporate.
+- The hashtags are generic, or the pinned comment is a bare link with no specific reason to click.
+- The Description's first line is not a keyword phrase, or the description carries hashtags, chapters or a social link.
 
 Minor findings:
 - Word choice and rhythm.

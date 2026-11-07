@@ -246,6 +246,16 @@ class PlanTest(PlanMixin, unittest.TestCase):
         self.assertEqual(short['text'], 'A moderation tool for YouTube comments.\nIt holds back the spam and the trolls so you read the ones that matter.\n'
                                         'https://moderaty.com/blog/demo')
 
+    def test_a_short_without_the_article_link_is_refused(self):
+        self.write('08-reel-package/output.md', PACKAGE.replace('[ARTICLE LINK]\n\n## Caption', '\n## Caption'))
+        with self.assertRaisesRegex(run.WorkflowError, 'has no \\[ARTICLE LINK\\]'):
+            self.plan()
+
+    def test_approval_waits_while_a_post_needs_the_article_url(self):
+        self.write_task('## Publish to\nlinkedin\n\n')
+        with self.assertRaisesRegex(run.WorkflowError, 'wait for ## Article URL: linkedin-comment'):
+            run.publish_gate(self.campaign, answers('a'), FakeHttp([]))
+
     def test_short_waits_for_the_article_url(self):
         self.write_task('## Publish to\nyoutube\n\n')
         self.assertEqual(self.plan()['items'], [])

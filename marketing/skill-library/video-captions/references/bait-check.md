@@ -2,12 +2,12 @@
 
 Fast pass/fail for a CTA, caption line, or pinned-comment trigger. Run
 any closing line through this before shipping. If it fails on any of
-the first six, rewrite. See `references/captions-ctas.md section 8` for the
+the fail conditions below, rewrite. See `references/captions-ctas.md section 8` for the
 underlying logic.
 
 ## Fail conditions
 
-- [ ] Asks for the **act** of engagement, not the **content**.
+- [ ] Asks for the **act** alone, not the **content**.
       ("Comment YES" vs "tell me what you'd do.")
 - [ ] Contains a phrase named or shape-matched as bait: "like for part
       2", "comment YES", "tag a friend", "double-tap if", "share with

@@ -11,7 +11,7 @@ Before you write the script, think through at least five candidate openings from
 2. **Pull**: read cold, would a stranger need the next beat? If not, it is not a hook yet.
 
 ## Finding the hook
-- Take the strongest true element of the brief: the most surprising Fact, the highest stake, the most specific number, the sharpest opinion, the most recognisable moment. Start from the brief's Angle and from the Reader problems in positioning.md.
+- Take the strongest true element of the brief: the most surprising Fact, the highest stake, the most specific number, the sharpest opinion, the most recognisable moment. Start from the brief's Angle and from the Reader problems in positioning.md. The opening must also name a moment, a number or a mistake the reader recognises, as the reel script requires.
 - Land the first sentence in under two seconds when spoken. Lead with the payoff or the stake.
 - Do not open on a greeting, a welcome back, a logo or the product.
 - Use only numbers the brief supplies. Never fake urgency, scarcity, a countdown, a quote, a testimonial or a transformation.
